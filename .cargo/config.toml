@@ -1,0 +1,7 @@
+[build]
+# Cap parallel compile jobs so builds never pin every core on the dev machine.
+jobs = 4
+
+[target.x86_64-pc-windows-msvc]
+# Static CRT: the exe runs on any Windows 10/11 without the VC++ redistributable.
+rustflags = ["-C", "target-feature=+crt-static"]
