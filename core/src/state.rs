@@ -1,5 +1,6 @@
 //! Persisted runtime state: what happened, as opposed to what the user configured.
 
+use crate::email::EmailMsg;
 use crate::settings::Settings;
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,20 @@ pub struct State {
     pub events_acked: BTreeMap<String, i64>,
     /// Day the morning summary was last shown.
     pub brief_day: Option<NaiveDate>,
+    /// Per email account: where incremental sync continues from.
+    pub mail: BTreeMap<String, MailState>,
+    /// Important emails not yet acknowledged (newest last).
+    pub mail_pending: Vec<EmailMsg>,
+    /// Recently notified message ids, so nothing is announced twice.
+    pub mail_seen: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MailState {
+    /// Gmail historyId to continue from.
+    pub history_id: Option<String>,
+    pub last_check: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -140,7 +155,7 @@ impl State {
             if let Some(d) = id.strip_prefix("date:") {
                 settings.dates.items.iter().any(|x| x.id == d)
             } else {
-                id.starts_with("ev:") || settings.reminders.iter().any(|r| &r.id == id)
+                id.starts_with("ev:") || id == "mail" || settings.reminders.iter().any(|r| &r.id == id)
             }
         });
     }
@@ -190,5 +205,25 @@ impl State {
         self.events_acked.retain(|k, _| {
             k.rsplit_once('@').and_then(|(_, t)| t.parse::<i64>().ok()).is_none_or(|t| t > now - 2 * 86_400)
         });
+    }
+}
+
+impl State {
+    /// Queues newly found important emails (deduplicated). Returns how many were new.
+    pub fn add_mail(&mut self, msgs: Vec<EmailMsg>) -> usize {
+        let mut added = 0;
+        for m in msgs {
+            if self.mail_seen.contains(&m.id) {
+                continue;
+            }
+            self.mail_seen.push(m.id.clone());
+            self.mail_pending.push(m);
+            added += 1;
+        }
+        let excess = self.mail_seen.len().saturating_sub(500);
+        self.mail_seen.drain(..excess);
+        let excess = self.mail_pending.len().saturating_sub(20);
+        self.mail_pending.drain(..excess);
+        added
     }
 }

@@ -248,3 +248,37 @@ settings page → the user copies the link → Pip picks it up from the clipboar
 deferred 200 ms so they never collide with the copying app). Copied links are classified, and the
 common mistakes (a private Google calendar's *public* address, Outlook's HTML link, a website link,
 plain http) get a plain-language fix instead of a silent failure.
+
+## 10. Status — Phase 3 (important email), 2026-09-21
+
+Decision: **Gmail only** (user's choice), via the Gmail API with the **`gmail.metadata`** scope —
+Pip gets sender, subject and labels of new mail and is technically unable to read bodies or
+attachments, send, or delete. (IMAP IDLE was rejected: it needs the full-mailbox scope, a TLS
+library and a permanent socket.)
+
+- **Sign-in**: OAuth 2.0 authorization code + PKCE (S256) with a 127.0.0.1 loopback redirect in the
+  user's own browser, anti-forgery `state`, granted-scope check. Refresh token, Client ID and secret
+  are DPAPI-encrypted in `secrets.dat`; access tokens live only in memory. Disconnect revokes.
+- **Setup**: the user owns the Google app (personal use; one-time "unverified app" click-through).
+  Settings › Email walks through it with Open buttons for each console page and picks the Client
+  ID/secret up from the clipboard (or the downloaded JSON). The steps stress publishing the app,
+  since "Testing" apps get refresh tokens that expire after 7 days, and copying the secret at once
+  (Google shows it only once).
+- **Checking**: `history.list` since the last historyId (tiny when nothing changed), then
+  `messages.get?format=metadata` only for new unread inbox messages (capped at 40). Every few
+  minutes while the user is at the PC; not while away/locked (checks on return); every 15 minutes
+  in quiet hours. Expired access → silent refresh + retry; expired history (404) → quiet
+  re-baseline; revoked → "signed out" message, checks stop.
+- **Rules** (pip-core, unit tested): senders by address, @domain or name; subject words; optional
+  Gmail "Important" marker; only unread inbox mail; look-alike domains don't match. RFC 2047
+  encoded names/subjects decoded.
+- **Delivery**: one grouped bubble ("Email from Mom" / "3 important emails") with Open Gmail,
+  Got it, Snooze — deduplicated, persisted, through the usual quiet-hours/DND/fullscreen policy.
+
+Testing: `tools/mock-google.js` imitates Google's OAuth and Gmail endpoints (verifies PKCE,
+scope, redirect; supports token expiry, history expiry, revocation, paging). Dev builds can point
+at it via `PIP_OAUTH_AUTH`/`PIP_OAUTH_TOKEN`/`PIP_GMAIL_API` (http://127.0.0.1 only); release builds
+compile those overrides out. End-to-end run covered sign-in, rules, refresh, paging (5 mails over
+3 pages), history re-baseline, revocation and re-sign-in.
+
+Not yet verified against real Google (needs the user's own Google app).

@@ -38,6 +38,7 @@ pub const T_TRIM: usize = 10;
 pub const T_CALSYNC: usize = 11;
 pub const T_CLIPWAIT: usize = 12;
 pub const T_CLIPREAD: usize = 13;
+pub const T_MAIL: usize = 14;
 
 /// Clipboard watching lasts at most this long after starting to add a calendar.
 pub const CLIPWAIT_MS: u32 = 10 * 60_000;
@@ -107,6 +108,26 @@ pub struct App {
     pub cal_picking: bool,
     /// Page to show when Settings opens next.
     pub open_page: Option<usize>,
+    /// Encrypted-at-rest secrets, decrypted in memory (calendar links, Google keys, sign-ins).
+    pub secrets: std::collections::BTreeMap<String, String>,
+    clip_listening: bool,
+    /// Gmail setup is waiting for the Client ID / secret to be copied.
+    pub gmail_setup: bool,
+    pub mail_access: HashMap<String, (String, i64)>,
+    pub mail_status: HashMap<String, MailStatus>,
+    mail_running: bool,
+    pub auth_running: bool,
+    pub auth_error: Option<String>,
+    auth_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Last consent URL (lets automated tests play the browser).
+    pub last_auth_url: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MailStatus {
+    pub checked_at: i64,
+    pub error: Option<String>,
+    pub signed_out: bool,
 }
 
 pub fn hm(ts: i64) -> String {
@@ -150,6 +171,16 @@ impl App {
             cal_wizard: None,
             cal_picking: false,
             open_page: None,
+            secrets: Default::default(),
+            clip_listening: false,
+            gmail_setup: false,
+            mail_access: HashMap::new(),
+            mail_status: HashMap::new(),
+            mail_running: false,
+            auth_running: false,
+            auth_error: None,
+            auth_cancel: None,
+            last_auth_url: String::new(),
         }
     }
 
@@ -179,13 +210,17 @@ impl App {
         platform::register_appbar(self.hwnd, WM_APPBAR);
         // Calendars: secret links from the encrypted store, cached events right away (offline),
         // then a network refresh once the desktop has settled.
-        let secrets = crate::secrets::load(self.store.dir());
+        self.secrets = crate::secrets::load(self.store.dir());
+        let secrets = self.secrets.clone();
         for c in &mut self.settings.dates.calendars {
             c.url = secrets.get(&format!("cal:{}", c.id)).cloned().unwrap_or_default();
             self.feed_meta.insert(c.id.clone(), calsync::load_meta(self.store.dir(), &c.id));
         }
         self.start_sync(false);
         self.set_timer(T_CALSYNC, 20_000);
+        if !self.settings.email.accounts.is_empty() {
+            self.set_timer(T_MAIL, 25_000); // first email check once the desktop has settled
+        }
         unsafe {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(self.hwnd, 0 /* NOTIFY_FOR_THIS_SESSION */);
         }
@@ -400,6 +435,7 @@ impl App {
             if !self.asleep() {
                 self.anim(AnimKind::WakeUp);
             }
+            self.set_timer(T_MAIL, 3_000); // catch up on email now that they're back
             self.reschedule();
             self.arm_idle();
         }
@@ -467,6 +503,12 @@ impl App {
             T_CLIPWAIT => {
                 self.kill_timer(T_CLIPWAIT);
                 self.end_cal_wizard();
+                self.gmail_setup = false;
+                self.update_clip_listener();
+            }
+            T_MAIL => {
+                self.kill_timer(T_MAIL);
+                self.check_mail(false);
             }
             T_TRIM => {
                 self.kill_timer(T_TRIM);
@@ -612,6 +654,14 @@ impl App {
                 let mins = (e.start - now_unix()) / 60;
                 (e.title.clone(), messages::event_body(e.all_day, &hm(e.start), mins))
             }
+            ItemKey::Mail => {
+                let (title, lines) = messages::mail_card(&self.state.mail_pending);
+                if lines.is_empty() {
+                    return;
+                }
+                (title, lines.join("
+"))
+            }
             ItemKey::Brief => {
                 let now = now_unix();
                 let l = local(&Local, now);
@@ -657,6 +707,11 @@ impl App {
                 card.buttons.push((snooze, Action::Snooze, BtnStyle::Secondary));
             }
             ItemKey::Brief => card.buttons.push(("Thanks!".into(), Action::Done, BtnStyle::Primary)),
+            ItemKey::Mail => {
+                card.buttons.push(("Open Gmail".into(), Action::Open, BtnStyle::Primary));
+                card.buttons.push(("Got it".into(), Action::Done, BtnStyle::Secondary));
+                card.buttons.push((snooze, Action::Snooze, BtnStyle::Ghost));
+            }
         }
         card
     }
@@ -718,7 +773,10 @@ impl App {
                 self.effects.push(Effect::OpenSettings);
             }
             Action::Drink => self.drink(),
-            Action::Done | Action::Snooze | Action::Dismiss => {
+            Action::Done | Action::Snooze | Action::Dismiss | Action::Open => {
+                if action == Action::Open {
+                    self.open_mail();
+                }
                 let Some(p) = (!self.pending.is_empty()).then(|| self.pending.remove(0)) else {
                     self.pet.bubble = None;
                     self.render();
@@ -750,8 +808,12 @@ impl App {
                     }
                     (ItemKey::Event(key), _) => schedule::ack_event(&mut self.state, key, now),
                     (ItemKey::Brief, _) => schedule::ack_brief(&mut self.state, local(&Local, now).date()),
+                    (ItemKey::Mail, Action::Snooze) => {
+                        schedule::snooze_key(&mut self.state, schedule::MAIL_STATE_KEY.to_string(), now + self.settings.notify.snooze_min as i64 * 60);
+                    }
+                    (ItemKey::Mail, _) => schedule::ack_mail(&mut self.state),
                 }
-                if matches!(p.key, ItemKey::Brief | ItemKey::Event(_)) && action == Action::Done {
+                if matches!(p.key, ItemKey::Brief | ItemKey::Event(_) | ItemKey::Mail) && matches!(action, Action::Done | Action::Open) {
                     // Acknowledging information isn't an accomplishment — no confetti.
                     self.pet.bubble = None;
                     self.kill_timer(T_BUBBLE);
@@ -864,6 +926,11 @@ impl App {
             .collect();
         for line in agenda {
             card = card.line(line, false);
+        }
+        match self.state.mail_pending.len() {
+            0 => {}
+            1 => card = card.line("1 important email waiting", false),
+            n => card = card.line(format!("{n} important emails waiting"), false),
         }
         if self.state.streak >= 2 {
             card = card.line(format!("{}-day water streak", self.state.streak), true);
@@ -1150,6 +1217,7 @@ impl App {
             self.away = false;
             self.kill_timer(T_AWAY);
             self.anim(AnimKind::WakeUp);
+            self.set_timer(T_MAIL, 5_000);
             self.reschedule();
             self.arm_idle();
         }
@@ -1475,6 +1543,31 @@ impl App {
                 self.menu_command(arg.parse().unwrap_or(0));
                 "ok".into()
             }
+            "gmail-setup" => {
+                self.begin_gmail_setup();
+                format!("keys={}", self.google_keys().is_some())
+            }
+            "gmail-signin" => {
+                self.start_gmail_signin();
+                self.last_auth_url.clone()
+            }
+            "mail-check" => {
+                self.check_mail(true);
+                "started".into()
+            }
+            "mail" => {
+                let st: Vec<String> = self.mail_status.iter().map(|(k, v)| format!("{k}: checked={} err={:?} signed_out={}", v.checked_at, v.error, v.signed_out)).collect();
+                format!(
+                    "accounts={:?} running={} auth_running={} auth_error={:?} pending={:?} history={:?}
+{}",
+                    self.settings.email.accounts.iter().map(|a| a.address.clone()).collect::<Vec<_>>(),
+                    self.mail_running, self.auth_running, self.auth_error,
+                    self.state.mail_pending.iter().map(|m| format!("{}: {}", m.sender(), m.subject)).collect::<Vec<_>>(),
+                    self.state.mail.values().map(|m| m.history_id.clone()).collect::<Vec<_>>(),
+                    st.join("
+")
+                )
+            }
             "sync" => {
                 self.start_sync(true);
                 "started".into()
@@ -1591,13 +1684,15 @@ impl App {
     }
 
     pub fn secrets_map(&self) -> std::collections::BTreeMap<String, String> {
-        self.settings
+        // Everything that isn't a calendar link (Google keys, sign-ins) plus the current links.
+        let mut m: std::collections::BTreeMap<String, String> = self.secrets.iter().filter(|(k, _)| !k.starts_with("cal:")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        m.extend(self.settings
             .dates
             .calendars
             .iter()
             .filter(|c| !c.url.trim().is_empty())
-            .map(|c| (format!("cal:{}", c.id), c.url.trim().to_string()))
-            .collect()
+            .map(|c| (format!("cal:{}", c.id), c.url.trim().to_string())));
+        m
     }
 }
 
@@ -1619,10 +1714,8 @@ impl App {
 
     pub fn begin_cal_wizard(&mut self, provider: Provider) {
         self.cal_picking = false;
-        if self.cal_wizard.is_none() {
-            unsafe { windows_sys::Win32::System::DataExchange::AddClipboardFormatListener(self.hwnd) };
-        }
         self.cal_wizard = Some(CalWizard { provider, hint: None });
+        self.update_clip_listener();
         self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
         if let Some(url) = App::provider_page(provider) {
             platform::open_url(url);
@@ -1638,10 +1731,8 @@ impl App {
     }
 
     pub fn end_cal_wizard(&mut self) {
-        if self.cal_wizard.take().is_some() {
-            unsafe { windows_sys::Win32::System::DataExchange::RemoveClipboardFormatListener(self.hwnd) };
-            self.kill_timer(T_CLIPWAIT);
-        }
+        self.cal_wizard = None;
+        self.update_clip_listener();
         self.cal_picking = false;
         self.ui_invalidate();
     }
@@ -1650,12 +1741,15 @@ impl App {
     /// may open the clipboard again right away (.NET, some browsers), and grabbing it in that
     /// instant would make *their* copy fail. Bursts of updates coalesce into one read.
     pub fn on_clipboard(&mut self) {
-        if self.cal_wizard.is_some() {
+        if self.cal_wizard.is_some() || self.gmail_setup {
             self.set_timer(T_CLIPREAD, 200);
         }
     }
 
     fn read_clipboard_for_wizard(&mut self) {
+        if self.gmail_setup {
+            self.capture_google_keys();
+        }
         let Some(w) = &self.cal_wizard else { return };
         let lenient = w.provider == Provider::Other;
         let text = platform::clipboard_text();
@@ -1715,6 +1809,286 @@ impl App {
                 false
             }
             LinkCheck::NotALink => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Important email (Gmail, metadata-only)
+// ---------------------------------------------------------------------------------------------
+
+pub const GMAIL_ID_KEY: &str = "gmail:client_id";
+pub const GMAIL_SECRET_KEY: &str = "gmail:client_secret";
+
+fn refresh_key(account_id: &str) -> String {
+    format!("gmail:{account_id}:refresh")
+}
+
+impl App {
+    /// One clipboard listener shared by the calendar and Gmail setup flows, on only while needed.
+    pub fn update_clip_listener(&mut self) {
+        let want = self.cal_wizard.is_some() || self.gmail_setup;
+        if want == self.clip_listening {
+            if want {
+                self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
+            }
+            return;
+        }
+        unsafe {
+            if want {
+                windows_sys::Win32::System::DataExchange::AddClipboardFormatListener(self.hwnd);
+            } else {
+                windows_sys::Win32::System::DataExchange::RemoveClipboardFormatListener(self.hwnd);
+            }
+        }
+        self.clip_listening = want;
+        if want {
+            self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
+        } else {
+            self.kill_timer(T_CLIPWAIT);
+            self.kill_timer(T_CLIPREAD);
+        }
+    }
+
+    pub fn google_keys(&self) -> Option<crate::oauth::ClientKeys> {
+        Some(crate::oauth::ClientKeys { id: self.secrets.get(GMAIL_ID_KEY)?.clone(), secret: self.secrets.get(GMAIL_SECRET_KEY)?.clone() })
+    }
+
+    pub fn begin_gmail_setup(&mut self) {
+        self.gmail_setup = true;
+        self.auth_error = None;
+        self.update_clip_listener();
+        self.capture_google_keys(); // maybe already copied
+        self.ui_invalidate();
+    }
+
+    pub fn end_gmail_setup(&mut self) {
+        self.gmail_setup = false;
+        self.update_clip_listener();
+        self.ui_invalidate();
+    }
+
+    /// Takes a Client ID and/or secret from the clipboard (single values or the whole JSON).
+    pub fn capture_google_keys(&mut self) {
+        let Some(text) = platform::clipboard_text() else { return };
+        let (id, secret) = pip_core::email::gmail::find_client_keys(&text);
+        let mut changed = false;
+        if let Some(id) = id {
+            changed |= self.secrets.insert(GMAIL_ID_KEY.into(), id.clone()).as_deref() != Some(id.as_str());
+        }
+        if let Some(s) = secret {
+            changed |= self.secrets.insert(GMAIL_SECRET_KEY.into(), s.clone()).as_deref() != Some(s.as_str());
+        }
+        if changed {
+            self.secrets_dirty = true;
+            self.schedule_save();
+            if self.google_keys().is_some() {
+                self.end_gmail_setup();
+                self.message("Got both keys! Now click \u{201c}Sign in with Google\u{201d}.".into(), 6);
+                self.anim(AnimKind::Hop);
+            } else {
+                self.message("Got it \u{2014} now copy the other one.".into(), 4);
+                self.anim(AnimKind::Nod);
+            }
+        }
+        self.ui_invalidate();
+    }
+
+    pub fn forget_google_keys(&mut self) {
+        self.secrets.remove(GMAIL_ID_KEY);
+        self.secrets.remove(GMAIL_SECRET_KEY);
+        self.secrets_dirty = true;
+        self.schedule_save();
+        self.ui_invalidate();
+    }
+
+    pub fn start_gmail_signin(&mut self) {
+        let Some(keys) = self.google_keys() else { return };
+        if let Some(c) = self.auth_cancel.take() {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        match crate::oauth::prepare(&keys) {
+            Ok((pending, url)) => {
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.auth_cancel = Some(cancel.clone());
+                self.auth_running = true;
+                self.auth_error = None;
+                platform::open_url(&url);
+                self.last_auth_url = url;
+                crate::oauth::finish_in_background(self.hwnd, pending, cancel);
+            }
+            Err(e) => self.auth_error = Some(e),
+        }
+        self.ui_invalidate();
+    }
+
+    pub fn cancel_gmail_signin(&mut self) {
+        if let Some(c) = self.auth_cancel.take() {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.auth_running = false;
+        self.ui_invalidate();
+    }
+
+    pub fn on_mailauth(&mut self, result: Box<crate::oauth::AuthResult>) {
+        use crate::oauth::AuthResult;
+        self.auth_running = false;
+        self.auth_cancel = None;
+        match *result {
+            AuthResult::Ok { refresh, access, expires_at, address, history_id } => {
+                let prev = self.settings.clone();
+                let id = match self.settings.email.accounts.iter().find(|a| a.address.eq_ignore_ascii_case(&address)) {
+                    Some(a) => a.id.clone(),
+                    None => {
+                        let id = format!("g{:x}{:04x}", now_unix(), tick_ms() & 0xffff);
+                        self.settings.email.accounts.push(pip_core::email::EmailAccount {
+                            id: id.clone(),
+                            address: address.clone(),
+                            enabled: true,
+                            updated_at: now_unix(),
+                        });
+                        id
+                    }
+                };
+                self.secrets.insert(refresh_key(&id), refresh);
+                self.secrets_dirty = true;
+                // Only mail arriving from now on is considered: no flood of old messages.
+                let ms = self.state.mail.entry(id.clone()).or_default();
+                ms.history_id = Some(history_id);
+                ms.last_check = now_unix();
+                self.mail_access.insert(id.clone(), (access, expires_at));
+                self.mail_status.insert(id, MailStatus { checked_at: now_unix(), ..Default::default() });
+                self.state_dirty = true;
+                self.settings_changed(&prev);
+                if !self.pet.visible {
+                    self.set_visible(true);
+                }
+                self.message(format!("Connected to {address}! I'll give you a gentle nudge when something important arrives."), 7);
+                self.anim(AnimKind::Celebrate);
+                self.schedule_mail();
+            }
+            AuthResult::Err(e) => {
+                self.auth_error = Some(e.clone());
+                self.message(e, 8);
+            }
+            AuthResult::Cancelled => {}
+        }
+        self.ui_invalidate();
+    }
+
+    pub fn disconnect_mail(&mut self, account_id: &str) {
+        let prev = self.settings.clone();
+        self.settings.email.accounts.retain(|a| a.id != account_id);
+        if let Some(token) = self.secrets.remove(&refresh_key(account_id)) {
+            crate::oauth::revoke_in_background(token);
+        }
+        self.secrets_dirty = true;
+        self.state.mail.remove(account_id);
+        self.state.mail_pending.retain(|m| m.account_id != account_id);
+        self.mail_access.remove(account_id);
+        self.mail_status.remove(account_id);
+        self.state_dirty = true;
+        self.settings_changed(&prev);
+        self.ui_invalidate();
+    }
+
+    /// Next check: every few minutes while you're around; every 15 minutes during quiet hours.
+    pub fn schedule_mail(&mut self) {
+        if self.settings.email.accounts.iter().all(|a| !a.enabled) || self.google_keys().is_none() {
+            self.kill_timer(T_MAIL);
+            return;
+        }
+        let minutes = if self.night { 15 } else { self.settings.email.check_minutes.max(1) };
+        self.set_timer(T_MAIL, minutes * 60_000);
+    }
+
+    /// Starts a check. `force` also checks while away/locked (e.g. "Check now").
+    pub fn check_mail(&mut self, force: bool) {
+        if self.mail_running {
+            return;
+        }
+        if !force && (self.locked || self.away) {
+            // Nobody to tell; unlock / coming back triggers a check.
+            self.kill_timer(T_MAIL);
+            return;
+        }
+        let Some(keys) = self.google_keys() else { return };
+        let jobs: Vec<crate::mailsync::MailJob> = self
+            .settings
+            .email
+            .accounts
+            .iter()
+            .filter(|a| a.enabled && !self.mail_status.get(&a.id).is_some_and(|s| s.signed_out))
+            .filter_map(|a| {
+                Some(crate::mailsync::MailJob {
+                    account_id: a.id.clone(),
+                    refresh: self.secrets.get(&refresh_key(&a.id))?.clone(),
+                    access: self.mail_access.get(&a.id).cloned(),
+                    history_id: self.state.mail.get(&a.id).and_then(|m| m.history_id.clone()),
+                })
+            })
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+        self.mail_running = true;
+        crate::mailsync::start(self.hwnd, keys, self.settings.email.clone(), jobs);
+    }
+
+    pub fn on_mailsync(&mut self, results: Box<Vec<crate::mailsync::MailResult>>) {
+        self.mail_running = false;
+        let now = now_unix();
+        let mut found = Vec::new();
+        for r in *results {
+            match &r.access {
+                Some(a) => {
+                    self.mail_access.insert(r.account_id.clone(), a.clone());
+                }
+                None => {
+                    self.mail_access.remove(&r.account_id);
+                }
+            }
+            let ms = self.state.mail.entry(r.account_id.clone()).or_default();
+            if r.history_id.is_some() {
+                ms.history_id = r.history_id.clone();
+            }
+            if r.error.is_none() {
+                ms.last_check = now;
+            }
+            let status = self.mail_status.entry(r.account_id.clone()).or_default();
+            status.error = r.error.clone();
+            status.signed_out = r.signed_out;
+            if r.error.is_none() {
+                status.checked_at = now;
+            }
+            if r.signed_out {
+                let address = self.settings.email.accounts.iter().find(|a| a.id == r.account_id).map(|a| a.address.clone()).unwrap_or_default();
+                self.message(format!("Google signed me out of {address}. Open Settings \u{203a} Email to sign in again."), 8);
+            }
+            found.extend(r.important);
+        }
+        self.state_dirty = true;
+        self.schedule_save();
+        if self.state.add_mail(found) > 0 {
+            // New arrivals refresh a bubble that's already showing.
+            let showing_mail = self.pending.first().is_some_and(|p| p.key == ItemKey::Mail) && self.pet.bubble_kind() == Some(BubbleKind::Notify);
+            self.pending.retain(|p| p.key != ItemKey::Mail);
+            if showing_mail {
+                self.pet.bubble = None;
+            }
+        }
+        self.reschedule();
+        self.schedule_mail();
+        self.ui_invalidate();
+    }
+
+    /// "Open Gmail": the message itself if there's one, otherwise the inbox.
+    pub fn open_mail(&mut self) {
+        let newest = self.state.mail_pending.iter().max_by_key(|m| m.received).cloned();
+        if let Some(m) = newest {
+            let address = self.settings.email.accounts.iter().find(|a| a.id == m.account_id).map(|a| a.address.clone()).unwrap_or_default();
+            let single = self.state.mail_pending.len() == 1;
+            platform::open_url(&pip_core::email::gmail::web_link(&address, single.then_some(m.id.as_str())));
         }
     }
 }

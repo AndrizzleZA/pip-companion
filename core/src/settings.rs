@@ -5,6 +5,7 @@
 
 use crate::calendar::CalendarFeed;
 use crate::dates::{HolidayRegion, ImportantDate};
+use crate::email::EmailSettings;
 use crate::time::{DaySet, TimeOfDay};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,7 @@ pub struct Settings {
     pub notify: NotifySettings,
     pub reminders: Vec<CustomReminder>,
     pub dates: DatesSettings,
+    pub email: EmailSettings,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             notify: NotifySettings::default(),
             reminders: Vec::new(),
             dates: DatesSettings::default(),
+            email: EmailSettings::default(),
         }
     }
 }
@@ -317,6 +320,8 @@ impl Settings {
         self.notify.snooze_min = self.notify.snooze_min.clamp(1, 240);
         self.notify.bubble_minutes = self.notify.bubble_minutes.clamp(1, 120);
         self.reminders.truncate(50);
+        self.email.check_minutes = self.email.check_minutes.clamp(1, 60);
+        self.email.accounts.truncate(5);
         self.dates.event_lead_min = self.dates.event_lead_min.clamp(0, 240);
         self.dates.items.truncate(200);
         self.dates.calendars.truncate(10);

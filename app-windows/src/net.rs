@@ -28,6 +28,7 @@ pub struct Target {
     pub host: String,
     pub port: u16,
     pub path: String,
+    pub secure: bool,
 }
 
 /// Accepts https:// and webcal:// (served over HTTPS). Plain http is refused: calendar
@@ -38,6 +39,8 @@ pub fn parse_url(url: &str) -> Result<Target, String> {
         r
     } else if let Some(r) = url.strip_prefix("webcal://").or_else(|| url.strip_prefix("webcals://")) {
         r
+    } else if cfg!(feature = "devtools") && url.starts_with("http://127.0.0.1") {
+        &url[7..] // dev builds only: local mock servers
     } else if url.starts_with("http://") {
         return Err("Only secure (https) calendar links are supported".into());
     } else {
@@ -54,7 +57,8 @@ pub fn parse_url(url: &str) -> Result<Target, String> {
         Some((h, p)) => (h, p.parse::<u16>().map_err(|_| "Invalid port in link".to_string())?),
         None => (authority, 443),
     };
-    Ok(Target { host: host.to_string(), port, path: path.to_string() })
+    let secure = !(cfg!(feature = "devtools") && url.starts_with("http://127.0.0.1"));
+    Ok(Target { host: host.to_string(), port, path: path.to_string(), secure })
 }
 
 fn header(req: *mut c_void, level: u32) -> Option<String> {
@@ -72,10 +76,38 @@ fn header(req: *mut c_void, level: u32) -> Option<String> {
     }
 }
 
+/// A raw HTTP exchange: network problems are `Err`, any HTTP status is `Ok`.
+pub struct Raw {
+    pub status: u32,
+    pub body: Vec<u8>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+/// Calendar download with validators and friendly status errors.
 pub fn get(url: &str, etag: Option<&str>, last_modified: Option<&str>) -> Result<Response, String> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if let Some(e) = etag {
+        headers.push(("If-None-Match".into(), e.into()));
+    }
+    if let Some(m) = last_modified {
+        headers.push(("If-Modified-Since".into(), m.into()));
+    }
+    let r = send("GET", url, &headers, None)?;
+    match r.status {
+        304 => Ok(Response { body: None, etag: r.etag, last_modified: r.last_modified }),
+        200 => Ok(Response { body: Some(r.body), etag: r.etag, last_modified: r.last_modified }),
+        401 | 403 => Err("The calendar link was refused (it may have been reset)".into()),
+        404 => Err("Calendar not found — check the link".into()),
+        s => Err(format!("The calendar server answered HTTP {s}")),
+    }
+}
+
+/// One HTTPS request. `headers` are extra request headers; `body` is sent as-is.
+pub fn send(method: &str, url: &str, headers: &[(String, String)], body: Option<&[u8]>) -> Result<Raw, String> {
     let t = parse_url(url)?;
     unsafe {
-        let ua = wide(concat!("Pip/", env!("CARGO_PKG_VERSION"), " (calendar subscription)"));
+        let ua = wide(concat!("Pip/", env!("CARGO_PKG_VERSION"), ""));
         let session = Handle(WinHttpOpen(ua.as_ptr(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, std::ptr::null(), std::ptr::null(), 0));
         if session.0.is_null() {
             return Err("Networking is unavailable".into());
@@ -89,33 +121,31 @@ pub fn get(url: &str, etag: Option<&str>, last_modified: Option<&str>) -> Result
         }
         let req = Handle(WinHttpOpenRequest(
             conn.0,
-            wide("GET").as_ptr(),
+            wide(method).as_ptr(),
             wide(&t.path).as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
+            if t.secure { WINHTTP_FLAG_SECURE } else { 0 },
         ));
         if req.0.is_null() {
             return Err("Couldn't create the request".into());
         }
         let mut extra = String::new();
-        if let Some(e) = etag {
-            extra.push_str(&format!("If-None-Match: {e}\r\n"));
-        }
-        if let Some(m) = last_modified {
-            extra.push_str(&format!("If-Modified-Since: {m}\r\n"));
+        for (k, v) in headers {
+            extra.push_str(&format!("{k}: {v}\r\n"));
         }
         if !extra.is_empty() {
             let w = wide(&extra);
             WinHttpAddRequestHeaders(req.0, w.as_ptr(), (w.len() - 1) as u32, WINHTTP_ADDREQ_FLAG_ADD);
         }
-        if WinHttpSendRequest(req.0, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) == 0 || WinHttpReceiveResponse(req.0, std::ptr::null_mut()) == 0 {
+        let (bp, bl) = body.map_or((std::ptr::null(), 0u32), |b| (b.as_ptr() as *const c_void, b.len() as u32));
+        if WinHttpSendRequest(req.0, std::ptr::null(), 0, bp, bl, bl, 0) == 0 || WinHttpReceiveResponse(req.0, std::ptr::null_mut()) == 0 {
             let code = windows_sys::Win32::Foundation::GetLastError();
             return Err(match code {
                 12007 => "No internet connection (couldn't resolve the server)".into(),
-                12002 => "The calendar server timed out".into(),
-                12029 | 12030 => "Couldn't connect to the calendar server".into(),
+                12002 => "The server timed out".into(),
+                12029 | 12030 => "Couldn't connect to the server".into(),
                 12175 | 12045 | 12044 => "The server's security certificate was rejected".into(),
                 c => format!("Network error ({c})"),
             });
@@ -132,16 +162,6 @@ pub fn get(url: &str, etag: Option<&str>, last_modified: Option<&str>) -> Result
         );
         let etag = header(req.0, WINHTTP_QUERY_ETAG);
         let last_modified = header(req.0, WINHTTP_QUERY_LAST_MODIFIED);
-        if status == 304 {
-            return Ok(Response { body: None, etag, last_modified });
-        }
-        if status != 200 {
-            return Err(match status {
-                401 | 403 => "The calendar link was refused (it may have been reset)".into(),
-                404 => "Calendar not found — check the link".into(),
-                s => format!("The calendar server answered HTTP {s}"),
-            });
-        }
         let mut body = Vec::new();
         loop {
             let mut avail: u32 = 0;
@@ -159,11 +179,23 @@ pub fn get(url: &str, etag: Option<&str>, last_modified: Option<&str>) -> Result
             }
             body.truncate(start + read as usize);
             if body.len() > MAX_BODY {
-                return Err("The calendar is too large (over 10 MB)".into());
+                return Err("The response is too large (over 10 MB)".into());
             }
         }
-        Ok(Response { body: Some(body), etag, last_modified })
+        Ok(Raw { status, body, etag, last_modified })
     }
+}
+
+/// application/x-www-form-urlencoded value encoding.
+pub fn form_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

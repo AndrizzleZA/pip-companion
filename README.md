@@ -23,6 +23,11 @@ calendar…), pick Google, Outlook or iCloud: Pip opens the right page and picks
 you copy it — no pasting needed. Then events show on today's card, and important ones (own alert, important calendar or a
 keyword like "dentist") get a gentle alert. A quiet morning summary lists what's on.
 
+**Important email (Gmail).** Settings › Email walks you through a one-time, 5-minute setup (Pip opens each
+Google page and picks the keys up when you copy them), then "Sign in with Google". Pip only ever sees
+senders, subjects and labels of new mail — never the contents. Choose important senders (address,
+@domain or name) and subject words; matching unread mail gets one gentle bubble with "Open Gmail".
+
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.
 

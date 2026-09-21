@@ -29,6 +29,8 @@ pub enum Action {
     Drink,
     Settings,
     Close,
+    /// Open the thing in its app (Gmail).
+    Open,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

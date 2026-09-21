@@ -112,3 +112,20 @@ pub fn brief_title(name: &str, hour: u32) -> String {
     };
     format!("{part}! Here's today, from {name}")
 }
+
+/// (title, body lines) for the grouped important-email bubble.
+pub fn mail_card(msgs: &[crate::email::EmailMsg]) -> (String, Vec<String>) {
+    let mut newest: Vec<&crate::email::EmailMsg> = msgs.iter().collect();
+    newest.sort_by_key(|m| std::cmp::Reverse(m.received));
+    match newest.as_slice() {
+        [] => (String::new(), Vec::new()),
+        [m] => (format!("Email from {}", m.sender()), vec![format!("“{}”", m.subject)]),
+        many => {
+            let mut lines: Vec<String> = many.iter().take(3).map(|m| format!("{} — {}", m.sender(), m.subject)).collect();
+            if many.len() > 3 {
+                lines.push(format!("…and {} more", many.len() - 3));
+            }
+            (format!("{} important emails", many.len()), lines)
+        }
+    }
+}

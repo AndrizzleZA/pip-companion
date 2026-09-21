@@ -30,6 +30,8 @@ pub enum ItemKey {
     Event(String),
     /// The morning summary.
     Brief,
+    /// Important email(s) waiting — one grouped item.
+    Mail,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -339,6 +341,9 @@ pub fn minutes(n: i64) -> i64 {
 // Important dates, calendar events, morning summary
 // ---------------------------------------------------------------------------------------------
 
+/// State key for snoozing the grouped email item.
+pub const MAIL_STATE_KEY: &str = "mail";
+
 /// State key for an important date's reminders.
 pub fn date_state_key(id: &str) -> String {
     format!("date:{id}")
@@ -392,6 +397,11 @@ fn dates_events_due<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], no
             out.push(Due { key: ItemKey::Event(key), occurrence: at, priority: Priority::Normal, late: now > e.start });
         }
     }
+    // Important email: one grouped item while anything is waiting.
+    if !st.mail_pending.is_empty() && snoozed(st, MAIL_STATE_KEY, now).is_none() {
+        let newest = st.mail_pending.iter().map(|m| m.received).max().unwrap_or(now);
+        out.push(Due { key: ItemKey::Mail, occurrence: newest, priority: Priority::Normal, late: false });
+    }
     // Morning summary: once a day from notify time, only when there is something to say.
     if s.dates.morning_summary && st.brief_day != Some(today) {
         let m = to_ts(tz, s.dates.notify_at.on(today));
@@ -430,6 +440,12 @@ pub fn ack_event(st: &mut State, key: &str, now: i64) {
 
 pub fn ack_brief(st: &mut State, today: NaiveDate) {
     st.brief_day = Some(today);
+}
+
+/// "Got it" on the email bubble: everything currently waiting is handled.
+pub fn ack_mail(st: &mut State) {
+    st.mail_pending.clear();
+    st.reminders.remove(MAIL_STATE_KEY);
 }
 
 /// Snooze for any keyed item that stores its state in `reminders` (dates, events).
@@ -658,6 +674,26 @@ mod tests {
         assert_eq!((d[0].key.clone(), d[0].priority), (ItemKey::Brief, Priority::Low));
         ack_brief(&mut st, NaiveDate::from_ymd_opt(2026, 9, 23).unwrap());
         assert!(due_items(&s, &st, on(23, 12, 0), &tz()).is_empty());
+    }
+
+
+    #[test]
+    fn important_mail_grouped_deduped_snoozed() {
+        use crate::email::EmailMsg;
+        let (s, mut st) = quiet_setup();
+        let m = |id: &str| EmailMsg { id: id.into(), account_id: "a".into(), from_name: "Mom".into(), from_addr: "m@x.com".into(), subject: "Hi".into(), labels: vec![], received: at(10, 0) };
+        assert_eq!(st.add_mail(vec![m("1"), m("2")]), 2);
+        assert_eq!(st.add_mail(vec![m("2")]), 0, "never announced twice");
+        let d = due_items(&s, &st, at(10, 1), &tz());
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].key, ItemKey::Mail);
+        snooze_key(&mut st, MAIL_STATE_KEY.to_string(), at(10, 30));
+        assert!(due_items(&s, &st, at(10, 5), &tz()).is_empty());
+        assert_eq!(next_event(&s, &st, at(10, 5), &tz()), at(10, 30));
+        ack_mail(&mut st);
+        assert!(due_items(&s, &st, at(10, 40), &tz()).is_empty());
+        let (title, lines) = crate::messages::mail_card(&[m("3")]);
+        assert_eq!((title.as_str(), lines[0].as_str()), ("Email from Mom", "“Hi”"));
     }
 
     #[test]

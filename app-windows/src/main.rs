@@ -9,6 +9,8 @@
 
 mod app;
 mod calsync;
+mod mailsync;
+mod oauth;
 mod net;
 mod secrets;
 mod pet;
@@ -229,6 +231,16 @@ unsafe extern "system" fn pet_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             Some(0)
         }
         WM_CLIPBOARDUPDATE => with_app(|a| a.on_clipboard()).map(|_| 0),
+        mailsync::WM_MAILSYNC => {
+            let result = mailsync::take_result(lp);
+            with_app(move |a| a.on_mailsync(result));
+            Some(0)
+        }
+        oauth::WM_MAILAUTH => {
+            let result = oauth::take_result(lp);
+            with_app(move |a| a.on_mailauth(result));
+            Some(0)
+        }
         calsync::WM_CALSYNC => {
             // Take ownership first so the payload is freed even if the app is busy.
             let result = calsync::take_result(lp);
