@@ -326,3 +326,41 @@ account preselected (`login_hint`) and the same account record reused; second ac
 **Cost.** No new threads or timers while idle (the sign-in thread exists only during a sign-in,
 the waiting panel is static — no spinner redraws). Release exe +19 KB (1.64 MB); startup 24 ms;
 private memory ~1.8 MB unchanged. Test-only endpoint overrides are compiled out of release.
+
+## 12. Connecting Google — reduced to Google's own screens, 2026-09-21
+
+User's rule: *"I want to connect my Gmail" → click Google → choose account → done.* No guides,
+keys, consoles or configuration in front of the user, ever.
+
+**Why it was complicated.** Not Google's requirements — ours. (1) Pip had no registered Google
+identity of its own, so the app fell back to making *each user* register a Google Cloud app
+(the 5-minute, 4-step guide with key copying). Google requires every app to be registered once
+by its **developer**; making users do it was the whole problem. (2) Pip added its own steps on
+top: a forced account picker, a 3-step "what to expect" panel, and a "tick the box" step that
+doesn't even exist (Google shows permission checkboxes only when an app asks for more than one
+permission; Pip asks for exactly one).
+
+**What Google genuinely requires of the user:** choose the account (skipped automatically when
+only one is signed in), the "hasn't verified this app" notice (unavoidable for Gmail data until
+Google's paid review + security assessment; ≤100 users meanwhile), and Allow. Everything else was
+removed. Alternatives checked and rejected: the device-code flow (Google doesn't allow Gmail
+scopes there), a hosted relay/broker service (still needs a registered app, adds a server and a
+privacy surface), IMAP/app passwords (passwords — ruled out), borrowing another app's
+registration (against Google's terms).
+
+**Now.** One button — *Continue with Google* — opens Google; Pip shows one line ("Continue in your
+browser…", "Open it again", Cancel) and a one-sentence heads-up for the unverified notice; the
+browser lands on "Pip is connected" and Pip comes to the front showing the account. The account
+picker is forced only for *Add account*; *Reconnect* preselects the account. Failures read as one
+plain sentence (technical detail goes to `pip.log`). The user-facing "own Google app" setup,
+its clipboard key capture and `find_client_keys` were deleted (−115 KB release size).
+
+**Developer step (once, not per user):** register Pip in Google Cloud (Gmail API on, consent
+screen published, Desktop client) and drop the downloaded JSON at
+`app-windows/google-client.json`; `build.rs` compiles it in and warns in release builds without it.
+
+Tested against `tools/mock-google.js` with real button clicks: fresh connect, waiting, connected,
+two-click disconnect (revoked at Google), connect again, add second account (picker shown),
+Google signs Pip out → Reconnect (preselected, no picker), mail still detected afterwards,
+user cancels on Google's screen, app rejected, tab closed → Cancel, offline → plain message →
+try again → connected. 51 unit tests pass; startup 22 ms, ~1.8 MB private memory.

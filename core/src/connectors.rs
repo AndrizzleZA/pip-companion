@@ -91,7 +91,7 @@ pub fn get(id: ConnectorId) -> &'static Connector {
 pub enum SignInProblem {
     /// The user clicked Cancel/Deny in the browser (not an error).
     Declined,
-    /// The permission box on Google's screen was left unticked.
+    /// The sign-in finished without the permission Pip asked for.
     MissingPermission,
     /// Nothing came back from the browser in time.
     TimedOut,
@@ -107,14 +107,15 @@ impl SignInProblem {
     /// Plain-language explanation shown under the "Try again" button.
     pub fn explain(&self, service: &str) -> String {
         match self {
-            SignInProblem::Declined => "You cancelled, so nothing was connected. You can try again whenever you like.".into(),
+            SignInProblem::Declined => "Nothing was connected. You can try again whenever you like.".into(),
             SignInProblem::MissingPermission => {
-                format!("{service} didn\u{2019}t give Pip permission. On the permission screen, make sure the box is ticked, then click Continue.")
+                format!("{service} didn\u{2019}t give Pip permission. Try again and choose Allow.")
             }
             SignInProblem::TimedOut => "Pip didn\u{2019}t hear back from your browser. If you closed the tab, just try again.".into(),
-            SignInProblem::Offline(detail) => format!("Couldn\u{2019}t reach {service} \u{2014} check your internet connection. ({detail})"),
+            // Technical details stay out of the UI (they're in the variant for logs/tests only).
+            SignInProblem::Offline(_) => format!("Couldn\u{2019}t reach {service}. Check your internet connection and try again."),
             SignInProblem::AppNotAllowed => format!("{service} didn\u{2019}t accept this copy of Pip. Please update Pip, then try again."),
-            SignInProblem::Other(detail) => format!("Something went wrong connecting to {service}: {detail}"),
+            SignInProblem::Other(_) => format!("Something went wrong connecting to {service}. Please try again."),
         }
     }
 
@@ -145,7 +146,7 @@ mod tests {
     fn problems_explain_themselves() {
         assert!(!SignInProblem::Declined.is_error());
         assert!(SignInProblem::TimedOut.is_error());
-        assert!(SignInProblem::MissingPermission.explain("Google").contains("box is ticked"));
+        assert!(SignInProblem::MissingPermission.explain("Google").contains("choose Allow"));
         assert!(SignInProblem::Offline("timed out".into()).explain("Google").contains("internet"));
     }
 }

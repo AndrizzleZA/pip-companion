@@ -112,8 +112,6 @@ pub struct App {
     /// Encrypted-at-rest secrets, decrypted in memory (calendar links, Google keys, sign-ins).
     pub secrets: std::collections::BTreeMap<String, String>,
     clip_listening: bool,
-    /// Gmail setup is waiting for the Client ID / secret to be copied.
-    pub gmail_setup: bool,
     pub mail_access: HashMap<String, (String, i64)>,
     pub mail_status: HashMap<String, MailStatus>,
     mail_running: bool,
@@ -185,7 +183,6 @@ impl App {
             open_page: None,
             secrets: Default::default(),
             clip_listening: false,
-            gmail_setup: false,
             mail_access: HashMap::new(),
             mail_status: HashMap::new(),
             mail_running: false,
@@ -515,7 +512,6 @@ impl App {
             T_CLIPWAIT => {
                 self.kill_timer(T_CLIPWAIT);
                 self.end_cal_wizard();
-                self.gmail_setup = false;
                 self.update_clip_listener();
             }
             T_MAIL => {
@@ -1555,12 +1551,13 @@ impl App {
                 self.menu_command(arg.parse().unwrap_or(0));
                 "ok".into()
             }
-            "gmail-setup" => {
-                self.begin_gmail_setup();
-                format!("keys={}", self.google_keys().is_some())
-            }
             "gmail-signin" => {
-                self.start_gmail_signin((!arg.is_empty()).then(|| arg.to_string()));
+                // "gmail-signin" = connect, "gmail-signin +" = add another account, "gmail-signin <address>" = reconnect
+                match arg {
+                    "" => self.start_gmail_signin(None, false),
+                    "+" => self.start_gmail_signin(None, true),
+                    a => self.start_gmail_signin(Some(a.to_string()), false),
+                }
                 self.last_auth_url.clone()
             }
             "gmail-cancel" => {
@@ -1767,15 +1764,12 @@ impl App {
     /// may open the clipboard again right away (.NET, some browsers), and grabbing it in that
     /// instant would make *their* copy fail. Bursts of updates coalesce into one read.
     pub fn on_clipboard(&mut self) {
-        if self.cal_wizard.is_some() || self.gmail_setup {
+        if self.cal_wizard.is_some() {
             self.set_timer(T_CLIPREAD, 200);
         }
     }
 
     fn read_clipboard_for_wizard(&mut self) {
-        if self.gmail_setup {
-            self.capture_google_keys();
-        }
         let Some(w) = &self.cal_wizard else { return };
         let lenient = w.provider == Provider::Other;
         let text = platform::clipboard_text();
@@ -1842,18 +1836,18 @@ impl App {
 // ---------------------------------------------------------------------------------------------
 // Important email (Gmail, metadata-only)
 // ---------------------------------------------------------------------------------------------
-
-pub const GMAIL_ID_KEY: &str = "gmail:client_id";
-pub const GMAIL_SECRET_KEY: &str = "gmail:client_secret";
+//
+// Connecting is deliberately one click: Pip ships its own Google sign-in identity (see build.rs),
+// so the user never sees keys, consoles or guides — Google's own screens are the only steps.
 
 fn refresh_key(account_id: &str) -> String {
     format!("gmail:{account_id}:refresh")
 }
 
 impl App {
-    /// One clipboard listener shared by the calendar and Gmail setup flows, on only while needed.
+    /// Calendar-link flow only: the clipboard listener is on just while the user is copying a link.
     pub fn update_clip_listener(&mut self) {
-        let want = self.cal_wizard.is_some() || self.gmail_setup;
+        let want = self.cal_wizard.is_some();
         if want == self.clip_listening {
             if want {
                 self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
@@ -1876,77 +1870,21 @@ impl App {
         }
     }
 
-    /// Keys from the (advanced) "your own Google app" setup, if the user did it.
-    fn own_google_keys(&self) -> Option<crate::oauth::ClientKeys> {
-        Some(crate::oauth::ClientKeys { id: self.secrets.get(GMAIL_ID_KEY)?.clone(), secret: self.secrets.get(GMAIL_SECRET_KEY)?.clone() })
-    }
-
-    pub fn using_own_google_keys(&self) -> bool {
-        self.own_google_keys().is_some()
-    }
-
-    /// The Google identity Pip signs in with: the user's own app if they set one up, otherwise
-    /// the one built into Pip (the normal case — nothing to set up).
+    /// Pip's built-in Google identity (None only in developer builds made without it).
     pub fn google_keys(&self) -> Option<crate::oauth::ClientKeys> {
-        self.own_google_keys().or_else(crate::oauth::builtin_google_client)
+        crate::oauth::builtin_google_client()
     }
 
-    pub fn begin_gmail_setup(&mut self) {
-        self.gmail_setup = true;
-        self.signin = SignIn::Idle;
-        self.update_clip_listener();
-        self.capture_google_keys(); // maybe already copied
-        self.ui_invalidate();
-    }
-
-    pub fn end_gmail_setup(&mut self) {
-        self.gmail_setup = false;
-        self.update_clip_listener();
-        self.ui_invalidate();
-    }
-
-    /// Takes a Client ID and/or secret from the clipboard (single values or the whole JSON).
-    pub fn capture_google_keys(&mut self) {
-        let Some(text) = platform::clipboard_text() else { return };
-        let (id, secret) = pip_core::email::gmail::find_client_keys(&text);
-        let mut changed = false;
-        if let Some(id) = id {
-            changed |= self.secrets.insert(GMAIL_ID_KEY.into(), id.clone()).as_deref() != Some(id.as_str());
-        }
-        if let Some(s) = secret {
-            changed |= self.secrets.insert(GMAIL_SECRET_KEY.into(), s.clone()).as_deref() != Some(s.as_str());
-        }
-        if changed {
-            self.secrets_dirty = true;
-            self.schedule_save();
-            if self.google_keys().is_some() {
-                self.end_gmail_setup();
-                self.message("Got both keys! Now click \u{201c}Sign in with Google\u{201d}.".into(), 6);
-                self.anim(AnimKind::Hop);
-            } else {
-                self.message("Got it \u{2014} now copy the other one.".into(), 4);
-                self.anim(AnimKind::Nod);
-            }
-        }
-        self.ui_invalidate();
-    }
-
-    pub fn forget_google_keys(&mut self) {
-        self.secrets.remove(GMAIL_ID_KEY);
-        self.secrets.remove(GMAIL_SECRET_KEY);
-        self.secrets_dirty = true;
-        self.schedule_save();
-        self.ui_invalidate();
-    }
-
-    /// "Connect Gmail" / "Reconnect": opens the browser sign-in. `hint` preselects the account.
-    pub fn start_gmail_signin(&mut self, hint: Option<String>) {
+    /// "Continue with Google". `hint` = reconnect that account (preselected); `choose` = let the
+    /// user pick a different account (adding another one). Otherwise Google uses the signed-in
+    /// account directly, skipping the chooser when there's only one.
+    pub fn start_gmail_signin(&mut self, hint: Option<String>, choose: bool) {
         self.confirm_disconnect = None;
         let Some(keys) = self.google_keys() else { return };
         if let Some(c) = self.auth_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        match crate::oauth::prepare(&crate::oauth::GOOGLE, &keys, hint.as_deref()) {
+        match crate::oauth::prepare(&crate::oauth::GOOGLE, &keys, hint.as_deref(), choose) {
             Ok((pending, url)) => {
                 let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 self.auth_cancel = Some(cancel.clone());
@@ -2027,6 +1965,10 @@ impl App {
                 }
             }
             AuthResult::Failed(problem) => {
+                // Plain words on screen; the technical detail goes to pip.log for troubleshooting.
+                if problem.is_error() {
+                    self.store.log(&format!("Google sign-in failed: {problem:?}"));
+                }
                 if self.ui.is_none() {
                     self.message(problem.explain("Google"), 8);
                 }

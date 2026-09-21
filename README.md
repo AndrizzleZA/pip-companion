@@ -23,13 +23,13 @@ calendar…), pick Google, Outlook or iCloud: Pip opens the right page and picks
 you copy it — no pasting needed. Then events show on today's card, and important ones (own alert, important calendar or a
 keyword like "dentist") get a gentle alert. A quiet morning summary lists what's on.
 
-**Connections.** Settings › Connections lists everything Pip can link to. **Gmail**: click Connect,
-pick your account in the browser, allow, and you're back in Pip, connected — no keys or setup. Pip only
-ever sees senders, subjects and labels of new mail, never the contents, and can't send or delete.
-Disconnect (asks once more) also withdraws Pip's access at Google; if Google ever signs Pip out, the
-account shows **Reconnect**. Choose important senders (address, @domain or name) and subject words in
-Settings › Email; matching unread mail gets one gentle bubble with "Open Gmail". **Calendars**
-(Google, Outlook, iCloud, any .ics link) connect through the guided link flow described above.
+**Connections.** Settings › Connections lists everything Pip can link to. **Gmail**: click *Continue
+with Google*, choose your account and Allow in the browser — Pip notices when you are done and shows
+the account. Pip only ever sees senders, subjects and labels of new mail, never the contents, and
+can’t send or delete. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
+ever signs Pip out, the account shows **Reconnect**. Choose important senders and subject words in
+Settings › Email. **Calendars** (Google, Outlook, iCloud, any .ics link) connect through the guided
+link flow described above.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.
@@ -51,8 +51,8 @@ real settings or the Windows startup entry.
 app*) from a Google Cloud project with the Gmail API enabled and the consent screen published.
 Download its JSON from the Google Cloud console and save it as `app-windows/google-client.json`
 (git-ignored) before building; `build.rs` compiles it in. For installed apps Google treats this as an
-app identifier, not a secret. Without it, Pip still builds and offers a manual "use your own Google
-app" setup instead. `node tools/mock-google.js` + a devtools build test the whole flow offline.
+app identifier, not a secret. This is a one-time developer step: users never see it. Without it, Pip still builds
+but can’t connect Google accounts (release builds print a warning). `node tools/mock-google.js` + a devtools build test the whole flow offline.
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/measure.ps1 -Minutes 10   # resource targets

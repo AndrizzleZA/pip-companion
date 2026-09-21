@@ -4,7 +4,7 @@
 //! `app-windows/google-client.json` (git-ignored), or point PIP_GOOGLE_CLIENT_JSON at it.
 //! For installed apps Google treats this as an app identifier, not a confidential secret; it is
 //! kept out of the repository only so secret scanners don't flag it.
-//! Without the file, Pip builds fine and falls back to the manual "use your own Google app" setup.
+//! Without the file, Pip builds fine but can't connect Google accounts (release builds warn).
 
 use std::path::PathBuf;
 
@@ -35,6 +35,9 @@ fn main() {
         println!("cargo:rustc-env=PIP_BUILTIN_GOOGLE_ID=");
         println!("cargo:rustc-env=PIP_BUILTIN_GOOGLE_SECRET=");
         return;
+    }
+    if id.is_empty() && std::env::var("PROFILE").as_deref() == Ok("release") {
+        println!("cargo:warning=No {} — this build can't connect Google accounts", path.display());
     }
     println!("cargo:rustc-env=PIP_BUILTIN_GOOGLE_ID={id}");
     println!("cargo:rustc-env=PIP_BUILTIN_GOOGLE_SECRET={secret}");

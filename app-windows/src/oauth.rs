@@ -194,8 +194,9 @@ pub struct Pending {
 }
 
 /// Binds the loopback port and builds the consent URL (UI thread; fast). `login_hint` preselects
-/// the account when reconnecting.
-pub fn prepare(service: &'static Service, keys: &ClientKeys, login_hint: Option<&str>) -> Result<(Pending, String), String> {
+/// the account when reconnecting; `choose_account` forces Google's account picker (only when
+/// adding a second account — otherwise it's an extra click for people with one account).
+pub fn prepare(service: &'static Service, keys: &ClientKeys, login_hint: Option<&str>, choose_account: bool) -> Result<(Pending, String), String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Couldn't start sign-in ({e})"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect = format!("http://127.0.0.1:{port}");
@@ -209,11 +210,11 @@ pub fn prepare(service: &'static Service, keys: &ClientKeys, login_hint: Option<
         form_encode(&redirect),
         form_encode(service.scope)
     );
-    // Always ask for consent (guarantees a long-lived sign-in); let the user pick the account
-    // unless we already know which one (reconnect).
-    match login_hint {
-        Some(h) => url += &format!("&prompt=consent&login_hint={}", form_encode(h)),
-        None => url += "&prompt=consent%20select_account",
+    // Always show the consent screen: it's the one step Google requires anyway, and it guarantees
+    // a long-lived sign-in (no silent "signed out" later).
+    url += if choose_account { "&prompt=consent%20select_account" } else { "&prompt=consent" };
+    if let Some(h) = login_hint {
+        url += &format!("&login_hint={}", form_encode(h));
     }
     Ok((Pending { listener, verifier, state, redirect, keys: keys.clone(), service }, url))
 }

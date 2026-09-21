@@ -123,8 +123,6 @@ pub enum UiAct {
     WizardOpen,
     WizardPaste,
     WizardCancel,
-    GmailStep(u8),
-    GmailPasteKeys,
     GmailSignIn,
     GmailCancel,
     MailCheckNow,
@@ -132,8 +130,6 @@ pub enum UiAct {
     AddMailAccount,
     GmailReconnect(String),
     GmailReopen,
-    GmailRemoveOwnKeys,
-    GmailManual,
     ConnectCalendar(Provider),
     MailImportantMarker,
     MailEvery(i32),
@@ -1421,29 +1417,20 @@ impl App {
 // Email page
 // ---------------------------------------------------------------------------------------------
 
-const GMAIL_STEPS: [(&str, &str); 4] = [
-    ("Create a Google Cloud project and name it \u{201c}Pip\u{201d}.", "https://console.cloud.google.com/projectcreate"),
-    ("Turn on the Gmail API \u{2014} click \u{201c}Enable\u{201d}.", "https://console.cloud.google.com/apis/library/gmail.googleapis.com"),
-    (
-        "Consent screen: \u{201c}Get started\u{201d} \u{2192} app name \u{201c}Pip\u{201d}, your email \u{2192} Audience \u{201c}External\u{201d} \u{2192} Create. Then open Audience and click \u{201c}Publish app\u{201d} (otherwise Google signs Pip out every week).",
-        "https://console.cloud.google.com/auth/overview",
-    ),
-    (
-        "Clients \u{2192} \u{201c}Create client\u{201d} \u{2192} type \u{201c}Desktop app\u{201d} \u{2192} Create. Copy the Client ID, then the Client secret right away (Google shows the secret only once \u{2014} if you miss it, open the client and add a new secret). Pip picks them up by itself.",
-        "https://console.cloud.google.com/auth/clients",
-    ),
-];
-
 impl App {
-    /// The Gmail connector: connect / waiting / problem / connected accounts, all in one card.
+    /// The Gmail connector card: one button to connect, then the connected account(s).
     /// Shown on both Connections and Email so it's never more than one click away.
+    ///
+    /// Design rule (user's): connecting must feel like "Continue with Google → choose account →
+    /// Allow → done". No guides, keys or setup in front of the user; Google's own screens are the
+    /// only steps, and Pip only adds a one-line heads-up for Google's unavoidable warning.
     fn draw_gmail_section(&self, c: &mut Ctx) {
         let s = c.s;
         let f = fonts();
         let inner = c.x1 - c.x0;
         let conn = connectors::get(ConnectorId::Gmail);
         let accounts = &self.settings.email.accounts;
-        let can_sign_in = self.google_keys().is_some();
+        let available = self.google_keys().is_some();
         let waiting = match &self.signin {
             SignIn::Waiting { reconnecting } => Some(reconnecting.clone()),
             _ => None,
@@ -1452,45 +1439,35 @@ impl App {
             SignIn::Problem(p) => Some(p),
             _ => None,
         };
-        let own_keys_note = self.using_own_google_keys() && crate::oauth::builtin_google_client().is_some();
 
         // Measure.
-        let access_lines = text::wrap(&f.regular, 12.0 * s, conn.access, inner);
-        let problem_lines = problem.map(|p| text::wrap(&f.semibold, 12.0 * s, &p.explain("Google"), inner)).unwrap_or_default();
-        let step_lines: Vec<Vec<String>> =
-            if waiting.is_some() { SIGNIN_STEPS.iter().map(|t| text::wrap(&f.regular, 12.5 * s, t, inner - 48.0 * s)).collect() } else { Vec::new() };
-        let box_h = if waiting.is_some() {
-            (48.0 + step_lines.iter().map(|l| l.len() as f32 * 19.0 + 8.0).sum::<f32>() + 44.0) * s
+        let note = if !available {
+            Some((c.pal.muted, "Google sign-in isn\u{2019}t included in this copy of Pip.".to_string()))
+        } else if waiting.is_some() {
+            Some((c.pal.muted, SIGNIN_HINT.to_string()))
         } else {
-            0.0
+            problem.map(|p| (if p.is_error() { ERR_RED } else { c.pal.muted }, p.explain("Google")))
         };
-        let manual_note = "This copy of Pip was built without Google sign-in \u{2014} \u{201c}Set up\u{201d} walks you through using your own.";
-        let manual_lines = if can_sign_in { Vec::new() } else { text::wrap(&f.regular, 12.0 * s, manual_note, inner) };
-        let mut h = 74.0 * s + access_lines.len() as f32 * 18.0 * s;
-        if waiting.is_some() {
-            h += box_h + 12.0 * s;
+        let access_lines = if accounts.is_empty() { text::wrap(&f.regular, 12.0 * s, conn.access, inner) } else { Vec::new() };
+        let note_lines = note.as_ref().map(|(_, t)| text::wrap(&f.regular, 12.0 * s, t, inner - 16.0 * s)).unwrap_or_default();
+        let wait_h = if waiting.is_some() { 44.0 * s } else { 0.0 };
+        let mut h = 74.0 * s + access_lines.len() as f32 * 18.0 * s + wait_h;
+        if !note_lines.is_empty() {
+            h += note_lines.len() as f32 * 18.0 * s + 8.0 * s;
         }
-        if !problem_lines.is_empty() {
-            h += problem_lines.len() as f32 * 18.0 * s + 10.0 * s;
-        }
-        h += manual_lines.len() as f32 * 18.0 * s;
-        if own_keys_note {
-            h += 40.0 * s;
-        }
-        h += accounts.len() as f32 * 66.0 * s + 8.0 * s;
+        h += accounts.len() as f32 * 66.0 * s + if accounts.is_empty() { 4.0 * s } else { 8.0 * s };
 
         let (_, y) = self.card(c, h, false);
         let connected = accounts.iter().any(|a| !self.mail_status.get(&a.id).is_some_and(|st| st.signed_out));
         self.connector_header(c, y, conn, if connected { Some((OK_GREEN, "Connected")) } else { None });
 
-        // Main action, top right.
+        // The one action, top right.
         let main = if waiting.is_some() {
             Some(("Cancel", BtnStyle::Ghost, UiAct::GmailCancel))
-        } else if !can_sign_in {
-            (!self.gmail_setup).then_some(("Set up", BtnStyle::Secondary, UiAct::GmailManual))
+        } else if !available {
+            None
         } else if accounts.is_empty() {
-            let retry = problem.is_some_and(|p| p.is_error());
-            Some((if retry { "Try again" } else { "Connect" }, BtnStyle::Primary, UiAct::GmailSignIn))
+            Some(("Continue with Google", BtnStyle::Primary, UiAct::GmailSignIn))
         } else if accounts.len() < 5 {
             Some(("Add account", BtnStyle::Secondary, UiAct::AddMailAccount))
         } else {
@@ -1506,55 +1483,28 @@ impl App {
             ty += 18.0 * s;
             text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, c.pal.muted, 1.0, l);
         }
-        for l in &manual_lines {
-            ty += 18.0 * s;
-            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, c.pal.muted, 1.0, l);
-        }
-        ty += 4.0 * s;
 
-        // Waiting for the browser: what to expect there, and a way back if the tab got lost.
+        // Waiting: one line, plus a way back to the browser if its window got buried or closed.
         if let Some(reconnecting) = &waiting {
-            ty += 8.0 * s;
-            fill_rrect(c.pm, c.x0, ty, inner, box_h, 12.0 * s, color(c.pal.surface2, 1.0));
-            let title = match reconnecting {
-                Some(a) => format!("Reconnecting {a} \u{2014} finish in your browser"),
-                None => "Finish signing in in your browser".to_string(),
+            let label = match reconnecting {
+                Some(a) => format!("Continue in your browser to reconnect {a}\u{2026}"),
+                None => "Continue in your browser\u{2026}".to_string(),
             };
-            let title = text::ellipsize(&f.semibold, 13.5 * s, &title, inner - 32.0 * s);
-            text::draw(c.pm, &f.semibold, 13.5 * s, c.x0 + 16.0 * s, ty + 28.0 * s, c.pal.text, 1.0, &title);
-            let mut sy = ty + 52.0 * s;
-            for (i, lines) in step_lines.iter().enumerate() {
-                crate::render::fill_circle(c.pm, c.x0 + 26.0 * s, sy - 4.5 * s, 9.0 * s, color(c.pal.accent, 1.0));
-                text::draw_centered(c.pm, &f.semibold, 11.0 * s, c.x0 + 26.0 * s, sy, c.pal.on_accent, 1.0, &(i + 1).to_string());
-                for l in lines {
-                    text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + 44.0 * s, sy, c.pal.text, 1.0, l);
-                    sy += 19.0 * s;
-                }
-                sy += 8.0 * s;
-            }
-            // A static line (no spinner) keeps Pip completely idle while it waits.
-            text::draw(c.pm, &f.semibold, 12.5 * s, c.x0 + 16.0 * s, sy + 16.0 * s, c.pal.accent, 1.0, "Waiting for your browser\u{2026}");
-            let bw = ui::button_width("Open browser again", s);
-            c.button(c.x0 + inner - bw - 12.0 * s, sy - 2.0 * s, "Open browser again", BtnStyle::Secondary, UiAct::GmailReopen);
-            ty += box_h + 4.0 * s;
+            let bw = ui::button_width("Open it again", s);
+            let label = text::ellipsize(&f.semibold, 13.0 * s, &label, inner - bw - 16.0 * s);
+            text::draw(c.pm, &f.semibold, 13.0 * s, c.x0, ty + 26.0 * s, c.pal.accent, 1.0, &label);
+            c.button(c.x1 - bw, ty + 6.0 * s, "Open it again", BtnStyle::Secondary, UiAct::GmailReopen);
+            ty += wait_h;
         }
 
-        // The last attempt didn't work: say why, plainly. ("Try again" / "Reconnect" sit above.)
-        if let Some(p) = problem {
-            ty += 6.0 * s;
-            for l in &problem_lines {
+        // A short note: the heads-up while waiting, or why the last attempt didn't work.
+        if let Some((rgb, _)) = &note {
+            ty += 4.0 * s;
+            for l in &note_lines {
                 ty += 18.0 * s;
-                text::draw(c.pm, &f.semibold, 12.0 * s, c.x0, ty - 4.0 * s, if p.is_error() { ERR_RED } else { c.pal.muted }, 1.0, l);
+                text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, *rgb, 1.0, l);
             }
             ty += 4.0 * s;
-        }
-
-        if own_keys_note {
-            ty += 6.0 * s;
-            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty + 19.0 * s, c.pal.muted, 1.0, "Signing in with your own Google app.");
-            let bw = ui::button_width("Use Pip\u{2019}s sign-in", s);
-            c.button(c.x1 - bw, ty, "Use Pip\u{2019}s sign-in", BtnStyle::Ghost, UiAct::GmailRemoveOwnKeys);
-            ty += 34.0 * s;
         }
 
         // Connected accounts.
@@ -1569,7 +1519,7 @@ impl App {
             let (dot, status) = if reconnecting_this {
                 (WARN_AMBER, "Reconnecting\u{2026}".to_string())
             } else if st.signed_out {
-                (WARN_AMBER, "Google signed Pip out \u{2014} click Reconnect".to_string())
+                (WARN_AMBER, "Signed out \u{2014} click Reconnect".to_string())
             } else if let Some(e) = &st.error {
                 (ERR_RED, e.clone())
             } else if last > 0 {
@@ -1579,7 +1529,7 @@ impl App {
                 }
                 (OK_GREEN, t)
             } else {
-                (OK_GREEN, "Connected \u{00b7} first check in a few minutes".to_string())
+                (OK_GREEN, "Connected".to_string())
             };
             let confirming = self.confirm_disconnect.as_deref() == Some(a.id.as_str());
             let dlabel = if confirming { "Yes, disconnect" } else { "Disconnect" };
@@ -1604,10 +1554,6 @@ impl App {
             ty += 62.0 * s;
         }
         c.y += h + 12.0 * s;
-
-        if !can_sign_in && self.gmail_setup {
-            self.draw_gmail_manual_setup(c);
-        }
     }
 
     /// Badge, name, purpose line and an optional status chip — the top of every connector card.
@@ -1686,48 +1632,6 @@ impl App {
         }
     }
 
-    /// The advanced fallback for builds without Pip's own Google sign-in: the user makes a small
-    /// personal Google app and Pip picks its keys up from the clipboard.
-    fn draw_gmail_manual_setup(&self, c: &mut Ctx) {
-        let s = c.s;
-        let f = fonts();
-        let inner = c.x1 - c.x0;
-        let intro = "Gmail needs a small personal \u{201c}app\u{201d} in your Google account so Pip can sign in without ever seeing your password. You only do this once.";
-        let intro_lines = text::wrap(&f.regular, 12.5 * s, intro, inner);
-        let step_w = inner - 26.0 * s - 76.0 * s;
-        let steps: Vec<Vec<String>> = GMAIL_STEPS.iter().map(|(t, _)| text::wrap(&f.regular, 12.5 * s, t, step_w)).collect();
-        let step_h: f32 = steps.iter().map(|l| (l.len() as f32 * 19.0 + 14.0).max(38.0)).sum();
-        let h = (40.0 + intro_lines.len() as f32 * 19.0 + 12.0) * s + step_h * s + 92.0 * s;
-        let (_, y) = self.card(c, h, true);
-        text::draw(c.pm, &f.semibold, 14.5 * s, c.x0, y + 30.0 * s, c.pal.text, 1.0, "Use your own Google app (about 5 minutes)");
-        let mut ty = y + 52.0 * s;
-        for l in &intro_lines {
-            text::draw(c.pm, &f.regular, 12.5 * s, c.x0, ty, c.pal.muted, 1.0, l);
-            ty += 19.0 * s;
-        }
-        ty += 12.0 * s;
-        for (i, lines) in steps.iter().enumerate() {
-            let top = ty;
-            crate::render::fill_circle(c.pm, c.x0 + 9.0 * s, ty - 4.0 * s, 9.0 * s, color(c.pal.accent, 1.0));
-            text::draw_centered(c.pm, &f.semibold, 11.0 * s, c.x0 + 9.0 * s, ty, c.pal.on_accent, 1.0, &(i + 1).to_string());
-            for l in lines {
-                text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + 26.0 * s, ty, c.pal.text, 1.0, l);
-                ty += 19.0 * s;
-            }
-            let bw = ui::button_width("Open", s);
-            c.button(c.x1 - bw, top - 19.0 * s, "Open", BtnStyle::Secondary, UiAct::GmailStep(i as u8));
-            ty = ty.max(top + 24.0 * s) + 14.0 * s;
-        }
-        let have_id = self.secrets.contains_key(crate::app::GMAIL_ID_KEY);
-        let have_secret = self.secrets.contains_key(crate::app::GMAIL_SECRET_KEY);
-        let tick = |ok: bool, label: &str| if ok { format!("\u{2713} {label}") } else { format!("\u{25cb} {label}") };
-        let status = format!("{}     {}", tick(have_id, "Client ID"), tick(have_secret, "Client secret"));
-        text::draw(c.pm, &f.semibold, 12.5 * s, c.x0, ty + 4.0 * s, if have_id && have_secret { c.pal.accent } else { c.pal.text }, 1.0, &status);
-        text::draw(c.pm, &f.regular, 12.0 * s, c.x0 + text::width(&f.semibold, 12.5 * s, &status) + 16.0 * s, ty + 4.0 * s, c.pal.muted, 1.0, "Watching for you to copy them\u{2026}");
-        c.button(c.x0, ty + 22.0 * s, "Paste keys", BtnStyle::Secondary, UiAct::GmailPasteKeys);
-        c.y += h + 12.0 * s;
-    }
-
     fn page_email(&self, c: &mut Ctx, focus: &Option<Field>, list_buf: &str) {
         let s = c.s;
         let f = fonts();
@@ -1765,24 +1669,9 @@ impl App {
             self.confirm_disconnect = None;
         }
         match act {
-            UiAct::GmailStep(i) => {
-                if let Some((_, url)) = GMAIL_STEPS.get(*i as usize) {
-                    platform::open_url(url);
-                }
-                if !self.gmail_setup {
-                    self.begin_gmail_setup();
-                }
-            }
-            UiAct::GmailPasteKeys => {
-                self.capture_google_keys();
-                if self.google_keys().is_none() && !self.gmail_setup {
-                    self.begin_gmail_setup();
-                }
-            }
-            UiAct::GmailManual => self.begin_gmail_setup(),
-            UiAct::GmailRemoveOwnKeys => self.forget_google_keys(),
-            UiAct::GmailSignIn | UiAct::AddMailAccount => self.start_gmail_signin(None),
-            UiAct::GmailReconnect(address) => self.start_gmail_signin(Some(address.clone())),
+            UiAct::GmailSignIn => self.start_gmail_signin(None, false),
+            UiAct::AddMailAccount => self.start_gmail_signin(None, true),
+            UiAct::GmailReconnect(address) => self.start_gmail_signin(Some(address.clone()), false),
             UiAct::GmailReopen => self.reopen_signin(),
             UiAct::GmailCancel => self.cancel_gmail_signin(),
             UiAct::MailCheckNow => self.check_mail(true),
@@ -1823,12 +1712,9 @@ const OK_GREEN: u32 = 0x3BB08F;
 const WARN_AMBER: u32 = 0xE0A030;
 const ERR_RED: u32 = 0xD6455D;
 
-/// What to expect in the browser, in the order Google shows it.
-const SIGNIN_STEPS: [&str; 3] = [
-    "Choose the Google account you\u{2019}d like Pip to watch.",
-    "If Google says it hasn\u{2019}t verified Pip, click Continue (or Advanced \u{203a} Go to Pip). That\u{2019}s normal for small apps.",
-    "Tick the box that lets Pip see email senders and subjects, then click Continue.",
-];
+/// The only thing worth saying while Google's screens are open: its warning for apps that haven't
+/// been through Google's paid review can't be avoided, so say what to click.
+const SIGNIN_HINT: &str = "If Google says it hasn\u{2019}t verified Pip, choose Continue.";
 
 /// A round letter badge standing in for the service's logo.
 fn badge(c: &mut Ctx, cx: f32, cy: f32, label: &str, rgb: u32) {

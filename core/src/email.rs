@@ -366,23 +366,6 @@ pub mod gmail {
         format!("{api}/messages/{id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject")
     }
 
-    /// Finds a Google OAuth Client ID and/or Client secret in copied text — a single value from
-    /// the console, or the whole downloaded client JSON.
-    pub fn find_client_keys(text: &str) -> (Option<String>, Option<String>) {
-        let mut id = None;
-        let mut secret = None;
-        for token in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | ',' | ':' | '{' | '}')) {
-            let t = token.trim();
-            if id.is_none() && t.ends_with(".apps.googleusercontent.com") && t.len() > 40 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
-                id = Some(t.to_string());
-            }
-            if secret.is_none() && t.starts_with("GOCSPX-") && t.len() >= 20 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-                secret = Some(t.to_string());
-            }
-        }
-        (id, secret)
-    }
-
     /// Web link that opens the message (or the inbox) in the right account.
     pub fn web_link(address: &str, id: Option<&str>) -> String {
         match id {
@@ -448,11 +431,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!((m.from_name.as_str(), m.subject.as_str(), m.received), ("Théo", "Dinner?", 1_789_990_000));
-        let id = "123456789012-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com";
-        assert_eq!(gmail::find_client_keys(id), (Some(id.into()), None));
-        assert_eq!(gmail::find_client_keys("GOCSPX-AbCdEfGhIjKlMnOpQrStUvWxYz12"), (None, Some("GOCSPX-AbCdEfGhIjKlMnOpQrStUvWxYz12".into())));
-        let json = format!(r#"{{"installed":{{"client_id":"{id}","project_id":"pip","client_secret":"GOCSPX-AbCdEfGhIjKlMnOpQrStUvWxYz12","redirect_uris":["http://localhost"]}}}}"#);
-        assert_eq!(gmail::find_client_keys(&json), (Some(id.into()), Some("GOCSPX-AbCdEfGhIjKlMnOpQrStUvWxYz12".into())));
-        assert_eq!(gmail::find_client_keys("hello world"), (None, None));
     }
 }
