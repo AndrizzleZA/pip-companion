@@ -23,10 +23,13 @@ calendar…), pick Google, Outlook or iCloud: Pip opens the right page and picks
 you copy it — no pasting needed. Then events show on today's card, and important ones (own alert, important calendar or a
 keyword like "dentist") get a gentle alert. A quiet morning summary lists what's on.
 
-**Important email (Gmail).** Settings › Email walks you through a one-time, 5-minute setup (Pip opens each
-Google page and picks the keys up when you copy them), then "Sign in with Google". Pip only ever sees
-senders, subjects and labels of new mail — never the contents. Choose important senders (address,
-@domain or name) and subject words; matching unread mail gets one gentle bubble with "Open Gmail".
+**Connections.** Settings › Connections lists everything Pip can link to. **Gmail**: click Connect,
+pick your account in the browser, allow, and you're back in Pip, connected — no keys or setup. Pip only
+ever sees senders, subjects and labels of new mail, never the contents, and can't send or delete.
+Disconnect (asks once more) also withdraws Pip's access at Google; if Google ever signs Pip out, the
+account shows **Reconnect**. Choose important senders (address, @domain or name) and subject words in
+Settings › Email; matching unread mail gets one gentle bubble with "Open Gmail". **Calendars**
+(Google, Outlook, iCloud, any .ics link) connect through the guided link flow described above.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.
@@ -37,12 +40,19 @@ Requires Rust (stable) and the MSVC build tools.
 
 ```bash
 cargo test -p pip-core              # core logic tests
-cargo build --release               # target/release/pip.exe (~1.1 MB, no dependencies)
+cargo build --release               # target/release/pip.exe (~1.6 MB, no dependencies)
 cargo build --features devtools     # dev build with the automation/snapshot command channel
 ```
 
 Run tools against a throw-away profile by setting `PIP_DATA_DIR`; the app then never touches your
 real settings or the Windows startup entry.
+
+**Google sign-in identity.** One-click "Connect Gmail" needs Pip's own OAuth client (type *Desktop
+app*) from a Google Cloud project with the Gmail API enabled and the consent screen published.
+Download its JSON from the Google Cloud console and save it as `app-windows/google-client.json`
+(git-ignored) before building; `build.rs` compiles it in. For installed apps Google treats this as an
+app identifier, not a secret. Without it, Pip still builds and offers a manual "use your own Google
+app" setup instead. `node tools/mock-google.js` + a devtools build test the whole flow offline.
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/measure.ps1 -Minutes 10   # resource targets
@@ -54,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File tools/measure.ps1 -Minutes 10   # resou
 core/          pip-core: settings, reminder engine, quiet hours/DND policy, mood, copy (no OS code)
 app-windows/   Windows shell: layered pet window, renderer, tray, settings window, persistence
 docs/          design document
-tools/         measurement script
+tools/         measurement script, mock Google server for sign-in tests
 ```
 
 Data lives in `%APPDATA%\Pip` (`settings.json`, `state.json`, `pip.log`). Nothing is sent anywhere.

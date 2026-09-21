@@ -12,6 +12,7 @@ use crate::calsync::{self, FeedJob, FeedMeta};
 use crate::tray::Tray;
 use pip_core::agenda;
 use pip_core::calendar::Event;
+use pip_core::connectors::SignInProblem;
 use pip_core::links::{self, LinkCheck, Provider};
 use std::collections::HashMap;
 use chrono::{Local, Timelike};
@@ -116,11 +117,22 @@ pub struct App {
     pub mail_access: HashMap<String, (String, i64)>,
     pub mail_status: HashMap<String, MailStatus>,
     mail_running: bool,
-    pub auth_running: bool,
-    pub auth_error: Option<String>,
+    pub signin: SignIn,
+    /// Account whose Disconnect button was clicked once (the second click confirms).
+    pub confirm_disconnect: Option<String>,
     auth_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Last consent URL (lets automated tests play the browser).
     pub last_auth_url: String,
+}
+
+/// Where a "Connect" sign-in stands, for the Connections UI.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SignIn {
+    Idle,
+    /// The browser is open; `reconnecting` names the account being reconnected.
+    Waiting { reconnecting: Option<String> },
+    /// The last attempt didn't work (or was declined); shown with "Try again".
+    Problem(SignInProblem),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -177,8 +189,8 @@ impl App {
             mail_access: HashMap::new(),
             mail_status: HashMap::new(),
             mail_running: false,
-            auth_running: false,
-            auth_error: None,
+            signin: SignIn::Idle,
+            confirm_disconnect: None,
             auth_cancel: None,
             last_auth_url: String::new(),
         }
@@ -1548,8 +1560,22 @@ impl App {
                 format!("keys={}", self.google_keys().is_some())
             }
             "gmail-signin" => {
-                self.start_gmail_signin();
+                self.start_gmail_signin((!arg.is_empty()).then(|| arg.to_string()));
                 self.last_auth_url.clone()
+            }
+            "gmail-cancel" => {
+                self.cancel_gmail_signin();
+                "ok".into()
+            }
+            "gmail-disconnect" => {
+                let id = self.settings.email.accounts.iter().find(|a| a.address == arg).map(|a| a.id.clone());
+                match id {
+                    Some(id) => {
+                        self.disconnect_mail(&id);
+                        "ok".into()
+                    }
+                    None => "no such account".into(),
+                }
             }
             "mail-check" => {
                 self.check_mail(true);
@@ -1558,10 +1584,10 @@ impl App {
             "mail" => {
                 let st: Vec<String> = self.mail_status.iter().map(|(k, v)| format!("{k}: checked={} err={:?} signed_out={}", v.checked_at, v.error, v.signed_out)).collect();
                 format!(
-                    "accounts={:?} running={} auth_running={} auth_error={:?} pending={:?} history={:?}
+                    "accounts={:?} running={} signin={:?} pending={:?} history={:?}
 {}",
                     self.settings.email.accounts.iter().map(|a| a.address.clone()).collect::<Vec<_>>(),
-                    self.mail_running, self.auth_running, self.auth_error,
+                    self.mail_running, self.signin,
                     self.state.mail_pending.iter().map(|m| format!("{}: {}", m.sender(), m.subject)).collect::<Vec<_>>(),
                     self.state.mail.values().map(|m| m.history_id.clone()).collect::<Vec<_>>(),
                     st.join("
@@ -1850,13 +1876,24 @@ impl App {
         }
     }
 
-    pub fn google_keys(&self) -> Option<crate::oauth::ClientKeys> {
+    /// Keys from the (advanced) "your own Google app" setup, if the user did it.
+    fn own_google_keys(&self) -> Option<crate::oauth::ClientKeys> {
         Some(crate::oauth::ClientKeys { id: self.secrets.get(GMAIL_ID_KEY)?.clone(), secret: self.secrets.get(GMAIL_SECRET_KEY)?.clone() })
+    }
+
+    pub fn using_own_google_keys(&self) -> bool {
+        self.own_google_keys().is_some()
+    }
+
+    /// The Google identity Pip signs in with: the user's own app if they set one up, otherwise
+    /// the one built into Pip (the normal case — nothing to set up).
+    pub fn google_keys(&self) -> Option<crate::oauth::ClientKeys> {
+        self.own_google_keys().or_else(crate::oauth::builtin_google_client)
     }
 
     pub fn begin_gmail_setup(&mut self) {
         self.gmail_setup = true;
-        self.auth_error = None;
+        self.signin = SignIn::Idle;
         self.update_clip_listener();
         self.capture_google_keys(); // maybe already copied
         self.ui_invalidate();
@@ -1902,40 +1939,58 @@ impl App {
         self.ui_invalidate();
     }
 
-    pub fn start_gmail_signin(&mut self) {
+    /// "Connect Gmail" / "Reconnect": opens the browser sign-in. `hint` preselects the account.
+    pub fn start_gmail_signin(&mut self, hint: Option<String>) {
+        self.confirm_disconnect = None;
         let Some(keys) = self.google_keys() else { return };
         if let Some(c) = self.auth_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        match crate::oauth::prepare(&keys) {
+        match crate::oauth::prepare(&crate::oauth::GOOGLE, &keys, hint.as_deref()) {
             Ok((pending, url)) => {
                 let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 self.auth_cancel = Some(cancel.clone());
-                self.auth_running = true;
-                self.auth_error = None;
+                self.signin = SignIn::Waiting { reconnecting: hint };
                 platform::open_url(&url);
                 self.last_auth_url = url;
-                crate::oauth::finish_in_background(self.hwnd, pending, cancel);
+                crate::oauth::finish_in_background(self.hwnd, pending, cancel, crate::mailsync::verify_gmail);
             }
-            Err(e) => self.auth_error = Some(e),
+            Err(e) => self.signin = SignIn::Problem(SignInProblem::Other(e)),
         }
         self.ui_invalidate();
+    }
+
+    /// "Open browser again" while waiting (tab closed by mistake, or opened behind other windows).
+    pub fn reopen_signin(&mut self) {
+        if matches!(self.signin, SignIn::Waiting { .. }) && !self.last_auth_url.is_empty() {
+            platform::open_url(&self.last_auth_url.clone());
+        }
     }
 
     pub fn cancel_gmail_signin(&mut self) {
         if let Some(c) = self.auth_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.auth_running = false;
+        self.signin = SignIn::Idle;
         self.ui_invalidate();
     }
 
-    pub fn on_mailauth(&mut self, result: Box<crate::oauth::AuthResult>) {
+    pub fn dismiss_signin_problem(&mut self) {
+        if matches!(self.signin, SignIn::Problem(_)) {
+            self.signin = SignIn::Idle;
+            self.ui_invalidate();
+        }
+    }
+
+    pub fn on_signin(&mut self, result: Box<crate::oauth::AuthResult>) {
         use crate::oauth::AuthResult;
-        self.auth_running = false;
+        if !matches!(self.signin, SignIn::Waiting { .. }) {
+            return; // cancelled meanwhile
+        }
         self.auth_cancel = None;
+        self.signin = SignIn::Idle;
         match *result {
-            AuthResult::Ok { refresh, access, expires_at, address, history_id } => {
+            AuthResult::Ok(crate::oauth::Linked { refresh, access, expires_at, account: address, extra: history_id }) => {
                 let prev = self.settings.clone();
                 let id = match self.settings.email.accounts.iter().find(|a| a.address.eq_ignore_ascii_case(&address)) {
                     Some(a) => a.id.clone(),
@@ -1966,10 +2021,19 @@ impl App {
                 self.message(format!("Connected to {address}! I'll give you a gentle nudge when something important arrives."), 7);
                 self.anim(AnimKind::Celebrate);
                 self.schedule_mail();
+                // Bring Settings back from behind the browser to show "Connected".
+                if self.ui.is_some() {
+                    self.effects.push(Effect::OpenSettings);
+                }
             }
-            AuthResult::Err(e) => {
-                self.auth_error = Some(e.clone());
-                self.message(e, 8);
+            AuthResult::Failed(problem) => {
+                if self.ui.is_none() {
+                    self.message(problem.explain("Google"), 8);
+                }
+                self.signin = SignIn::Problem(problem);
+                if self.ui.is_some() {
+                    self.effects.push(Effect::OpenSettings);
+                }
             }
             AuthResult::Cancelled => {}
         }
@@ -1977,10 +2041,11 @@ impl App {
     }
 
     pub fn disconnect_mail(&mut self, account_id: &str) {
+        self.confirm_disconnect = None;
         let prev = self.settings.clone();
         self.settings.email.accounts.retain(|a| a.id != account_id);
         if let Some(token) = self.secrets.remove(&refresh_key(account_id)) {
-            crate::oauth::revoke_in_background(token);
+            crate::oauth::revoke_in_background(&crate::oauth::GOOGLE, token);
         }
         self.secrets_dirty = true;
         self.state.mail.remove(account_id);
@@ -2063,7 +2128,7 @@ impl App {
             }
             if r.signed_out {
                 let address = self.settings.email.accounts.iter().find(|a| a.id == r.account_id).map(|a| a.address.clone()).unwrap_or_default();
-                self.message(format!("Google signed me out of {address}. Open Settings \u{203a} Email to sign in again."), 8);
+                self.message(format!("Google signed me out of {address}. Open Settings \u{203a} Connections and click Reconnect."), 8);
             }
             found.extend(r.important);
         }

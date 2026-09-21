@@ -1,3 +1,6 @@
 /target
 *.png
 !docs/*.png
+
+# Pip's Google sign-in identity (see app-windows/build.rs)
+/app-windows/google-client.json

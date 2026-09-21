@@ -236,9 +236,9 @@ unsafe extern "system" fn pet_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             with_app(move |a| a.on_mailsync(result));
             Some(0)
         }
-        oauth::WM_MAILAUTH => {
+        oauth::WM_SIGNIN => {
             let result = oauth::take_result(lp);
-            with_app(move |a| a.on_mailauth(result));
+            with_app(move |a| a.on_signin(result));
             Some(0)
         }
         calsync::WM_CALSYNC => {

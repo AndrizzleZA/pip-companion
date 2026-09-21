@@ -11,6 +11,7 @@
 
 pub mod agenda;
 pub mod calendar;
+pub mod connectors;
 pub mod dates;
 pub mod email;
 pub mod links;

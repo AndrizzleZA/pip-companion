@@ -9,6 +9,10 @@
 //   POST /_expire_access      -> current access token becomes invalid (401)
 //   POST /_expire_history     -> old history ids return 404
 //   POST /_revoke             -> refresh token no longer works (invalid_grant)
+//   POST /_mode {"auth": "ok"|"deny"|"partial"|"hang"|"badclient", "email": "..."}
+//                             -> how the next consent screens behave (user allows / cancels /
+//                                unticks the box / closes the tab / app blocked) and who signs in
+//   POST /revoke              -> the real revocation endpoint (logged; kills the refresh token)
 //   GET  /_log                -> request log
 "use strict";
 const http = require("http");
@@ -26,6 +30,9 @@ let historyId = 1000;
 let minValidHistory = 0;
 let messages = [];          // { id, historyId, labels, from, subject, date }
 const log = [];
+let mode = { auth: "ok", email: "andre.test@gmail.com" };
+let currentEmail = "andre.test@gmail.com";
+const revoked = [];
 
 const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const json = (res, code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(b) }); res.end(b); };
@@ -43,14 +50,21 @@ http.createServer(async (req, res) => {
       if (q.get("client_id") !== CLIENT_ID) return json(res, 400, { error: "invalid_client" });
       if (q.get("code_challenge_method") !== "S256" || !q.get("code_challenge")) return json(res, 400, { error: "pkce_required" });
       if (q.get("scope") !== SCOPE) return json(res, 400, { error: "unexpected_scope", scope: q.get("scope") });
+      if (!(q.get("prompt") || "").includes("consent")) return json(res, 400, { error: "consent_prompt_expected" });
+      const back = `${q.get("redirect_uri")}/?state=${encodeURIComponent(q.get("state"))}`;
+      if (mode.auth === "hang") return json(res, 200, { note: "user closed the tab" });
+      if (mode.auth === "deny") {
+        res.writeHead(302, { Location: `${back}&error=access_denied` });
+        return res.end();
+      }
       const code = "CODE-" + crypto.randomBytes(6).toString("hex");
-      challenges[code] = { challenge: q.get("code_challenge"), redirect: q.get("redirect_uri") };
-      res.writeHead(302, { Location: `${q.get("redirect_uri")}/?code=${encodeURIComponent(code)}&state=${encodeURIComponent(q.get("state"))}&scope=${encodeURIComponent(SCOPE)}` });
+      challenges[code] = { challenge: q.get("code_challenge"), redirect: q.get("redirect_uri"), partial: mode.auth === "partial", email: mode.email };
+      res.writeHead(302, { Location: `${back}&code=${encodeURIComponent(code)}&scope=${encodeURIComponent(SCOPE)}` });
       return res.end();
     }
     if (p === "/token" && req.method === "POST") {
       const f = new URLSearchParams(await body(req));
-      if (f.get("client_id") !== CLIENT_ID || f.get("client_secret") !== CLIENT_SECRET) return json(res, 401, { error: "invalid_client" });
+      if (mode.auth === "badclient" || f.get("client_id") !== CLIENT_ID || f.get("client_secret") !== CLIENT_SECRET) return json(res, 401, { error: "invalid_client" });
       if (f.get("grant_type") === "authorization_code") {
         const c = challenges[f.get("code")];
         delete challenges[f.get("code")];
@@ -58,6 +72,8 @@ http.createServer(async (req, res) => {
         const expect = b64url(crypto.createHash("sha256").update(f.get("code_verifier") || "").digest());
         if (expect !== c.challenge) return json(res, 400, { error: "invalid_grant", error_description: "PKCE verifier mismatch" });
         if (f.get("redirect_uri") !== c.redirect) return json(res, 400, { error: "invalid_grant", error_description: "redirect mismatch" });
+        currentEmail = c.email;
+        if (c.partial) return json(res, 200, { access_token: newAccess(), expires_in: 3599, refresh_token: refreshValid, scope: "openid", token_type: "Bearer" });
         return json(res, 200, { access_token: newAccess(), expires_in: 3599, refresh_token: refreshValid, scope: SCOPE, token_type: "Bearer" });
       }
       if (f.get("grant_type") === "refresh_token") {
@@ -69,7 +85,7 @@ http.createServer(async (req, res) => {
     if (p.startsWith("/gmail/v1/users/me/")) {
       if (!authed(req)) return json(res, 401, { error: { code: 401, message: "Invalid Credentials" } });
       const rest = p.slice("/gmail/v1/users/me/".length);
-      if (rest === "profile") return json(res, 200, { emailAddress: "andre.test@gmail.com", messagesTotal: messages.length, historyId: String(historyId) });
+      if (rest === "profile") return json(res, 200, { emailAddress: currentEmail, messagesTotal: messages.length, historyId: String(historyId) });
       if (rest === "history") {
         const start = Number(url.searchParams.get("startHistoryId"));
         if (start < minValidHistory) return json(res, 404, { error: { code: 404, message: "Requested entity was not found." } });
@@ -100,6 +116,14 @@ http.createServer(async (req, res) => {
     if (p === "/_expire_access") { access = "expired"; return json(res, 200, {}); }
     if (p === "/_expire_history") { minValidHistory = historyId; return json(res, 200, {}); }
     if (p === "/_revoke") { refreshValid = "revoked-" + Date.now(); return json(res, 200, {}); }
+    if (p === "/_mode" && req.method === "POST") { Object.assign(mode, JSON.parse(await body(req))); return json(res, 200, mode); }
+    if (p === "/revoke" && req.method === "POST") {
+      const f = new URLSearchParams(await body(req));
+      if (f.get("token") === refreshValid) refreshValid = "revoked-" + Date.now();
+      revoked.push(f.get("token") ? "token" : "none");
+      return json(res, 200, {});
+    }
+    if (p === "/_revoked") return json(res, 200, revoked);
     if (p === "/_log") return json(res, 200, log);
     json(res, 404, { error: "not found" });
   } catch (e) {

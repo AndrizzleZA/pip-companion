@@ -45,7 +45,7 @@ fn fetch(url: &str, token: &str) -> Fetch {
         Ok(r) if r.status == 200 => Fetch::Ok(String::from_utf8_lossy(&r.body).into_owned()),
         Ok(r) if r.status == 401 => Fetch::Unauthorized,
         Ok(r) if r.status == 404 => Fetch::NotFound,
-        Ok(r) if r.status == 403 => Fetch::Err("Gmail refused access (is the Gmail API enabled in your Google project?)".into()),
+        Ok(r) if r.status == 403 => Fetch::Err("Gmail refused access for now; Pip will try again later".into()),
         Ok(r) if r.status == 429 => Fetch::Err("Gmail asked Pip to slow down; trying again later".into()),
         Ok(r) => Fetch::Err(format!("Gmail answered HTTP {}", r.status)),
         Err(e) => Fetch::Err(e),
@@ -65,7 +65,7 @@ fn check(keys: &ClientKeys, rules: &EmailSettings, job: &MailJob, now: i64) -> M
                 }
             }
         }
-        match oauth::refresh(keys, &job.refresh, now) {
+        match oauth::refresh(&oauth::GOOGLE, keys, &job.refresh, now) {
             Ok(t) => {
                 res.access = Some((t.access.clone(), t.expires_at));
                 Some(t.access)
@@ -167,6 +167,21 @@ fn check(keys: &ClientKeys, rules: &EmailSettings, job: &MailJob, now: i64) -> M
         res.history_id = Some(h);
     }
     res
+}
+
+/// Sign-in check for Gmail: which address is this, and where does its mailbox history stand?
+/// Only mail arriving after this point is ever considered, so connecting never floods you.
+pub fn verify_gmail(access: &str) -> Result<(String, String), pip_core::connectors::SignInProblem> {
+    use pip_core::connectors::SignInProblem;
+    let headers = vec![("Authorization".to_string(), format!("Bearer {access}"))];
+    match net::send("GET", &gmail::profile_path(&oauth::gmail_api()), &headers, None) {
+        Ok(r) if r.status == 200 => {
+            gmail::parse_profile(&String::from_utf8_lossy(&r.body)).ok_or_else(|| SignInProblem::Other("Gmail sent an unexpected answer".into()))
+        }
+        Ok(r) if r.status == 401 || r.status == 403 => Err(SignInProblem::MissingPermission),
+        Ok(r) => Err(SignInProblem::Other(format!("Gmail answered HTTP {}", r.status))),
+        Err(e) => Err(SignInProblem::Offline(e)),
+    }
 }
 
 pub fn start(hwnd: HWND, keys: ClientKeys, rules: EmailSettings, jobs: Vec<MailJob>) {

@@ -282,3 +282,47 @@ compile those overrides out. End-to-end run covered sign-in, rules, refresh, pag
 3 pages), history re-baseline, revocation and re-sign-in.
 
 Not yet verified against real Google (needs the user's own Google app).
+
+## 11. Connectors — one-click linking, 2026-09-21
+
+Goal (user): connecting Gmail and other services must be as close to one click as possible, with
+no API keys, tokens, redirect URLs or OAuth vocabulary shown to the user.
+
+**Research.** Google's installed-app guidance: authorization code + PKCE with a loopback redirect
+(custom URI schemes and copy/paste "OOB" are no longer supported for desktop); installed apps
+"cannot keep secrets", so a desktop client's ID/secret are app identifiers, not credentials; check
+the granted scopes because users can untick permissions (granular consent); `access_denied` means
+the user cancelled. Established mail apps (Thunderbird, Mailspring, eM Client, gcloud, rclone)
+ship **one app-owned client** and the user only signs in. `gmail.metadata` is a *restricted*
+scope: without Google's verification + annual security assessment the consent flow shows
+"Google hasn't verified this app" and is capped at 100 users — fine for personal/family use,
+the verification is a Phase 5 item if Pip is ever distributed publicly.
+
+**Decision.** Pip ships its own Google client, compiled in by `build.rs` from a git-ignored
+`app-windows/google-client.json`. The user's journey is: Connect → browser (choose account,
+Continue past the unverified notice, tick the box, Continue) → "Pip is connected" page → back in
+Pip showing the account. The previous "make your own Google app" setup stays only as a fallback
+for builds without a built-in client (and still works if someone already set it up).
+
+**Architecture.**
+- `pip-core::connectors` — the catalogue (name, badge, purpose, plain-language access text,
+  method: browser sign-in or private link) and `SignInProblem` with user-facing explanations.
+  Adding a connector = one catalogue entry + its sync code.
+- `oauth.rs` — generic over a `Service` (endpoints + scope); the service-specific "who is this?"
+  step is a function passed in (`mailsync::verify_gmail`). A Microsoft connector would be a new
+  `Service` + verify fn + its sync module.
+- UI: Settings › Connections (new page) lists every connector with status (Connected / Needs
+  attention / Reconnect), the same Gmail card also heads Settings › Email.
+
+**States handled** (all tested end-to-end against `tools/mock-google.js`, which now also simulates
+the user cancelling, unticking the permission, closing the tab, the app being rejected, and the
+revoke endpoint): not connected → waiting (steps to expect + "Open browser again" + Cancel) →
+connected; declined (calm message, "Connect"); missing permission / offline / app rejected /
+10-minute timeout (red explanation, "Try again"); forged or stale redirect (ignored, still
+waiting); Pip-side cancel (listener closed immediately); Google revokes → "Reconnect" with the
+account preselected (`login_hint`) and the same account record reused; second account; disconnect
+(two-click confirm, token revoked at Google, local data removed).
+
+**Cost.** No new threads or timers while idle (the sign-in thread exists only during a sign-in,
+the waiting panel is static — no spinner redraws). Release exe +19 KB (1.64 MB); startup 24 ms;
+private memory ~1.8 MB unchanged. Test-only endpoint overrides are compiled out of release.
