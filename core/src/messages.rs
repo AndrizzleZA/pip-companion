@@ -72,3 +72,43 @@ pub fn first_run(name: &str) -> (String, String) {
         "I'll live here quietly and remind you about water and things you'd like to remember. Drag me anywhere; right-click for options.".into(),
     )
 }
+
+/// (title, body) for an important date. `days_until` is 0 on the day itself.
+pub fn date_reminder(kind: crate::dates::DateKind, describe: &str, days_until: i64, weekday: &str, name: &str) -> (String, String) {
+    use crate::dates::DateKind::*;
+    if days_until <= 0 {
+        let body = match kind {
+            Birthday => "It's today! A message or a call would make their day.".to_string(),
+            Anniversary => "It's today. Something small and sweet, maybe?".to_string(),
+            Deadline => "It's due today.".to_string(),
+            Other => "It's today.".to_string(),
+        };
+        (describe.to_string(), body)
+    } else {
+        let when = if days_until == 1 { "tomorrow".to_string() } else { format!("on {weekday} (in {days_until} days)") };
+        let verb = if kind == Deadline { "is due" } else { "is coming up" };
+        (describe.to_string(), format!("It {verb} {when}. {name} thought you'd like a heads-up."))
+    }
+}
+
+/// Body for a calendar event alert.
+pub fn event_body(all_day: bool, start_hm: &str, minutes_until: i64) -> String {
+    if all_day {
+        "Today, all day.".into()
+    } else if minutes_until > 1 {
+        format!("Starts at {start_hm} (in {minutes_until} minutes).")
+    } else if minutes_until >= -1 {
+        format!("Starting now ({start_hm}).")
+    } else {
+        format!("Started at {start_hm}.")
+    }
+}
+
+pub fn brief_title(name: &str, hour: u32) -> String {
+    let part = match hour {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        _ => "Good evening",
+    };
+    format!("{part}! Here's today, from {name}")
+}

@@ -8,7 +8,11 @@ use crate::render::ui::BtnStyle;
 use crate::render::Palette;
 use crate::settings_ui::SettingsUi;
 use crate::storage::Storage;
+use crate::calsync::{self, FeedJob, FeedMeta};
 use crate::tray::Tray;
+use pip_core::agenda;
+use pip_core::calendar::Event;
+use std::collections::HashMap;
 use chrono::{Local, Timelike};
 use pip_core::schedule::{self, Delivery, Due, ItemKey, Priority};
 use pip_core::settings::Liveliness;
@@ -30,6 +34,7 @@ pub const T_SAVE: usize = 7;
 pub const T_NEXT: usize = 8;
 pub const T_BLINK: usize = 9;
 pub const T_TRIM: usize = 10;
+pub const T_CALSYNC: usize = 11;
 
 const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
@@ -78,6 +83,12 @@ pub struct App {
     anim_timer: bool,
     first_run: bool,
     pub dev_mode: bool,
+    /// Calendar occurrences for the current two-week window (all feeds).
+    pub events: Vec<Event>,
+    pub feed_meta: HashMap<String, FeedMeta>,
+    sync_running: bool,
+    sync_failures: u32,
+    secrets_dirty: bool,
 }
 
 pub fn hm(ts: i64) -> String {
@@ -113,6 +124,11 @@ impl App {
             anim_timer: false,
             first_run,
             dev_mode: Storage::is_custom_dir(),
+            events: Vec::new(),
+            feed_meta: HashMap::new(),
+            sync_running: false,
+            sync_failures: 0,
+            secrets_dirty: false,
         }
     }
 
@@ -140,6 +156,15 @@ impl App {
         let tip = self.tray_tip();
         self.tray.add(self.settings.pet.color.rgb(), false, &tip);
         platform::register_appbar(self.hwnd, WM_APPBAR);
+        // Calendars: secret links from the encrypted store, cached events right away (offline),
+        // then a network refresh once the desktop has settled.
+        let secrets = crate::secrets::load(self.store.dir());
+        for c in &mut self.settings.dates.calendars {
+            c.url = secrets.get(&format!("cal:{}", c.id)).cloned().unwrap_or_default();
+            self.feed_meta.insert(c.id.clone(), calsync::load_meta(self.store.dir(), &c.id));
+        }
+        self.start_sync(false);
+        self.set_timer(T_CALSYNC, 20_000);
         unsafe {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(self.hwnd, 0 /* NOTIFY_FOR_THIS_SESSION */);
         }
@@ -224,7 +249,8 @@ impl App {
         match self.pending.first() {
             Some(p) if !showing => match p.key {
                 ItemKey::Water => Acc::Drop,
-                ItemKey::Custom(_) => Acc::Alert,
+                ItemKey::Date(_) => Acc::Heart,
+                _ => Acc::Alert,
             },
             _ => Acc::None,
         }
@@ -409,6 +435,10 @@ impl App {
                 self.pet.eyes_shut = false;
                 self.render();
             }
+            T_CALSYNC => {
+                self.kill_timer(T_CALSYNC);
+                self.start_sync(true);
+            }
             T_TRIM => {
                 self.kill_timer(T_TRIM);
                 platform::trim_working_set();
@@ -453,8 +483,10 @@ impl App {
         let today = local(&tz, now).date();
         if self.state.roll_day(&self.settings, today) {
             self.state.water.seen_since = Some(now);
+            self.state.prune_events(now);
             self.state_dirty = true;
             self.schedule_save();
+            self.start_sync(false); // slide the two-week window
         }
         if self.state.dnd_until.is_some_and(|t| t <= now) {
             self.state.dnd_until = None;
@@ -472,7 +504,7 @@ impl App {
             self.arm_idle();
         }
 
-        let due = schedule::due_items(&self.settings, &self.state, now, &tz);
+        let due = schedule::due_items_in(&self.settings, &self.state, &self.events, now, &tz);
         // Drop pending items that are no longer due (settings changed, handled elsewhere).
         let before = self.pending.len();
         self.pending.retain(|p| due.iter().any(|d| d.key == p.key));
@@ -499,7 +531,7 @@ impl App {
             }
         }
 
-        let mut next = schedule::next_event(&self.settings, &self.state, now, &tz);
+        let mut next = schedule::next_event_in(&self.settings, &self.state, &self.events, now, &tz);
         if held_busy {
             next = next.min(now + 60); // fullscreen app: look again in a minute
         }
@@ -539,6 +571,27 @@ impl App {
                 let title = r.map(|r| r.title.clone()).unwrap_or_else(|| "Reminder".into());
                 (title, messages::reminder_intro(&name, d.late, &hm(d.occurrence)))
             }
+            ItemKey::Date(id) => {
+                let Some(item) = self.settings.dates.items.iter().find(|x| &x.id == id) else { return };
+                let today = local(&Local, now_unix()).date();
+                let Some(on) = item.next_on_or_after(today) else { return };
+                let wd = pip_core::time::weekday_name(chrono::Datelike::weekday(&on));
+                messages::date_reminder(item.kind, &item.describe(on), (on - today).num_days(), wd, &name)
+            }
+            ItemKey::Event(key) => {
+                let Some(e) = self.events.iter().find(|e| &e.key() == key) else { return };
+                let mins = (e.start - now_unix()) / 60;
+                (e.title.clone(), messages::event_body(e.all_day, &hm(e.start), mins))
+            }
+            ItemKey::Brief => {
+                let now = now_unix();
+                let l = local(&Local, now);
+                let lines = agenda::brief_lines(&self.settings, &self.events, l.date(), &Local, hm);
+                if lines.is_empty() {
+                    return;
+                }
+                (messages::brief_title(&name, l.hour()), lines.join("\n"))
+            }
         };
         self.pending.push(Pending { key: d.key, occurrence: d.occurrence, priority: d.priority, title, body, shown: false });
         let showing_notify = self.pet.bubble_kind() == Some(BubbleKind::Notify);
@@ -551,7 +604,10 @@ impl App {
     }
 
     fn notify_card(&self, p: &Pending) -> Card {
-        let mut card = Card::new(BubbleKind::Notify).line(p.body.clone(), p.key != ItemKey::Water);
+        let mut card = Card::new(BubbleKind::Notify);
+        for line in p.body.split('\n') {
+            card = card.line(line, matches!(p.key, ItemKey::Custom(_)));
+        }
         card.title = Some(p.title.clone());
         card.important = p.priority == Priority::High;
         let snooze = format!("Snooze {}m", self.settings.notify.snooze_min);
@@ -562,11 +618,16 @@ impl App {
                 card.buttons.push((snooze, Action::Snooze, BtnStyle::Secondary));
                 card.buttons.push(("Not now".into(), Action::Dismiss, BtnStyle::Ghost));
             }
-            ItemKey::Custom(_) => {
+            ItemKey::Custom(_) | ItemKey::Date(_) => {
                 card.buttons.push(("Done".into(), Action::Done, BtnStyle::Primary));
                 card.buttons.push((snooze, Action::Snooze, BtnStyle::Secondary));
                 card.buttons.push(("Dismiss".into(), Action::Dismiss, BtnStyle::Ghost));
             }
+            ItemKey::Event(_) => {
+                card.buttons.push(("Got it".into(), Action::Done, BtnStyle::Primary));
+                card.buttons.push((snooze, Action::Snooze, BtnStyle::Secondary));
+            }
+            ItemKey::Brief => card.buttons.push(("Thanks!".into(), Action::Done, BtnStyle::Primary)),
         }
         card
     }
@@ -651,6 +712,28 @@ impl App {
                         schedule::ack_custom(&mut self.settings, &mut self.state, id, p.occurrence, now);
                         self.settings_dirty = true;
                     }
+                    (ItemKey::Date(id), Action::Snooze) => {
+                        schedule::snooze_key(&mut self.state, schedule::date_state_key(id), now + self.settings.notify.snooze_min as i64 * 60);
+                    }
+                    (ItemKey::Date(id), _) => schedule::ack_date(&mut self.state, id, p.occurrence),
+                    (ItemKey::Event(key), Action::Snooze) => {
+                        schedule::snooze_key(&mut self.state, schedule::event_state_key(key), now + self.settings.notify.snooze_min as i64 * 60);
+                    }
+                    (ItemKey::Event(key), _) => schedule::ack_event(&mut self.state, key, now),
+                    (ItemKey::Brief, _) => schedule::ack_brief(&mut self.state, local(&Local, now).date()),
+                }
+                if matches!(p.key, ItemKey::Brief | ItemKey::Event(_)) && action == Action::Done {
+                    // Acknowledging information isn't an accomplishment — no confetti.
+                    self.pet.bubble = None;
+                    self.kill_timer(T_BUBBLE);
+                    self.state_dirty = true;
+                    self.schedule_save();
+                    self.anim(AnimKind::Nod);
+                    if !self.pending.is_empty() {
+                        self.set_timer(T_NEXT, 500);
+                    }
+                    self.reschedule();
+                    return;
                 }
                 self.state_dirty = true;
                 self.schedule_save();
@@ -739,6 +822,19 @@ impl App {
         if let Some((t, r)) = soon {
             let when = if local(&Local, t).date() == l.date() { hm(t) } else { format!("tomorrow {}", hm(t)) };
             card = card.line(format!("{} at {}", r.title, when), false);
+        }
+        // Today's agenda: holidays, dates, then events still ahead (at most four lines).
+        let agenda: Vec<String> = agenda::agenda_for_day(s, &self.events, l.date(), &Local)
+            .into_iter()
+            .filter(|a| a.time.is_none_or(|t| t + 900 > now))
+            .take(4)
+            .map(|a| match a.time {
+                Some(t) => format!("{}  {}", hm(t), a.text),
+                None => a.text,
+            })
+            .collect();
+        for line in agenda {
+            card = card.line(line, false);
         }
         if self.state.streak >= 2 {
             card = card.line(format!("{}-day water streak", self.state.streak), true);
@@ -1077,6 +1173,21 @@ impl App {
     /// Applies a settings change immediately. `prev` is the settings before the change.
     pub fn settings_changed(&mut self, prev: &Settings) {
         let now = now_unix();
+        // Calendar subscriptions: re-encrypt links, drop caches of removed feeds, refresh soon.
+        let (old_c, new_c) = (&prev.dates.calendars, &self.settings.dates.calendars);
+        let fetch_changed = old_c.len() != new_c.len()
+            || old_c.iter().zip(new_c).any(|(a, b)| a.id != b.id || a.url != b.url || a.enabled != b.enabled);
+        if old_c.iter().map(|c| (&c.id, &c.url)).ne(new_c.iter().map(|c| (&c.id, &c.url))) {
+            self.secrets_dirty = true;
+        }
+        for gone in old_c.iter().filter(|o| !new_c.iter().any(|n| n.id == o.id)) {
+            calsync::forget(self.store.dir(), &gone.id);
+            self.feed_meta.remove(&gone.id);
+            self.events.retain(|e| e.feed_id != gone.id);
+        }
+        if fetch_changed {
+            self.set_timer(T_CALSYNC, 1_500);
+        }
         // Newly created/edited reminders don't fire for times that already passed today.
         for r in &self.settings.reminders {
             let old = prev.reminders.iter().find(|o| o.id == r.id);
@@ -1118,6 +1229,13 @@ impl App {
     }
 
     pub fn flush_save(&mut self) {
+        if self.secrets_dirty {
+            let map = self.secrets_map();
+            if !crate::secrets::save(self.store.dir(), &map) {
+                self.store.log("could not save encrypted calendar links");
+            }
+            self.secrets_dirty = false;
+        }
         if self.settings_dirty {
             self.store.save_settings(&self.settings);
             self.settings_dirty = false;
@@ -1266,6 +1384,10 @@ impl App {
                 "ok".into()
             }
             "ui-type" => {
+                if arg == "^V" {
+                    self.ui_char(0x16);
+                    return "ok".into();
+                }
                 for ch in arg.chars() {
                     self.ui_char(ch as u32);
                 }
@@ -1273,6 +1395,45 @@ impl App {
                     self.ui_char(0x0D);
                 }
                 "ok".into()
+            }
+            "add-cal" => {
+                let prev = self.settings.clone();
+                let id = format!("c{:x}{:x}", now_unix(), tick_ms() & 0xffff);
+                self.settings.dates.calendars.push(pip_core::calendar::CalendarFeed { id: id.clone(), url: arg.to_string(), ..Default::default() });
+                self.settings_changed(&prev);
+                id
+            }
+            "add-date" => {
+                // add-date <month> <day> <year|-> <lead-days> <title...>
+                let p: Vec<&str> = arg.splitn(5, ' ').collect();
+                if p.len() < 5 {
+                    return "usage: add-date <m> <d> <year|-> <lead> <title>".into();
+                }
+                let prev = self.settings.clone();
+                self.settings.dates.items.push(pip_core::dates::ImportantDate {
+                    id: format!("d{:x}{}", now_unix(), self.settings.dates.items.len()),
+                    title: p[4].to_string(),
+                    month: p[0].parse().unwrap_or(1),
+                    day: p[1].parse().unwrap_or(1),
+                    year: p[2].parse().ok(),
+                    lead_days: p[3].parse().unwrap_or(0),
+                    ..Default::default()
+                });
+                self.settings_changed(&prev);
+                "ok".into()
+            }
+            "sync" => {
+                self.start_sync(true);
+                "started".into()
+            }
+            "events" => {
+                let feeds: Vec<String> = self
+                    .feed_meta
+                    .iter()
+                    .map(|(id, m)| format!("{id}: synced_at={} events={} error={:?} name={:?} etag={:?}", m.synced_at, m.events, m.error, m.name, m.etag))
+                    .collect();
+                let evs: Vec<String> = self.events.iter().take(8).map(|e| format!("{} {} {}", hm(e.start), if e.all_day { "(all day)" } else { "" }, e.title)).collect();
+                format!("running={} total={}\n{}\n{}", self.sync_running, self.events.len(), feeds.join("\n"), evs.join("\n"))
             }
             "snap" => self.dev_snapshot(arg),
             "stats" => {
@@ -1315,5 +1476,74 @@ impl App {
 impl App {
     pub fn mark_settings_dirty(&mut self) {
         self.settings_dirty = true;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Calendar subscriptions
+// ---------------------------------------------------------------------------------------------
+
+impl App {
+    /// Starts a sync job (`online = false` only re-reads the on-disk caches, e.g. at midnight).
+    pub fn start_sync(&mut self, online: bool) {
+        if self.sync_running {
+            return;
+        }
+        let jobs: Vec<FeedJob> = self
+            .settings
+            .dates
+            .calendars
+            .iter()
+            .filter(|c| c.enabled)
+            .map(|c| FeedJob { id: c.id.clone(), url: c.url.clone() })
+            .collect();
+        if jobs.is_empty() {
+            if !self.events.is_empty() {
+                self.events.clear();
+                self.reschedule();
+            }
+            return;
+        }
+        self.sync_running = true;
+        let today = local(&Local, now_unix()).date();
+        calsync::start(self.hwnd, self.store.dir().to_path_buf(), jobs, online, today);
+    }
+
+    pub fn on_calsync(&mut self, result: Box<calsync::SyncResult>) {
+        self.sync_running = false;
+        let mut failures = 0;
+        for (id, meta) in result.feeds {
+            if meta.error.is_some() {
+                failures += 1;
+            }
+            // Adopt the calendar's own name for feeds still called the default.
+            if let (Some(name), Some(c)) = (&meta.name, self.settings.dates.calendars.iter_mut().find(|c| c.id == id)) {
+                if c.name == "Calendar" || c.name.trim().is_empty() {
+                    c.name = name.chars().take(40).collect();
+                    self.settings_dirty = true;
+                    self.schedule_save();
+                }
+            }
+            self.feed_meta.insert(id, meta);
+        }
+        self.events = result.events;
+        if result.online {
+            // Hourly when healthy; back off to 15, 30, 60, 120 minutes while failing.
+            self.sync_failures = if failures > 0 { self.sync_failures + 1 } else { 0 };
+            let minutes = if self.sync_failures == 0 { 60 } else { (15u32 << (self.sync_failures - 1).min(3)).min(120) };
+            self.set_timer(T_CALSYNC, minutes * 60_000);
+        }
+        self.reschedule();
+        self.ui_invalidate();
+    }
+
+    pub fn secrets_map(&self) -> std::collections::BTreeMap<String, String> {
+        self.settings
+            .dates
+            .calendars
+            .iter()
+            .filter(|c| !c.url.trim().is_empty())
+            .map(|c| (format!("cal:{}", c.id), c.url.trim().to_string()))
+            .collect()
     }
 }

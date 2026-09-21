@@ -104,12 +104,17 @@ impl ImportantDate {
 
     /// One-line description for a given occurrence, e.g. "Mom's birthday (turns 60)".
     pub fn describe(&self, on: NaiveDate) -> String {
-        match (self.kind, self.count_on(on)) {
-            (DateKind::Birthday, Some(n)) => format!("{} (turns {n})", self.title),
-            (DateKind::Anniversary, Some(n)) => {
-                format!("{} ({n} year{})", self.title, if n == 1 { "" } else { "s" })
-            }
+        let lower = self.title.to_lowercase();
+        // "Mom" reads as "Mom's birthday"; "Mom's birthday" is left alone.
+        let name = match self.kind {
+            DateKind::Birthday if !lower.contains("birthday") && !lower.contains("bday") => format!("{}'s birthday", self.title),
+            DateKind::Anniversary if !lower.contains("anniversary") => format!("{} anniversary", self.title),
             _ => self.title.clone(),
+        };
+        match (self.kind, self.count_on(on)) {
+            (DateKind::Birthday, Some(n)) => format!("{name} (turns {n})"),
+            (DateKind::Anniversary, Some(n)) => format!("{name} ({n} year{})", if n == 1 { "" } else { "s" }),
+            _ => name,
         }
     }
 }
@@ -250,7 +255,7 @@ mod tests {
         let b = ImportantDate { title: "Mom".into(), kind: DateKind::Birthday, month: 3, day: 10, year: Some(1966), ..Default::default() };
         assert_eq!(b.next_on_or_after(d(2026, 9, 21)), Some(d(2027, 3, 10)));
         assert_eq!(b.next_on_or_after(d(2027, 3, 10)), Some(d(2027, 3, 10)));
-        assert_eq!(b.describe(d(2027, 3, 10)), "Mom (turns 61)");
+        assert_eq!(b.describe(d(2027, 3, 10)), "Mom's birthday (turns 61)");
     }
 
     #[test]

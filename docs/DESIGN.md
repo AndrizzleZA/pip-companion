@@ -215,3 +215,29 @@ corrupt-file recovery, handle stability over repeated cycles, light/dark themes,
 
 Known follow-ups: cache the bubble text layer (≈1 ms/frame while a bubble is open); per-user
 installer + icon resource (Phase 5); test at 125/150 % scaling on a real high-DPI display.
+
+## 9. Status — Phase 2 (dates & calendars), 2026-09-21
+
+Built:
+- **Important dates**: birthdays (age), anniversaries (years), yearly dates and deadlines, with
+  an optional heads-up 1/3/7 days before; 29 Feb falls back to 28 Feb.
+- **Public holidays (South Africa)** computed offline — Easter-based days and the Public Holidays
+  Act's Sunday→Monday rule (e.g. Women's Day 2026 → Monday 10 Aug). One-off declared days
+  (elections) can't be computed; subscribe to a holiday calendar to get those.
+- **Calendar subscriptions (ICS/webcal)** from Google, Outlook, iCloud: WinHTTP (OS TLS, proxy
+  and certificates; https only), ETag/Last-Modified, hourly with backoff (15→120 min), parsed and
+  expanded on a short-lived worker thread; on-disk cache so calendars work offline and at startup;
+  responses that aren't calendars never overwrite a good cache.
+- **Privacy**: subscription links are secrets — DPAPI-encrypted in `secrets.dat`, masked in the UI,
+  never in `settings.json`.
+- **Important vs informational**: an event may interrupt only if it has its own alert, comes from a
+  calendar marked important, or matches a keyword; everything else is agenda-only.
+- **Morning summary** (low priority, silent, once a day, only when there's something to say) and
+  today's agenda on the info card.
+
+Measured: a sync costs ~46 ms CPU the first time (TLS + parse), ~13 ms on hourly re-syncs. WinHTTP's
+worker threads retire within ~3 minutes; private memory settles at ~2.7 MB.
+
+Still to do in Phase 2: Google Calendar / Microsoft Graph via OAuth (needs app registrations —
+decision for the user), tomorrow's all-day events in the summary, a date/time picker for one-off
+deadlines further than a year out.

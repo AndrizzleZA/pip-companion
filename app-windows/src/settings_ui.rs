@@ -9,7 +9,9 @@ use crate::render::ui::{self, BtnStyle, R};
 use crate::render::{color, fill_rrect, Palette};
 use crate::surface::Surface;
 use pip_core::schedule;
-use pip_core::settings::{CustomReminder, Liveliness, PetColor, PetSize, Theme};
+use pip_core::calendar::CalendarFeed;
+use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
+use pip_core::settings::{CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme};
 use pip_core::time::{DaySet, TimeOfDay};
 use tiny_skia::{PixmapMut, Transform};
 use windows_sys::Win32::Foundation::*;
@@ -27,14 +29,18 @@ pub enum Page {
     Pet,
     Water,
     Reminders,
+    Dates,
+    Calendars,
     Quiet,
     About,
 }
 
-const PAGES: [(Page, &str, &str); 5] = [
+const PAGES: [(Page, &str, &str); 7] = [
     (Page::Pet, "Companion", "Name, look and behaviour"),
     (Page::Water, "Water", "Gentle hydration reminders"),
     (Page::Reminders, "Reminders", "Things you'd like to remember"),
+    (Page::Dates, "Dates", "Birthdays, anniversaries and holidays"),
+    (Page::Calendars, "Calendars", "Subscribed calendars and event alerts"),
     (Page::Quiet, "Quiet & alerts", "When and how it speaks up"),
     (Page::About, "About", "Stats, privacy and resource use"),
 ];
@@ -43,6 +49,10 @@ const PAGES: [(Page, &str, &str); 5] = [
 pub enum Field {
     Name,
     Title(String),
+    DateTitle(String),
+    CalName(String),
+    CalUrl(String),
+    Keywords,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +89,23 @@ pub enum UiAct {
     OpenData,
     ResetPos,
     TestReminder,
+    Holidays(HolidayRegion),
+    MorningSummary,
+    NotifyAt(i32),
+    AddDate,
+    DateKindSet(String, DateKind),
+    DateMonth(String, i32),
+    DateDay(String, i32),
+    DateYear(String, i32),
+    DateLead(String, u32),
+    DateDelete(String),
+    Alerts(EventAlerts),
+    EventLead(i32),
+    AddCalendar,
+    CalOn(String),
+    CalImportant(String),
+    CalDelete(String),
+    SyncNow,
 }
 
 pub struct SettingsUi {
@@ -93,6 +120,10 @@ pub struct SettingsUi {
     usage: Usage,
     cpu_rate: Option<f32>,
     usage_prev: Option<(u64, u64)>,
+    /// Settings as they were when the current text edit began (diffed on commit).
+    edit_origin: Option<Box<pip_core::Settings>>,
+    /// Comma-separated keywords while that field is being edited.
+    keywords_buf: String,
 }
 
 impl SettingsUi {
@@ -109,6 +140,8 @@ impl SettingsUi {
             usage: platform::process_usage(),
             cpu_rate: None,
             usage_prev: None,
+            edit_origin: None,
+            keywords_buf: String::new(),
         }
     }
 
@@ -282,6 +315,7 @@ impl App {
         let focus = ui.focus.clone();
         let usage = ui.usage;
         let cpu_rate = ui.cpu_rate;
+        let kw_buf = ui.keywords_buf.clone();
         let Some(mut pm) = ui.surface.canvas() else { return };
         fill_rrect(&mut pm, 0.0, 0.0, w, h, 0.0, color(pal.window, 1.0));
 
@@ -294,6 +328,8 @@ impl App {
             Page::Water => self.page_water(&mut c),
             Page::Reminders => self.page_reminders(&mut c, &focus),
             Page::Quiet => self.page_quiet(&mut c),
+            Page::Dates => self.page_dates(&mut c, &focus),
+            Page::Calendars => self.page_calendars(&mut c, &focus, &kw_buf),
             Page::About => self.page_about(&mut c, usage, cpu_rate),
         }
         let content_bottom = c.y + scroll + 28.0 * s;
@@ -305,12 +341,17 @@ impl App {
         let f = fonts();
         text::draw(&mut pm, &f.semibold, 22.0 * s, x0, 44.0 * s, pal.text, 1.0, title);
         text::draw(&mut pm, &f.regular, 12.5 * s, x0, 66.0 * s, pal.muted, 1.0, sub);
-        if page == Page::Reminders && self.settings.reminders.len() < 50 {
-            let label = "+ Add reminder";
+        let add = match page {
+            Page::Reminders if self.settings.reminders.len() < 50 => Some(("+ Add reminder", UiAct::AddReminder)),
+            Page::Dates if self.settings.dates.items.len() < 200 => Some(("+ Add date", UiAct::AddDate)),
+            Page::Calendars if self.settings.dates.calendars.len() < 10 => Some(("+ Add calendar", UiAct::AddCalendar)),
+            _ => None,
+        };
+        if let Some((label, act)) = add {
             let bw = ui::button_width(label, s);
             let r = R::new(x1 - bw, 32.0 * s, bw, 30.0 * s);
             ui::button(&mut pm, r, label, BtnStyle::Primary, &pal, s, hover == Some(r));
-            hits.push((r, UiAct::AddReminder));
+            hits.push((r, act));
         }
 
         // Sidebar
@@ -600,32 +641,41 @@ impl App {
         let Some(ui) = &self.ui else { return };
         let act = ui.hit(x, y).cloned();
         let was_focus = ui.focus.clone();
-        if let Some(ui) = &mut self.ui {
-            ui.focus = None;
+        // Leaving a text field (for anything but the same field) commits it.
+        if was_focus.is_some() && act != was_focus.clone().map(UiAct::Focus) {
+            if let Some(ui) = &mut self.ui {
+                ui.focus = None;
+            }
+            self.ui_commit_text();
         }
         match act {
             Some(UiAct::Focus(f)) => {
+                let keywords = self.settings.dates.keywords.join(", ");
                 if let Some(ui) = &mut self.ui {
+                    if f == Field::Keywords && ui.focus != Some(Field::Keywords) {
+                        ui.keywords_buf = keywords;
+                    }
                     ui.focus = Some(f);
                 }
             }
-            Some(a) => {
-                if was_focus.is_some() {
-                    self.ui_commit_text();
-                }
-                self.ui_do(a);
-            }
-            None => {
-                if was_focus.is_some() {
-                    self.ui_commit_text();
-                }
+            Some(a) => self.ui_do(a),
+            None => {}
+        }
+        // Remember where an edit started (adds may have focused a new field).
+        let snapshot = self.ui.as_ref().is_some_and(|u| u.focus.is_some() && u.edit_origin.is_none());
+        if snapshot {
+            let s = Box::new(self.settings.clone());
+            if let Some(ui) = &mut self.ui {
+                ui.edit_origin = Some(s);
             }
         }
         self.ui_invalidate();
     }
 
     fn ui_commit_text(&mut self) {
-        let prev = self.settings.clone();
+        // Diff against the settings as they were when editing began, so e.g. a changed calendar
+        // link is noticed (and re-encrypted + synced) even though edits were applied live.
+        let prev = self.ui.as_mut().and_then(|u| u.edit_origin.take()).map(|b| *b).unwrap_or_else(|| self.settings.clone());
         self.settings.sanitize();
         if prev != self.settings {
             self.settings_changed(&prev);
@@ -635,49 +685,74 @@ impl App {
 
     pub fn ui_char(&mut self, ch: u32) {
         let Some(focus) = self.ui.as_ref().and_then(|u| u.focus.clone()) else { return };
-        let prev = self.settings.clone();
-        let now = platform::now_unix();
-        let (target, max): (&mut String, usize) = match &focus {
-            Field::Name => (&mut self.settings.pet.name, 24),
-            Field::Title(id) => match self.settings.reminders.iter_mut().find(|r| &r.id == id) {
-                Some(r) => {
-                    r.updated_at = now;
-                    (&mut r.title, 60)
-                }
-                None => return,
-            },
+        if matches!(ch, 0x0D | 0x1B | 0x09) {
+            if let Some(ui) = &mut self.ui {
+                ui.focus = None;
+            }
+            self.ui_commit_text();
+            self.ui_invalidate();
+            return;
+        }
+        // Ctrl+V pastes (single line; control characters dropped).
+        let typed: String = match ch {
+            0x16 => platform::clipboard_text().unwrap_or_default().chars().filter(|c| !c.is_control()).collect(),
+            0x08 => String::new(),
+            c if c >= 0x20 && c != 0x7F => char::from_u32(c).map(String::from).unwrap_or_default(),
+            _ => return,
         };
-        match ch {
-            0x08 => {
+        let backspace = ch == 0x08;
+        let edit = |target: &mut String, max: usize| {
+            if backspace {
                 target.pop();
             }
-            0x0D | 0x1B | 0x09 => {
+            for c in typed.chars() {
+                if target.chars().count() >= max {
+                    break;
+                }
+                target.push(c);
+            }
+        };
+        let now = platform::now_unix();
+        match &focus {
+            Field::Keywords => {
                 if let Some(ui) = &mut self.ui {
-                    ui.focus = None;
-                }
-                self.ui_commit_text();
-                self.ui_invalidate();
-                return;
-            }
-            0x16 => {} // Ctrl+V handled in ui_paste
-            c if c >= 0x20 && c != 0x7F => {
-                if let Some(c) = char::from_u32(c) {
-                    if target.chars().count() < max {
-                        target.push(c);
-                    }
+                    edit(&mut ui.keywords_buf, 300);
+                    self.settings.dates.keywords =
+                        ui.keywords_buf.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
                 }
             }
-            _ => return,
+            Field::Name => edit(&mut self.settings.pet.name, 24),
+            Field::Title(id) => {
+                if let Some(r) = self.settings.reminders.iter_mut().find(|r| &r.id == id) {
+                    r.updated_at = now;
+                    edit(&mut r.title, 60);
+                }
+            }
+            Field::DateTitle(id) => {
+                if let Some(d) = self.settings.dates.items.iter_mut().find(|d| &d.id == id) {
+                    d.updated_at = now;
+                    edit(&mut d.title, 60);
+                }
+            }
+            Field::CalName(id) => {
+                if let Some(c) = self.settings.dates.calendars.iter_mut().find(|c| &c.id == id) {
+                    c.updated_at = now;
+                    edit(&mut c.name, 40);
+                }
+            }
+            Field::CalUrl(id) => {
+                if let Some(c) = self.settings.dates.calendars.iter_mut().find(|c| &c.id == id) {
+                    c.updated_at = now;
+                    edit(&mut c.url, 2000);
+                }
+            }
         }
-        if prev != self.settings {
-            self.settings_dirty_changed(&prev);
-        }
+        self.settings_dirty_changed();
         self.ui_invalidate();
     }
 
-    /// Text edits: save and refresh, without the heavier rescheduling path.
-    fn settings_dirty_changed(&mut self, prev: &pip_core::Settings) {
-        let _ = prev;
+    /// Text edits: save and refresh, without the heavier rescheduling path (that runs on commit).
+    fn settings_dirty_changed(&mut self) {
         self.schedule_settings_save();
         self.render();
         if let Some(ui) = &self.ui {
@@ -688,6 +763,12 @@ impl App {
 
     fn ui_do(&mut self, act: UiAct) {
         let prev = self.settings.clone();
+        if self.ui_do_dates(&act) {
+            if prev != self.settings {
+                self.settings_changed(&prev);
+            }
+            return;
+        }
         let now = platform::now_unix();
         let st = &mut self.settings;
         match act {
@@ -803,6 +884,7 @@ impl App {
                 }
                 return;
             }
+            _ => return, // dates/calendar actions are handled by ui_do_dates
         }
         if prev != self.settings {
             self.settings_changed(&prev);
@@ -852,5 +934,340 @@ pub fn set_window_icon(hwnd: HWND, body: u32) {
                 DestroyIcon(old as HICON);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dates & Calendars pages
+// ---------------------------------------------------------------------------------------------
+
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LEADS: [(u32, &str); 4] = [(0, "On the day"), (1, "1 day before"), (3, "3 days before"), (7, "1 week before")];
+
+fn max_day(month: u32) -> u32 {
+    match month {
+        2 => 29,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn ago(secs: i64) -> String {
+    match secs {
+        s if s < 60 => "just now".into(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86_400 => format!("{} h ago", s / 3600),
+        s => format!("{} days ago", s / 86_400),
+    }
+}
+
+/// Calendar links are secrets: show only the host until the field is being edited.
+fn masked_url(url: &str) -> String {
+    let host = url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+    if url.is_empty() {
+        String::new()
+    } else {
+        format!("{host}/ ••••••••  (hidden)")
+    }
+}
+
+fn new_id(prefix: &str) -> String {
+    format!("{prefix}{:x}{:04x}", platform::now_unix(), platform::tick_ms() & 0xffff)
+}
+
+impl App {
+    fn card(&self, c: &mut Ctx, h: f32, accent: bool) -> (f32, f32) {
+        let s = c.s;
+        let (x, y, w) = (c.x0 - 14.0 * s, c.y + 6.0 * s, c.x1 - c.x0 + 28.0 * s);
+        fill_rrect(c.pm, x, y, w, h, 14.0 * s, color(c.pal.surface, 1.0));
+        if accent {
+            fill_rrect(c.pm, x + 5.0 * s, y + 16.0 * s, 3.5 * s, h - 32.0 * s, 2.0 * s, color(0xFFB020, 1.0));
+        }
+        (x, y)
+    }
+
+    fn page_dates(&self, c: &mut Ctx, focus: &Option<Field>) {
+        let s = c.s;
+        let f = fonts();
+        let d = &self.settings.dates;
+        let x1 = c.x1;
+        let cy = c.row("Public holidays", Some("On today's card and in the morning summary"));
+        let sel = if d.holidays == HolidayRegion::Za { 0 } else { 1 };
+        c.segmented(cy, &["South Africa", "Off"], sel, vec![UiAct::Holidays(HolidayRegion::Za), UiAct::Holidays(HolidayRegion::None)]);
+        let cy = c.row("Morning summary", Some("A quiet card with today's holidays, birthdays and events"));
+        c.toggle(cy, d.morning_summary, UiAct::MorningSummary);
+        let cy = c.row("Remind me at", Some("When date reminders and the summary appear"));
+        c.stepper(cy, x1, 150.0, &d.notify_at.to_string(), UiAct::NotifyAt(-30), UiAct::NotifyAt(30));
+        c.y += 12.0 * s;
+
+        if d.items.is_empty() {
+            c.y += 18.0 * s;
+            let msg = "No dates yet. Add birthdays and anniversaries — give a birth year and Pip knows how old they're turning.";
+            for line in text::wrap(&f.regular, 13.0 * s, msg, c.x1 - c.x0) {
+                text::draw(c.pm, &f.regular, 13.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
+                c.y += 19.0 * s;
+            }
+            return;
+        }
+        let today = pip_core::time::local(&chrono::Local, platform::now_unix()).date();
+        for item in &d.items {
+            let card_h = 176.0 * s;
+            let (_, y) = self.card(c, card_h, false);
+            let id = item.id.clone();
+            // Row 1: name + delete
+            let del_w = ui::button_width("Delete", s);
+            let tr = R::new(c.x0, y + 12.0 * s, c.x1 - c.x0 - del_w - 10.0 * s, 32.0 * s);
+            ui::text_field(c.pm, tr, &item.title, *focus == Some(Field::DateTitle(id.clone())), &c.pal, s, "Name, e.g. Mom's birthday");
+            c.hits.push((tr, UiAct::Focus(Field::DateTitle(id.clone()))));
+            let dr = R::new(c.x1 - del_w, y + 14.0 * s, del_w, 28.0 * s);
+            ui::button(c.pm, dr, "Delete", BtnStyle::Danger, &c.pal, s, c.hover == Some(dr));
+            c.hits.push((dr, UiAct::DateDelete(id.clone())));
+            // Row 2: kind
+            let kinds = [DateKind::Birthday, DateKind::Anniversary, DateKind::Other, DateKind::Deadline];
+            let labels: Vec<&str> = kinds.iter().map(|k| k.label()).collect();
+            let sel = kinds.iter().position(|k| *k == item.kind).unwrap_or(0);
+            for (r, k) in ui::segmented(c.pm, c.x0, y + 54.0 * s, &labels, sel, &c.pal, s).into_iter().zip(kinds) {
+                c.hits.push((r, UiAct::DateKindSet(id.clone(), k)));
+            }
+            // Row 3: month / day / year + next occurrence
+            let r3 = y + 94.0 * s;
+            let (m, p) = ui::stepper(c.pm, c.x0, r3, 104.0 * s, MONTHS[(item.month.clamp(1, 12) - 1) as usize], &c.pal, s);
+            c.hits.push((m, UiAct::DateMonth(id.clone(), -1)));
+            c.hits.push((p, UiAct::DateMonth(id.clone(), 1)));
+            let (m, p) = ui::stepper(c.pm, c.x0 + 112.0 * s, r3, 92.0 * s, &item.day.to_string(), &c.pal, s);
+            c.hits.push((m, UiAct::DateDay(id.clone(), -1)));
+            c.hits.push((p, UiAct::DateDay(id.clone(), 1)));
+            let year = item.year.map(|y| y.to_string()).unwrap_or_else(|| "No year".into());
+            let (m, p) = ui::stepper(c.pm, c.x0 + 212.0 * s, r3, 124.0 * s, &year, &c.pal, s);
+            c.hits.push((m, UiAct::DateYear(id.clone(), -1)));
+            c.hits.push((p, UiAct::DateYear(id.clone(), 1)));
+            let next = match item.next_on_or_after(today) {
+                Some(on) => {
+                    let n = (on - today).num_days();
+                    let when = match n {
+                        0 => "Today!".to_string(),
+                        1 => "Tomorrow".to_string(),
+                        n => format!(
+                            "{} {} {} · in {n} days",
+                            &pip_core::time::weekday_name(chrono::Datelike::weekday(&on))[..3],
+                            chrono::Datelike::day(&on),
+                            MONTHS[chrono::Datelike::month0(&on) as usize]
+                        ),
+                    };
+                    match item.count_on(on) {
+                        Some(k) if item.kind == DateKind::Birthday => format!("{when} · turns {k}"),
+                        Some(k) => format!("{when} · {k} years"),
+                        None => when,
+                    }
+                }
+                None => "Passed".into(),
+            };
+            let tx = c.x0 + 348.0 * s;
+            let shown = text::ellipsize(&f.regular, 12.0 * s, &next, (c.x1 - tx).max(0.0));
+            text::draw(c.pm, &f.regular, 12.0 * s, tx, r3 + 20.0 * s, c.pal.muted, 1.0, &shown);
+            // Row 4: heads-up
+            let labels: Vec<&str> = LEADS.iter().map(|(_, l)| *l).collect();
+            let sel = LEADS.iter().position(|(d, _)| *d == item.lead_days).unwrap_or(0);
+            for (r, (days, _)) in ui::segmented(c.pm, c.x0, y + 134.0 * s, &labels, sel, &c.pal, s).into_iter().zip(LEADS) {
+                c.hits.push((r, UiAct::DateLead(id.clone(), days)));
+            }
+            c.y += card_h + 12.0 * s;
+        }
+    }
+
+    fn page_calendars(&self, c: &mut Ctx, focus: &Option<Field>, kw_buf: &str) {
+        let s = c.s;
+        let f = fonts();
+        let d = &self.settings.dates;
+        let x1 = c.x1;
+        let now = platform::now_unix();
+        let cy = c.row("Event alerts", Some("Important: has its own alert, important calendar, or a word below"));
+        let sel = match d.event_alerts {
+            EventAlerts::Important => 0,
+            EventAlerts::All => 1,
+            EventAlerts::Off => 2,
+        };
+        c.segmented(
+            cy,
+            &["Important", "All timed", "Off"],
+            sel,
+            vec![UiAct::Alerts(EventAlerts::Important), UiAct::Alerts(EventAlerts::All), UiAct::Alerts(EventAlerts::Off)],
+        );
+        let cy = c.row("Alert me", Some("For events without an alert of their own"));
+        let lead = if d.event_lead_min == 0 { "At the start".to_string() } else { format!("{} min before", d.event_lead_min) };
+        c.stepper(cy, x1, 160.0, &lead, UiAct::EventLead(-5), UiAct::EventLead(5));
+        let cy = c.row("Important words", Some("Comma-separated, e.g. interview, dentist"));
+        let editing = *focus == Some(Field::Keywords);
+        let value = if editing { kw_buf.to_string() } else { d.keywords.join(", ") };
+        let r = R::new(c.x1 - 250.0 * s, cy - 16.0 * s, 250.0 * s, 32.0 * s);
+        ui::text_field(c.pm, r, &value, editing, &c.pal, s, "No keywords");
+        c.hits.push((r, UiAct::Focus(Field::Keywords)));
+        let last = d.calendars.iter().filter_map(|c| self.feed_meta.get(&c.id)).map(|m| m.synced_at).max().unwrap_or(0);
+        let hint = if d.calendars.is_empty() {
+            "Add a calendar to start".to_string()
+        } else if last > 0 {
+            format!("Last synced {}. Checks hourly.", ago(now - last))
+        } else {
+            "Not synced yet".to_string()
+        };
+        let cy = c.row("Sync", Some(&hint));
+        if !d.calendars.is_empty() {
+            let label = "Sync now";
+            let bw = ui::button_width(label, s);
+            c.button(x1 - bw, cy - 15.0 * s, label, BtnStyle::Secondary, UiAct::SyncNow);
+        }
+        c.y += 12.0 * s;
+
+        for feed in &d.calendars {
+            let card_h = 140.0 * s;
+            let (_, y) = self.card(c, card_h, feed.important);
+            let id = feed.id.clone();
+            let nr = R::new(c.x0, y + 12.0 * s, c.x1 - c.x0 - 60.0 * s, 32.0 * s);
+            ui::text_field(c.pm, nr, &feed.name, *focus == Some(Field::CalName(id.clone())), &c.pal, s, "Calendar name");
+            c.hits.push((nr, UiAct::Focus(Field::CalName(id.clone()))));
+            let tg = ui::toggle(c.pm, c.x1 - ui::TOGGLE_W * s, y + 17.0 * s, feed.enabled, &c.pal, s);
+            c.hits.push((tg, UiAct::CalOn(id.clone())));
+            let ur = R::new(c.x0, y + 52.0 * s, c.x1 - c.x0, 32.0 * s);
+            let editing_url = *focus == Some(Field::CalUrl(id.clone()));
+            let shown = if editing_url { feed.url.clone() } else { masked_url(&feed.url) };
+            ui::text_field(c.pm, ur, &shown, editing_url, &c.pal, s, "Paste the calendar's private iCal / webcal link");
+            c.hits.push((ur, UiAct::Focus(Field::CalUrl(id.clone()))));
+            // Row 3: status + actions
+            let r3 = y + 94.0 * s;
+            let meta = self.feed_meta.get(&feed.id);
+            let (status, is_err) = if feed.url.trim().is_empty() {
+                ("Paste a link above to start syncing".to_string(), false)
+            } else if !feed.enabled {
+                ("Paused".to_string(), false)
+            } else if let Some(e) = meta.and_then(|m| m.error.clone()) {
+                (e, true)
+            } else if let Some(m) = meta.filter(|m| m.synced_at > 0) {
+                (format!("Synced {} · {} events in the next two weeks", ago(now - m.synced_at), m.events), false)
+            } else {
+                ("Waiting to sync…".to_string(), false)
+            };
+            let del_w = ui::button_width("Delete", s);
+            let imp = if feed.important { "Important  ✓" } else { "Mark important" };
+            let imp_w = ui::button_width(imp, s);
+            let avail = c.x1 - c.x0 - del_w - imp_w - 24.0 * s;
+            let status = text::ellipsize(&f.regular, 12.0 * s, &status, avail.max(0.0));
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, r3 + 19.0 * s, if is_err { 0xD6455D } else { c.pal.muted }, 1.0, &status);
+            let dr = R::new(c.x1 - del_w, r3, del_w, 28.0 * s);
+            ui::button(c.pm, dr, "Delete", BtnStyle::Danger, &c.pal, s, c.hover == Some(dr));
+            c.hits.push((dr, UiAct::CalDelete(id.clone())));
+            let ir = R::new(dr.x - imp_w - 6.0 * s, r3, imp_w, 28.0 * s);
+            ui::button(c.pm, ir, imp, if feed.important { BtnStyle::Primary } else { BtnStyle::Secondary }, &c.pal, s, c.hover == Some(ir));
+            c.hits.push((ir, UiAct::CalImportant(id)));
+            c.y += card_h + 12.0 * s;
+        }
+        c.y += 6.0 * s;
+        let help = [
+            "Where to find a link:",
+            "Google Calendar — Settings › your calendar › Integrate calendar › Secret address in iCal format.",
+            "Outlook — Settings › Calendar › Shared calendars › Publish a calendar › ICS link.",
+            "iCloud — Calendar app › share icon › Public calendar › copy link.",
+            "Links are stored encrypted for your Windows account. Pip only reads them.",
+        ];
+        for (i, h) in help.iter().enumerate() {
+            let font = if i == 0 { &f.semibold } else { &f.regular };
+            for line in text::wrap(font, 12.0 * s, h, c.x1 - c.x0) {
+                c.y += 18.0 * s;
+                text::draw(c.pm, font, 12.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
+            }
+        }
+    }
+
+    /// Handles the Dates/Calendars actions. Returns false for actions it doesn't own.
+    fn ui_do_dates(&mut self, act: &UiAct) -> bool {
+        let now = platform::now_unix();
+        let year_now = chrono::Datelike::year(&pip_core::time::local(&chrono::Local, now).date());
+        let d = &mut self.settings.dates;
+        match act {
+            UiAct::Holidays(r) => d.holidays = *r,
+            UiAct::MorningSummary => d.morning_summary = !d.morning_summary,
+            UiAct::NotifyAt(m) => d.notify_at = d.notify_at.add_minutes(*m),
+            UiAct::AddDate => {
+                let today = pip_core::time::local(&chrono::Local, now).date();
+                let id = new_id("d");
+                d.items.push(ImportantDate {
+                    id: id.clone(),
+                    month: chrono::Datelike::month(&today),
+                    day: chrono::Datelike::day(&today),
+                    lead_days: 1,
+                    updated_at: now,
+                    ..Default::default()
+                });
+                if let Some(ui) = &mut self.ui {
+                    ui.focus = Some(Field::DateTitle(id));
+                    ui.scroll = f32::MAX;
+                }
+            }
+            UiAct::DateKindSet(id, k) => {
+                if let Some(x) = d.items.iter_mut().find(|x| &x.id == id) {
+                    x.kind = *k;
+                    if *k == DateKind::Deadline && x.year.is_none() {
+                        x.year = Some(year_now);
+                    }
+                    x.updated_at = now;
+                }
+            }
+            UiAct::DateMonth(id, delta) => {
+                if let Some(x) = d.items.iter_mut().find(|x| &x.id == id) {
+                    x.month = ((x.month as i32 - 1 + delta).rem_euclid(12) + 1) as u32;
+                    x.day = x.day.min(max_day(x.month));
+                    x.updated_at = now;
+                }
+            }
+            UiAct::DateDay(id, delta) => {
+                if let Some(x) = d.items.iter_mut().find(|x| &x.id == id) {
+                    let m = max_day(x.month) as i32;
+                    x.day = ((x.day as i32 - 1 + delta).rem_euclid(m) + 1) as u32;
+                    x.updated_at = now;
+                }
+            }
+            UiAct::DateYear(id, delta) => {
+                if let Some(x) = d.items.iter_mut().find(|x| &x.id == id) {
+                    x.year = match x.year {
+                        None => Some(if x.kind == DateKind::Deadline { year_now } else { year_now - 30 }),
+                        Some(y) if y + delta < 1900 && x.kind != DateKind::Deadline => None,
+                        Some(y) => Some((y + delta).clamp(1900, year_now + 10)),
+                    };
+                    x.updated_at = now;
+                }
+            }
+            UiAct::DateLead(id, l) => {
+                if let Some(x) = d.items.iter_mut().find(|x| &x.id == id) {
+                    x.lead_days = *l;
+                    x.updated_at = now;
+                }
+            }
+            UiAct::DateDelete(id) => d.items.retain(|x| &x.id != id),
+            UiAct::Alerts(a) => d.event_alerts = *a,
+            UiAct::EventLead(m) => d.event_lead_min = (d.event_lead_min as i32 + m).clamp(0, 60) as u32,
+            UiAct::AddCalendar => {
+                let id = new_id("c");
+                d.calendars.push(CalendarFeed { id: id.clone(), updated_at: now, ..Default::default() });
+                if let Some(ui) = &mut self.ui {
+                    ui.focus = Some(Field::CalUrl(id));
+                    ui.scroll = f32::MAX;
+                }
+            }
+            UiAct::CalOn(id) => {
+                if let Some(x) = d.calendars.iter_mut().find(|x| &x.id == id) {
+                    x.enabled = !x.enabled;
+                    x.updated_at = now;
+                }
+            }
+            UiAct::CalImportant(id) => {
+                if let Some(x) = d.calendars.iter_mut().find(|x| &x.id == id) {
+                    x.important = !x.important;
+                    x.updated_at = now;
+                }
+            }
+            UiAct::CalDelete(id) => d.calendars.retain(|x| &x.id != id),
+            UiAct::SyncNow => self.start_sync(true),
+            _ => return false,
+        }
+        true
     }
 }

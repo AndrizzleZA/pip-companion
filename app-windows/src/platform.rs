@@ -367,3 +367,30 @@ pub fn trim_working_set() {
         windows_sys::Win32::System::Memory::SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, 0);
     }
 }
+
+/// Unicode text on the clipboard, if any.
+pub fn clipboard_text() -> Option<String> {
+    use windows_sys::Win32::System::DataExchange::*;
+    use windows_sys::Win32::System::Memory::*;
+    const CF_UNICODETEXT: u32 = 13;
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let mut out = None;
+        let h = GetClipboardData(CF_UNICODETEXT);
+        if !h.is_null() {
+            let p = GlobalLock(h as _) as *const u16;
+            if !p.is_null() {
+                let mut len = 0;
+                while *p.add(len) != 0 && len < 1 << 20 {
+                    len += 1;
+                }
+                out = Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, len)));
+                GlobalUnlock(h as _);
+            }
+        }
+        CloseClipboard();
+        out
+    }
+}

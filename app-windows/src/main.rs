@@ -8,6 +8,9 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod calsync;
+mod net;
+mod secrets;
 mod pet;
 mod platform;
 mod render;
@@ -221,6 +224,12 @@ unsafe extern "system" fn pet_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if is_theme {
                 with_app(|a| a.on_theme_change());
             }
+            Some(0)
+        }
+        calsync::WM_CALSYNC => {
+            // Take ownership first so the payload is freed even if the app is busy.
+            let result = calsync::take_result(lp);
+            with_app(move |a| a.on_calsync(result));
             Some(0)
         }
         WM_COPYDATA => {
