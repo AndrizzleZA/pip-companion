@@ -36,6 +36,7 @@ const COPYDATA_MAGIC: usize = 0x5049_5031; // "PIP1"
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1; // NIN_SELECT | NINF_KEY
 const WM_MOUSEHOVER: u32 = 0x02A1;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -66,6 +67,7 @@ fn run_effects() {
                     }
                 }
                 Effect::Quit => {
+                    with_app(|a| a.end_cal_wizard());
                     if let Some(h) = with_app(|a| a.ui.as_ref().map(|u| u.hwnd)).flatten() {
                         unsafe { DestroyWindow(h) };
                     }
@@ -226,6 +228,7 @@ unsafe extern "system" fn pet_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             Some(0)
         }
+        WM_CLIPBOARDUPDATE => with_app(|a| a.on_clipboard()).map(|_| 0),
         calsync::WM_CALSYNC => {
             // Take ownership first so the payload is freed even if the app is busy.
             let result = calsync::take_result(lp);

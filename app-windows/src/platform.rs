@@ -374,7 +374,16 @@ pub fn clipboard_text() -> Option<String> {
     use windows_sys::Win32::System::Memory::*;
     const CF_UNICODETEXT: u32 = 13;
     unsafe {
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
+        // Another app may hold the clipboard for a moment; retry briefly instead of failing.
+        let mut opened = false;
+        for _ in 0..5 {
+            if OpenClipboard(std::ptr::null_mut()) != 0 {
+                opened = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        if !opened {
             return None;
         }
         let mut out = None;
@@ -392,5 +401,15 @@ pub fn clipboard_text() -> Option<String> {
         }
         CloseClipboard();
         out
+    }
+}
+
+/// Opens a web page in the user's default browser.
+pub fn open_url(url: &str) {
+    if std::env::var_os("PIP_NO_BROWSER").is_some() {
+        return; // automated tests
+    }
+    unsafe {
+        ShellExecuteW(std::ptr::null_mut(), wide("open").as_ptr(), wide(url).as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
     }
 }

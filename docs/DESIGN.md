@@ -238,6 +238,13 @@ Built:
 Measured: a sync costs ~46 ms CPU the first time (TLS + parse), ~13 ms on hourly re-syncs. WinHTTP's
 worker threads retire within ~3 minutes; private memory settles at ~2.7 MB.
 
-Still to do in Phase 2: Google Calendar / Microsoft Graph via OAuth (needs app registrations —
-decision for the user), tomorrow's all-day events in the summary, a date/time picker for one-off
+Still to do in Phase 2: tomorrow's all-day events in the summary, a date/time picker for one-off
 deadlines further than a year out.
+
+**Decision (2026-09-21):** calendars connect by subscription link, not OAuth sign-in. To make that
+easy, "Add calendar" is a guided flow: pick Google / Outlook / iCloud / other → Pip opens the exact
+settings page → the user copies the link → Pip picks it up from the clipboard automatically
+(clipboard change notifications, listened to only during the 10-minute add window; reads are
+deferred 200 ms so they never collide with the copying app). Copied links are classified, and the
+common mistakes (a private Google calendar's *public* address, Outlook's HTML link, a website link,
+plain http) get a plain-language fix instead of a silent failure.

@@ -18,9 +18,9 @@ and roadmap.
   small badge on the pet after a few minutes; click the pet to bring it back.
 
 **Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Dates (with an optional
-heads-up a few days before). South African public holidays are built in. In Settings › Calendars,
-paste a private calendar link (Google "secret address in iCal format", Outlook "ICS link", iCloud
-public link): events show on today's card, and important ones (own alert, important calendar or a
+heads-up a few days before). South African public holidays are built in. In Settings › Calendars (or right-click › Add a
+calendar…), pick Google, Outlook or iCloud: Pip opens the right page and picks the link up as soon as
+you copy it — no pasting needed. Then events show on today's card, and important ones (own alert, important calendar or a
 keyword like "dentist") get a gentle alert. A quiet morning summary lists what's on.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,

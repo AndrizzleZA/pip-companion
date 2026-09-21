@@ -9,8 +9,8 @@ use crate::render::ui::{self, BtnStyle, R};
 use crate::render::{color, fill_rrect, Palette};
 use crate::surface::Surface;
 use pip_core::schedule;
-use pip_core::calendar::CalendarFeed;
 use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
+use pip_core::links::Provider;
 use pip_core::settings::{CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme};
 use pip_core::time::{DaySet, TimeOfDay};
 use tiny_skia::{PixmapMut, Transform};
@@ -23,6 +23,11 @@ pub const LOGICAL_H: i32 = 580;
 const SIDEBAR_W: f32 = 196.0;
 const HEADER_H: f32 = 92.0;
 pub const T_USAGE: usize = 1;
+pub const CALENDARS_PAGE: usize = 4;
+
+pub fn page_at(i: usize) -> Page {
+    PAGES[i.min(PAGES.len() - 1)].0
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -106,6 +111,10 @@ pub enum UiAct {
     CalImportant(String),
     CalDelete(String),
     SyncNow,
+    PickProvider(Provider),
+    WizardOpen,
+    WizardPaste,
+    WizardCancel,
 }
 
 pub struct SettingsUi {
@@ -233,7 +242,11 @@ impl Ctx<'_, '_> {
 
 impl App {
     pub fn ui_opened(&mut self, hwnd: HWND) {
-        self.ui = Some(SettingsUi::new(hwnd));
+        let mut ui = SettingsUi::new(hwnd);
+        if let Some(p) = self.open_page.take() {
+            ui.page = page_at(p);
+        }
+        self.ui = Some(ui);
     }
 
     pub fn ui_destroyed(&mut self) {
@@ -344,7 +357,7 @@ impl App {
         let add = match page {
             Page::Reminders if self.settings.reminders.len() < 50 => Some(("+ Add reminder", UiAct::AddReminder)),
             Page::Dates if self.settings.dates.items.len() < 200 => Some(("+ Add date", UiAct::AddDate)),
-            Page::Calendars if self.settings.dates.calendars.len() < 10 => Some(("+ Add calendar", UiAct::AddCalendar)),
+            Page::Calendars if self.settings.dates.calendars.len() < 10 && self.cal_wizard.is_none() && !self.cal_picking => Some(("+ Add calendar", UiAct::AddCalendar)),
             _ => None,
         };
         if let Some((label, act)) = add {
@@ -763,6 +776,9 @@ impl App {
 
     fn ui_do(&mut self, act: UiAct) {
         let prev = self.settings.clone();
+        if self.ui_do_wizard(&act) {
+            return;
+        }
         if self.ui_do_dates(&act) {
             if prev != self.settings {
                 self.settings_changed(&prev);
@@ -1117,6 +1133,7 @@ impl App {
             c.button(x1 - bw, cy - 15.0 * s, label, BtnStyle::Secondary, UiAct::SyncNow);
         }
         c.y += 12.0 * s;
+        self.draw_calendar_guide(c);
 
         for feed in &d.calendars {
             let card_h = 140.0 * s;
@@ -1161,19 +1178,10 @@ impl App {
             c.y += card_h + 12.0 * s;
         }
         c.y += 6.0 * s;
-        let help = [
-            "Where to find a link:",
-            "Google Calendar — Settings › your calendar › Integrate calendar › Secret address in iCal format.",
-            "Outlook — Settings › Calendar › Shared calendars › Publish a calendar › ICS link.",
-            "iCloud — Calendar app › share icon › Public calendar › copy link.",
-            "Links are stored encrypted for your Windows account. Pip only reads them.",
-        ];
-        for (i, h) in help.iter().enumerate() {
-            let font = if i == 0 { &f.semibold } else { &f.regular };
-            for line in text::wrap(font, 12.0 * s, h, c.x1 - c.x0) {
-                c.y += 18.0 * s;
-                text::draw(c.pm, font, 12.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
-            }
+        let privacy = "Calendar links are stored encrypted for your Windows account and only ever read — Pip never changes your calendars.";
+        for line in text::wrap(&f.regular, 12.0 * s, privacy, c.x1 - c.x0) {
+            c.y += 18.0 * s;
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
         }
     }
 
@@ -1245,11 +1253,9 @@ impl App {
             UiAct::Alerts(a) => d.event_alerts = *a,
             UiAct::EventLead(m) => d.event_lead_min = (d.event_lead_min as i32 + m).clamp(0, 60) as u32,
             UiAct::AddCalendar => {
-                let id = new_id("c");
-                d.calendars.push(CalendarFeed { id: id.clone(), updated_at: now, ..Default::default() });
+                self.cal_picking = true;
                 if let Some(ui) = &mut self.ui {
-                    ui.focus = Some(Field::CalUrl(id));
-                    ui.scroll = f32::MAX;
+                    ui.scroll = 0.0;
                 }
             }
             UiAct::CalOn(id) => {
@@ -1268,6 +1274,109 @@ impl App {
             UiAct::SyncNow => self.start_sync(true),
             _ => return false,
         }
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// "Add a calendar" guide
+// ---------------------------------------------------------------------------------------------
+
+fn wizard_steps(p: Provider) -> &'static [&'static str] {
+    match p {
+        Provider::Google => &[
+            "Pip opened Google Calendar settings in your browser.",
+            "On the left, under “Settings for my calendars”, click your calendar.",
+            "Choose “Integrate calendar”, then click the copy icon next to “Secret address in iCal format”.",
+        ],
+        Provider::Outlook => &[
+            "Pip opened Outlook's calendar sharing settings (work or school account? use outlook.office.com).",
+            "Under “Publish a calendar”, pick your calendar and “Can view all details”, then Publish.",
+            "Click the ICS link and choose “Copy link”.",
+        ],
+        Provider::ICloud => &[
+            "Pip opened iCloud Calendar in your browser — sign in if asked.",
+            "Hover over your calendar in the sidebar and click the share icon.",
+            "Turn on “Public Calendar”, then click “Copy Link”.",
+        ],
+        Provider::Other => &["Copy the calendar's subscription link — it usually ends in .ics or starts with webcal://."],
+    }
+}
+
+impl App {
+    /// Draws the provider picker or the step-by-step guide. Returns true if it drew anything.
+    fn draw_calendar_guide(&self, c: &mut Ctx) -> bool {
+        let s = c.s;
+        let f = fonts();
+        let inner = c.x1 - c.x0;
+        if self.cal_picking && self.cal_wizard.is_none() {
+            let h = 118.0 * s;
+            let (_, y) = self.card(c, h, false);
+            text::draw(c.pm, &f.semibold, 14.0 * s, c.x0, y + 30.0 * s, c.pal.text, 1.0, "Which calendar do you use?");
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, y + 50.0 * s, c.pal.muted, 1.0, "Pip opens the right page and picks the link up when you copy it.");
+            let mut bx = c.x0;
+            let by = y + 70.0 * s;
+            for (label, p) in [("Google", Provider::Google), ("Outlook", Provider::Outlook), ("iCloud", Provider::ICloud), ("Other link", Provider::Other)] {
+                bx += c.button(bx, by, label, if p == Provider::Other { BtnStyle::Secondary } else { BtnStyle::Primary }, UiAct::PickProvider(p)) + 8.0 * s;
+            }
+            let cw = ui::button_width("Cancel", s);
+            c.button(c.x1 - cw, by, "Cancel", BtnStyle::Ghost, UiAct::WizardCancel);
+            c.y += h + 12.0 * s;
+            return true;
+        }
+        let Some(w) = &self.cal_wizard else { return false };
+        // Measure: title, numbered steps (wrapped), status, hint, buttons.
+        let steps = wizard_steps(w.provider);
+        let step_lines: Vec<Vec<String>> = steps.iter().map(|t| text::wrap(&f.regular, 12.5 * s, t, inner - 26.0 * s)).collect();
+        let hint_lines = w.hint.as_deref().map(|h| text::wrap(&f.semibold, 12.0 * s, h, inner)).unwrap_or_default();
+        let lines: usize = step_lines.iter().map(|l| l.len()).sum();
+        let h = (44.0 + lines as f32 * 19.0 + steps.len() as f32 * 6.0 + 30.0 + hint_lines.len() as f32 * 18.0 + 46.0) * s;
+        let (_, y) = self.card(c, h, true);
+        let title = if w.provider == Provider::Other { "Adding a calendar".to_string() } else { format!("Adding {}", w.provider.your_calendar()) };
+        text::draw(c.pm, &f.semibold, 14.0 * s, c.x0, y + 28.0 * s, c.pal.text, 1.0, &title);
+        let mut ty = y + 50.0 * s;
+        for (i, lines) in step_lines.iter().enumerate() {
+            // Step number in an accent circle.
+            crate::render::fill_circle(c.pm, c.x0 + 8.0 * s, ty - 4.0 * s, 8.0 * s, color(c.pal.accent, 1.0));
+            text::draw_centered(c.pm, &f.semibold, 10.5 * s, c.x0 + 8.0 * s, ty, c.pal.on_accent, 1.0, &(i + 1).to_string());
+            for l in lines {
+                text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + 26.0 * s, ty, c.pal.text, 1.0, l);
+                ty += 19.0 * s;
+            }
+            ty += 6.0 * s;
+        }
+        ty += 4.0 * s;
+        text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty, c.pal.muted, 1.0, "Waiting for you to copy the link… Pip only looks at the clipboard until then (10 min).");
+        ty += 20.0 * s;
+        for l in &hint_lines {
+            text::draw(c.pm, &f.semibold, 12.0 * s, c.x0, ty, 0xD6455D, 1.0, l);
+            ty += 18.0 * s;
+        }
+        let by = ty + 2.0 * s;
+        let mut bx = c.x0;
+        if App::provider_page(w.provider).is_some() {
+            bx += c.button(bx, by, "Open page again", BtnStyle::Secondary, UiAct::WizardOpen) + 8.0 * s;
+        }
+        c.button(bx, by, "Paste link", BtnStyle::Primary, UiAct::WizardPaste);
+        let cw = ui::button_width("Cancel", s);
+        c.button(c.x1 - cw, by, "Cancel", BtnStyle::Ghost, UiAct::WizardCancel);
+        c.y += h + 12.0 * s;
+        true
+    }
+
+    fn ui_do_wizard(&mut self, act: &UiAct) -> bool {
+        match act {
+            UiAct::PickProvider(p) => self.begin_cal_wizard(*p),
+            UiAct::WizardOpen => {
+                if let Some(url) = self.cal_wizard.as_ref().and_then(|w| App::provider_page(w.provider)) {
+                    platform::open_url(url);
+                }
+            }
+            UiAct::WizardPaste => self.paste_calendar_now(),
+            UiAct::WizardCancel => self.end_cal_wizard(),
+            _ => return false,
+        }
+        self.ui_invalidate();
         true
     }
 }
