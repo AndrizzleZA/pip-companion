@@ -27,6 +27,10 @@ pub struct State {
     pub msg_seq: u32,
     pub streak: u32,
     pub best_streak: u32,
+    /// Calendar event occurrences already handled (key → when), pruned after a few days.
+    pub events_acked: BTreeMap<String, i64>,
+    /// Day the morning summary was last shown.
+    pub brief_day: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -132,7 +136,13 @@ impl State {
 
     /// Drops state for reminders that no longer exist.
     pub fn prune(&mut self, settings: &Settings) {
-        self.reminders.retain(|id, _| settings.reminders.iter().any(|r| &r.id == id));
+        self.reminders.retain(|id, _| {
+            if let Some(d) = id.strip_prefix("date:") {
+                settings.dates.items.iter().any(|x| x.id == d)
+            } else {
+                id.starts_with("ev:") || settings.reminders.iter().any(|r| &r.id == id)
+            }
+        });
     }
 }
 
@@ -171,5 +181,14 @@ mod tests {
         st.water.count = 9;
         st.roll_day(&s, d(2026, 9, 5));
         assert_eq!(st.streak, 0);
+    }
+}
+
+impl State {
+    /// Forgets acknowledged calendar occurrences that started more than two days ago.
+    pub fn prune_events(&mut self, now: i64) {
+        self.events_acked.retain(|k, _| {
+            k.rsplit_once('@').and_then(|(_, t)| t.parse::<i64>().ok()).is_none_or(|t| t > now - 2 * 86_400)
+        });
     }
 }

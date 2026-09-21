@@ -3,6 +3,8 @@
 //! `#[serde(default)]` everywhere means older/newer/hand-edited files always load: unknown fields
 //! are ignored and missing ones take defaults, so a settings file can never brick the app.
 
+use crate::calendar::CalendarFeed;
+use crate::dates::{HolidayRegion, ImportantDate};
 use crate::time::{DaySet, TimeOfDay};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,7 @@ pub struct Settings {
     pub quiet: QuietSettings,
     pub notify: NotifySettings,
     pub reminders: Vec<CustomReminder>,
+    pub dates: DatesSettings,
 }
 
 impl Default for Settings {
@@ -29,6 +32,7 @@ impl Default for Settings {
             quiet: QuietSettings::default(),
             notify: NotifySettings::default(),
             reminders: Vec::new(),
+            dates: DatesSettings::default(),
         }
     }
 }
@@ -223,6 +227,53 @@ impl Default for NotifySettings {
     }
 }
 
+/// When calendar events may notify you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventAlerts {
+    /// Only events that are important (own alert, important calendar, or a keyword match).
+    Important,
+    /// Every timed event.
+    All,
+    Off,
+}
+
+/// Important dates, public holidays and subscribed calendars.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DatesSettings {
+    /// When date reminders and the morning summary appear.
+    pub notify_at: TimeOfDay,
+    pub holidays: HolidayRegion,
+    /// A quiet "today" card: holidays, all-day events and what's on.
+    pub morning_summary: bool,
+    pub items: Vec<ImportantDate>,
+    pub calendars: Vec<CalendarFeed>,
+    pub event_alerts: EventAlerts,
+    /// Minutes before a timed event (used when the event has no alert of its own).
+    pub event_lead_min: u32,
+    /// Words that make an event important (case-insensitive).
+    pub keywords: Vec<String>,
+}
+
+impl Default for DatesSettings {
+    fn default() -> Self {
+        DatesSettings {
+            notify_at: TimeOfDay::hm(9, 0),
+            holidays: HolidayRegion::Za,
+            morning_summary: true,
+            items: Vec::new(),
+            calendars: Vec::new(),
+            event_alerts: EventAlerts::Important,
+            event_lead_min: 10,
+            keywords: ["interview", "doctor", "dentist", "appointment", "flight", "exam", "deadline"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+}
+
 /// A user-created reminder at a time of day.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -266,6 +317,15 @@ impl Settings {
         self.notify.snooze_min = self.notify.snooze_min.clamp(1, 240);
         self.notify.bubble_minutes = self.notify.bubble_minutes.clamp(1, 120);
         self.reminders.truncate(50);
+        self.dates.event_lead_min = self.dates.event_lead_min.clamp(0, 240);
+        self.dates.items.truncate(200);
+        self.dates.calendars.truncate(10);
+        for d in &mut self.dates.items {
+            d.month = d.month.clamp(1, 12);
+            d.day = d.day.clamp(1, 31);
+            d.lead_days = d.lead_days.min(60);
+            d.title = d.title.chars().take(60).collect();
+        }
         for r in &mut self.reminders {
             r.title = r.title.chars().take(60).collect();
             if r.title.trim().is_empty() {

@@ -9,6 +9,9 @@
 //! hours, active windows, weekdays) is evaluated in the local time zone passed in by the caller,
 //! which keeps the engine testable with a fixed offset.
 
+pub mod agenda;
+pub mod calendar;
+pub mod dates;
 pub mod messages;
 pub mod mood;
 pub mod schedule;

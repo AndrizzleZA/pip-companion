@@ -8,6 +8,8 @@
 //! Every computation starts from the wall clock, never from accumulated intervals, so sleep/resume,
 //! clock changes and restarts can't make reminders drift or double-fire.
 
+use crate::agenda::{brief_lines, event_alert_at, event_important};
+use crate::calendar::Event;
 use crate::settings::{CustomReminder, Settings};
 use crate::state::{ReminderState, State};
 use crate::time::{in_window, local, to_ts, TimeOfDay};
@@ -22,6 +24,12 @@ pub const LATE_AFTER_SECS: i64 = 5 * 60;
 pub enum ItemKey {
     Water,
     Custom(String),
+    /// An important date (id).
+    Date(String),
+    /// A calendar event occurrence (Event::key).
+    Event(String),
+    /// The morning summary.
+    Brief,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -216,8 +224,13 @@ pub fn reminder_next<Tz: TimeZone>(r: &CustomReminder, st: &State, now: i64, tz:
 // Engine entry points
 // ---------------------------------------------------------------------------------------------
 
-/// Everything due at `now`, most important first. Does not apply delivery policy.
+/// Everything due at `now` (no calendar events), most important first.
 pub fn due_items<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> Vec<Due> {
+    due_items_in(s, st, &[], now, tz)
+}
+
+/// Everything due at `now`, including calendar `events`. Does not apply delivery policy.
+pub fn due_items_in<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], now: i64, tz: &Tz) -> Vec<Due> {
     let mut out = Vec::new();
     if let Some(t) = water_next(s, st, now, tz).filter(|&t| t <= now) {
         let met_goal = st.water.day == Some(local(tz, now).date())
@@ -239,6 +252,7 @@ pub fn due_items<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> V
             });
         }
     }
+    dates_events_due(s, st, events, now, tz, &mut out);
     out.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.occurrence.cmp(&b.occurrence)));
     out
 }
@@ -247,6 +261,11 @@ pub fn due_items<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> V
 /// ends, quiet hours start/end (the pet naps), or the day rolls over. Shells set exactly one
 /// timer for this.
 pub fn next_event<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> i64 {
+    next_event_in(s, st, &[], now, tz)
+}
+
+/// Like [`next_event`], also considering calendar `events`.
+pub fn next_event_in<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], now: i64, tz: &Tz) -> i64 {
     let mut best = next_time_of_day(TimeOfDay(0), now, tz); // midnight rollover
     let mut consider = |t: Option<i64>| {
         if let Some(t) = t.filter(|&t| t > now) {
@@ -261,6 +280,9 @@ pub fn next_event<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> 
     if s.quiet.enabled && s.quiet.start != s.quiet.end {
         consider(Some(next_time_of_day(s.quiet.start, now, tz)));
         consider(Some(next_time_of_day(s.quiet.end, now, tz)));
+    }
+    for t in dates_events_future(s, st, events, now, tz) {
+        consider(Some(t));
     }
     best
 }
@@ -311,6 +333,108 @@ pub fn next_date_for<Tz: TimeZone>(time: TimeOfDay, now: i64, tz: &Tz) -> NaiveD
 
 pub fn minutes(n: i64) -> i64 {
     Duration::minutes(n).num_seconds()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Important dates, calendar events, morning summary
+// ---------------------------------------------------------------------------------------------
+
+/// State key for an important date's reminders.
+pub fn date_state_key(id: &str) -> String {
+    format!("date:{id}")
+}
+
+/// State key for a snoozed calendar event.
+pub fn event_state_key(key: &str) -> String {
+    format!("ev:{key}")
+}
+
+/// Reminder moments for the next occurrence of each important date: (moment, id).
+fn date_moments<Tz: TimeZone>(s: &Settings, now: i64, tz: &Tz) -> Vec<(i64, String)> {
+    let today = local(tz, now).date();
+    let mut out = Vec::new();
+    for d in &s.dates.items {
+        // An occurrence whose lead day is today may be up to lead_days ahead.
+        if let Some(on) = d.next_on_or_after(today) {
+            for day in d.reminder_days(on) {
+                out.push((to_ts(tz, s.dates.notify_at.on(day)), d.id.clone()));
+            }
+        }
+    }
+    out
+}
+
+fn snoozed(st: &State, key: &str, now: i64) -> Option<i64> {
+    st.reminders.get(key).and_then(|r| r.snooze_until).filter(|&t| t > now)
+}
+
+fn dates_events_due<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], now: i64, tz: &Tz, out: &mut Vec<Due>) {
+    let today = local(tz, now).date();
+    // Dates: the latest moment today that hasn't been handled (shown all day once due).
+    for (m, id) in date_moments(s, now, tz) {
+        let key = date_state_key(&id);
+        let acked = st.reminders.get(&key).map_or(0, |r| r.acked);
+        if m <= now && local(tz, m).date() == today && m > acked && snoozed(st, &key, now).is_none() {
+            if !out.iter().any(|d| d.key == ItemKey::Date(id.clone())) {
+                out.push(Due { key: ItemKey::Date(id), occurrence: m, priority: Priority::Normal, late: now - m > LATE_AFTER_SECS });
+            }
+        }
+    }
+    // Events: from their alert time until they end (at least 15 minutes after start).
+    for e in events.iter().filter(|e| event_important(s, e)) {
+        let at = event_alert_at(s, e, tz);
+        let key = e.key();
+        if at <= now
+            && now < e.end.max(e.start + 900)
+            && !st.events_acked.contains_key(&key)
+            && snoozed(st, &event_state_key(&key), now).is_none()
+        {
+            out.push(Due { key: ItemKey::Event(key), occurrence: at, priority: Priority::Normal, late: now > e.start });
+        }
+    }
+    // Morning summary: once a day from notify time, only when there is something to say.
+    if s.dates.morning_summary && st.brief_day != Some(today) {
+        let m = to_ts(tz, s.dates.notify_at.on(today));
+        if m <= now && !brief_lines(s, events, today, tz, |_| String::new()).is_empty() {
+            out.push(Due { key: ItemKey::Brief, occurrence: m, priority: Priority::Low, late: false });
+        }
+    }
+}
+
+fn dates_events_future<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], now: i64, tz: &Tz) -> Vec<i64> {
+    let mut v: Vec<i64> = date_moments(s, now, tz).into_iter().map(|(m, _)| m).collect();
+    for e in events.iter().filter(|e| event_important(s, e)) {
+        v.push(event_alert_at(s, e, tz));
+        v.push(e.end.max(e.start + 900)); // stop presenting once it's over
+    }
+    for r in st.reminders.values() {
+        v.extend(r.snooze_until);
+    }
+    let today = local(tz, now).date();
+    if s.dates.morning_summary && st.brief_day != Some(today) {
+        v.push(to_ts(tz, s.dates.notify_at.on(today)));
+    }
+    v
+}
+
+pub fn ack_date(st: &mut State, id: &str, occurrence: i64) {
+    let rs = st.reminders.entry(date_state_key(id)).or_default();
+    rs.acked = rs.acked.max(occurrence);
+    rs.snooze_until = None;
+}
+
+pub fn ack_event(st: &mut State, key: &str, now: i64) {
+    st.events_acked.insert(key.to_string(), now);
+    st.reminders.remove(&event_state_key(key));
+}
+
+pub fn ack_brief(st: &mut State, today: NaiveDate) {
+    st.brief_day = Some(today);
+}
+
+/// Snooze for any keyed item that stores its state in `reminders` (dates, events).
+pub fn snooze_key(st: &mut State, state_key: String, until: i64) {
+    st.reminders.entry(state_key).or_default().snooze_until = Some(until);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -475,6 +599,65 @@ mod tests {
         assert_eq!(next_event(&s, &st, at(21, 0), &tz()), at(22, 0)); // quiet starts
         s.quiet.enabled = false;
         assert_eq!(next_event(&s, &st, at(21, 0), &tz()), on(22, 0, 0)); // midnight
+    }
+
+
+    fn quiet_setup() -> (Settings, State) {
+        let (mut s, st) = setup();
+        s.water.enabled = false;
+        s.dates.morning_summary = false;
+        (s, st)
+    }
+
+    #[test]
+    fn birthday_heads_up_and_day_of() {
+        use crate::dates::{DateKind, ImportantDate};
+        let (mut s, mut st) = quiet_setup();
+        s.dates.items.push(ImportantDate { id: "mom".into(), title: "Mom".into(), kind: DateKind::Birthday, month: 9, day: 24, lead_days: 3, ..Default::default() });
+        // Lead day is Mon 21st at 09:00.
+        assert!(due_items(&s, &st, at(8, 59), &tz()).is_empty());
+        assert_eq!(next_event(&s, &st, at(8, 0), &tz()), at(9, 0));
+        let d = due_items(&s, &st, at(9, 0), &tz());
+        assert_eq!(d[0].key, ItemKey::Date("mom".into()));
+        ack_date(&mut st, "mom", d[0].occurrence);
+        assert!(due_items(&s, &st, at(15, 0), &tz()).is_empty());
+        // Tuesday: nothing. Thursday 24th (the day): due again, and still due late that evening.
+        assert!(due_items(&s, &st, on(22, 10, 0), &tz()).is_empty());
+        assert_eq!(due_items(&s, &st, on(24, 20, 0), &tz()).len(), 1);
+        // A missed day is not carried into the next.
+        assert!(due_items(&s, &st, on(25, 9, 30), &tz()).is_empty());
+    }
+
+    #[test]
+    fn important_event_alerts_until_it_ends() {
+        use crate::calendar::Event;
+        let (s, mut st) = quiet_setup();
+        let dentist = Event { uid: "x".into(), title: "Dentist".into(), start: at(14, 0), end: at(14, 30), all_day: false, alarm_min: None, feed_id: "f".into() };
+        let lunch = Event { uid: "y".into(), title: "Lunch".into(), start: at(12, 0), end: at(13, 0), all_day: false, alarm_min: None, feed_id: "f".into() };
+        let evs = vec![lunch, dentist.clone()];
+        assert!(due_items_in(&s, &st, &evs, at(12, 0), &tz()).is_empty(), "lunch is informational");
+        assert_eq!(next_event_in(&s, &st, &evs, at(12, 0), &tz()), at(13, 50));
+        let d = due_items_in(&s, &st, &evs, at(13, 50), &tz());
+        assert_eq!(d[0].key, ItemKey::Event(dentist.key()));
+        assert!(due_items_in(&s, &st, &evs, at(14, 31), &tz()).is_empty(), "over");
+        snooze_key(&mut st, event_state_key(&dentist.key()), at(13, 55));
+        assert!(due_items_in(&s, &st, &evs, at(13, 52), &tz()).is_empty());
+        assert_eq!(due_items_in(&s, &st, &evs, at(13, 55), &tz()).len(), 1);
+        ack_event(&mut st, &dentist.key(), at(13, 56));
+        assert!(due_items_in(&s, &st, &evs, at(13, 57), &tz()).is_empty());
+    }
+
+    #[test]
+    fn morning_summary_once_and_only_with_content() {
+        let (mut s, mut st) = quiet_setup();
+        s.dates.morning_summary = true;
+        // Mon 21 Sep 2026: no holiday today, none tomorrow, no events → nothing to say.
+        assert!(due_items(&s, &st, at(10, 0), &tz()).is_empty());
+        // Wed 23 Sep: tomorrow is Heritage Day → summary due from 09:00, Low priority, once.
+        let d = due_items(&s, &st, on(23, 9, 0), &tz());
+        assert_eq!((d[0].key.clone(), d[0].priority), (ItemKey::Brief, Priority::Low));
+        ack_brief(&mut st, NaiveDate::from_ymd_opt(2026, 9, 23).unwrap());
+        assert!(due_items(&s, &st, on(23, 12, 0), &tz()).is_empty());
     }
 
     #[test]
