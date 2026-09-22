@@ -131,6 +131,8 @@ pub enum UiAct {
     GmailReconnect(String),
     GmailReopen,
     ConnectCalendar(Provider),
+    /// None = connect; Some("") = add another account; Some(address) = reconnect that one.
+    ConnectGoogleCalendar(Option<String>),
     MailImportantMarker,
     MailEvery(i32),
 }
@@ -1176,11 +1178,16 @@ impl App {
             c.hits.push((nr, UiAct::Focus(Field::CalName(id.clone()))));
             let tg = ui::toggle(c.pm, c.x1 - ui::TOGGLE_W * s, y + 17.0 * s, feed.enabled, &c.pal, s);
             c.hits.push((tg, UiAct::CalOn(id.clone())));
-            let ur = R::new(c.x0, y + 52.0 * s, c.x1 - c.x0, 32.0 * s);
-            let editing_url = *focus == Some(Field::CalUrl(id.clone()));
-            let shown = if editing_url { feed.url.clone() } else { masked_url(&feed.url) };
-            ui::text_field(c.pm, ur, &shown, editing_url, &c.pal, s, "Paste the calendar's private iCal / webcal link");
-            c.hits.push((ur, UiAct::Focus(Field::CalUrl(id.clone()))));
+            // A Google-connected calendar has no link to show or edit — just who it belongs to.
+            if let Some(address) = pip_core::gcal::feed_address(&feed.url) {
+                text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + 2.0 * s, y + 72.0 * s, c.pal.muted, 1.0, &format!("Connected with Google as {address}"));
+            } else {
+                let ur = R::new(c.x0, y + 52.0 * s, c.x1 - c.x0, 32.0 * s);
+                let editing_url = *focus == Some(Field::CalUrl(id.clone()));
+                let shown = if editing_url { feed.url.clone() } else { masked_url(&feed.url) };
+                ui::text_field(c.pm, ur, &shown, editing_url, &c.pal, s, "Paste the calendar's private iCal / webcal link");
+                c.hits.push((ur, UiAct::Focus(Field::CalUrl(id.clone()))));
+            }
             // Row 3: status + actions
             let r3 = y + 94.0 * s;
             let meta = self.feed_meta.get(&feed.id);
@@ -1432,11 +1439,11 @@ impl App {
         let accounts = &self.settings.email.accounts;
         let available = self.google_keys().is_some();
         let waiting = match &self.signin {
-            SignIn::Waiting { reconnecting } => Some(reconnecting.clone()),
+            SignIn::Waiting { connector, reconnecting } if *connector == ConnectorId::Gmail => Some(reconnecting.clone()),
             _ => None,
         };
         let problem = match &self.signin {
-            SignIn::Problem(p) => Some(p),
+            SignIn::Problem(ConnectorId::Gmail, p) => Some(p),
             _ => None,
         };
 
@@ -1571,40 +1578,110 @@ impl App {
         text::draw(c.pm, &f.regular, 12.0 * s, nx, y + 51.0 * s, c.pal.muted, 1.0, conn.purpose);
     }
 
-    /// Calendar connectors: one compact row each; connecting starts the guided link flow.
+    /// Calendar connectors: Google signs in like Gmail does; the others use the guided link flow
+    /// (Outlook and iCloud offer no sign-in for calendars, so a private link is the best there is).
     fn draw_calendar_connectors(&self, c: &mut Ctx) {
         let s = c.s;
         let f = fonts();
-        let rows: Vec<&Connector> = connectors::ALL.iter().filter(|x| matches!(x.method, Method::Link(_))).collect();
-        let row_h = 70.0 * s;
-        let h = rows.len() as f32 * row_h + 8.0 * s;
-        let (_, y) = self.card(c, h, false);
         let feeds = &self.settings.dates.calendars;
+        let rows: Vec<&Connector> = connectors::ALL.iter().filter(|x| x.id != ConnectorId::Gmail).collect();
+        let google_feeds: Vec<_> = feeds.iter().filter(|fd| pip_core::gcal::feed_address(&fd.url).is_some()).collect();
+        let waiting_google = matches!(&self.signin, SignIn::Waiting { connector: ConnectorId::GoogleCalendar, .. });
+        let google_problem = match &self.signin {
+            SignIn::Problem(ConnectorId::GoogleCalendar, p) => Some(p),
+            _ => None,
+        };
+        let extra_google = google_feeds.len() as f32 * 44.0 * s + if waiting_google || google_problem.is_some() { 24.0 * s } else { 0.0 };
+        let row_h = 70.0 * s;
+        let h = rows.len() as f32 * row_h + extra_google + 8.0 * s;
+        let (_, y) = self.card(c, h, false);
+        let mut ry = y + 4.0 * s;
         for (i, conn) in rows.iter().enumerate() {
-            let Method::Link(provider) = conn.method else { continue };
-            let ry = y + 4.0 * s + i as f32 * row_h;
             if i > 0 {
                 fill_rrect(c.pm, c.x0, ry, c.x1 - c.x0, 1.0, 0.0, color(c.pal.border, 0.8));
             }
-            let mine: Vec<_> = feeds.iter().filter(|fd| !fd.url.is_empty() && feed_provider(&fd.url) == provider).collect();
-            let errors = mine.iter().any(|fd| fd.enabled && self.feed_meta.get(&fd.id).is_some_and(|m| m.error.is_some()));
-            let chip = match (mine.len(), errors) {
-                (0, _) => None,
-                (_, true) => Some((WARN_AMBER, "Needs attention")),
-                _ => Some((OK_GREEN, "Connected")),
-            };
-            self.connector_header(c, ry - 4.0 * s, conn, chip);
-            let (label, style, act) = if mine.is_empty() {
-                ("Connect", BtnStyle::Secondary, UiAct::ConnectCalendar(provider))
-            } else {
-                ("Manage", BtnStyle::Secondary, UiAct::Page(Page::Calendars))
-            };
-            let bw = ui::button_width(label, s);
-            c.button(c.x1 - bw, ry + 18.0 * s, label, style, act);
-            if mine.len() > 1 {
-                let note = format!("{} calendars", mine.len());
-                let w = text::width(&f.regular, 12.0 * s, &note);
-                text::draw(c.pm, &f.regular, 12.0 * s, c.x1 - bw - w - 12.0 * s, ry + 38.0 * s, c.pal.muted, 1.0, &note);
+            match conn.method {
+                // Google Calendar: one click, like Gmail.
+                Method::SignIn => {
+                    let signed_out = google_feeds.iter().any(|fd| self.feed_meta.get(&fd.id).is_some_and(|m| m.signed_out));
+                    let chip = match (google_feeds.is_empty(), signed_out) {
+                        (true, _) => None,
+                        (_, true) => Some((WARN_AMBER, "Needs attention")),
+                        _ => Some((OK_GREEN, "Connected")),
+                    };
+                    self.connector_header(c, ry - 4.0 * s, conn, chip);
+                    let main = if waiting_google {
+                        Some(("Cancel", BtnStyle::Ghost, UiAct::GmailCancel))
+                    } else if self.google_keys().is_none() {
+                        None
+                    } else if google_feeds.is_empty() {
+                        Some(("Continue with Google", BtnStyle::Primary, UiAct::ConnectGoogleCalendar(None)))
+                    } else {
+                        Some(("Add account", BtnStyle::Secondary, UiAct::ConnectGoogleCalendar(Some(String::new()))))
+                    };
+                    if let Some((label, style, act)) = main {
+                        let bw = ui::button_width(label, s);
+                        c.button(c.x1 - bw, ry + 18.0 * s, label, style, act);
+                    }
+                    ry += row_h;
+                    if waiting_google || google_problem.is_some() {
+                        let (rgb, msg) = match google_problem {
+                            Some(p) => (if p.is_error() { ERR_RED } else { c.pal.muted }, p.explain("Google")),
+                            None => (c.pal.accent, "Continue in your browser\u{2026}".to_string()),
+                        };
+                        let msg = text::ellipsize(&f.regular, 12.0 * s, &msg, c.x1 - c.x0);
+                        text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ry - 8.0 * s, rgb, 1.0, &msg);
+                        ry += 24.0 * s;
+                    }
+                    // One line per connected Google account.
+                    for fd in &google_feeds {
+                        let meta = self.feed_meta.get(&fd.id);
+                        let out = meta.is_some_and(|m| m.signed_out);
+                        let address = pip_core::gcal::feed_address(&fd.url).unwrap_or(&fd.name);
+                        crate::render::fill_circle(c.pm, c.x0 + 5.0 * s, ry + 14.0 * s, 4.5 * s, color(if out { WARN_AMBER } else { OK_GREEN }, 1.0));
+                        let status = if out {
+                            "Signed out \u{2014} click Reconnect".to_string()
+                        } else {
+                            match meta.filter(|m| m.synced_at > 0) {
+                                Some(m) => format!("{address} \u{00b7} {} events \u{00b7} synced {}", m.events, ago(platform::now_unix() - m.synced_at)),
+                                None => format!("{address} \u{00b7} syncing\u{2026}"),
+                            }
+                        };
+                        let dlabel = if self.confirm_disconnect.as_deref() == Some(fd.id.as_str()) { "Yes, disconnect" } else { "Disconnect" };
+                        let dw = ui::button_width(dlabel, s);
+                        let rw = ui::button_width("Reconnect", s);
+                        let avail = c.x1 - c.x0 - dw - 24.0 * s - if out { rw + 8.0 * s } else { 0.0 };
+                        let shown = text::ellipsize(&f.regular, 12.5 * s, &status, avail.max(0.0));
+                        text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + 18.0 * s, ry + 19.0 * s, c.pal.muted, 1.0, &shown);
+                        c.button(c.x1 - dw, ry + 2.0 * s, dlabel, BtnStyle::Danger, UiAct::CalDelete(fd.id.clone()));
+                        if out {
+                            c.button(c.x1 - dw - rw - 8.0 * s, ry + 2.0 * s, "Reconnect", BtnStyle::Primary, UiAct::ConnectGoogleCalendar(Some(address.to_string())));
+                        }
+                        ry += 44.0 * s;
+                    }
+                }
+                Method::Link(provider) => {
+                    let mine: Vec<_> = feeds
+                        .iter()
+                        .filter(|fd| !fd.url.is_empty() && pip_core::gcal::feed_address(&fd.url).is_none() && feed_provider(&fd.url) == provider)
+                        .collect();
+                    let errors = mine.iter().any(|fd| fd.enabled && self.feed_meta.get(&fd.id).is_some_and(|m| m.error.is_some()));
+                    let chip = match (mine.len(), errors) {
+                        (0, _) => None,
+                        (_, true) => Some((WARN_AMBER, "Needs attention")),
+                        _ => Some((OK_GREEN, "Connected")),
+                    };
+                    self.connector_header(c, ry - 4.0 * s, conn, chip);
+                    let (label, act) = if mine.is_empty() { ("Connect", UiAct::ConnectCalendar(provider)) } else { ("Manage", UiAct::Page(Page::Calendars)) };
+                    let bw = ui::button_width(label, s);
+                    c.button(c.x1 - bw, ry + 18.0 * s, label, BtnStyle::Secondary, act);
+                    if mine.len() > 1 {
+                        let note = format!("{} calendars", mine.len());
+                        let w = text::width(&f.regular, 12.0 * s, &note);
+                        text::draw(c.pm, &f.regular, 12.0 * s, c.x1 - bw - w - 12.0 * s, ry + 38.0 * s, c.pal.muted, 1.0, &note);
+                    }
+                    ry += row_h;
+                }
             }
         }
         c.y += h + 12.0 * s;
@@ -1665,7 +1742,7 @@ impl App {
 
     fn ui_do_email(&mut self, act: &UiAct) -> bool {
         let prev = self.settings.clone();
-        if !matches!(act, UiAct::MailDisconnect(_)) {
+        if !matches!(act, UiAct::MailDisconnect(_) | UiAct::CalDelete(_)) {
             self.confirm_disconnect = None;
         }
         match act {
@@ -1679,6 +1756,25 @@ impl App {
                 // Two clicks: the first turns the button into "Yes, disconnect".
                 if self.confirm_disconnect.as_deref() == Some(id.as_str()) {
                     self.disconnect_mail(id);
+                } else {
+                    self.confirm_disconnect = Some(id.clone());
+                }
+            }
+            UiAct::ConnectGoogleCalendar(which) => {
+                let (hint, choose) = match which.as_deref() {
+                    None => (None, false),
+                    Some("") => (None, true),
+                    Some(a) => (Some(a.to_string()), false),
+                };
+                self.start_signin(ConnectorId::GoogleCalendar, hint, choose);
+            }
+            UiAct::CalDelete(id) if pip_core::gcal::feed_address(self.settings.dates.calendars.iter().find(|c| &c.id == id).map(|c| c.url.as_str()).unwrap_or("")).is_some() => {
+                // Disconnecting a Google calendar: confirm once, then remove it and hand back access.
+                if self.confirm_disconnect.as_deref() == Some(id.as_str()) {
+                    let prev = self.settings.clone();
+                    self.settings.dates.calendars.retain(|c| &c.id != id);
+                    self.settings_changed(&prev);
+                    self.confirm_disconnect = None;
                 } else {
                     self.confirm_disconnect = Some(id.clone());
                 }

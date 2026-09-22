@@ -12,7 +12,7 @@ use crate::calsync::{self, FeedJob, FeedMeta};
 use crate::tray::Tray;
 use pip_core::agenda;
 use pip_core::calendar::Event;
-use pip_core::connectors::SignInProblem;
+use pip_core::connectors::{ConnectorId, SignInProblem};
 use pip_core::links::{self, LinkCheck, Provider};
 use std::collections::HashMap;
 use chrono::{Local, Timelike};
@@ -128,9 +128,20 @@ pub struct App {
 pub enum SignIn {
     Idle,
     /// The browser is open; `reconnecting` names the account being reconnected.
-    Waiting { reconnecting: Option<String> },
+    Waiting { connector: ConnectorId, reconnecting: Option<String> },
     /// The last attempt didn't work (or was declined); shown with "Try again".
-    Problem(SignInProblem),
+    Problem(ConnectorId, SignInProblem),
+}
+
+impl SignIn {
+    /// Which connector this belongs to, so each card shows only its own state.
+    pub fn connector(&self) -> Option<ConnectorId> {
+        match self {
+            SignIn::Idle => None,
+            SignIn::Waiting { connector, .. } => Some(*connector),
+            SignIn::Problem(c, _) => Some(*c),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1301,6 +1312,12 @@ impl App {
         }
         for gone in old_c.iter().filter(|o| !new_c.iter().any(|n| n.id == o.id)) {
             calsync::forget(self.store.dir(), &gone.id);
+            calsync::forget_google(self.store.dir(), &gone.id);
+            // A calendar connected with Google: hand the permission back too.
+            if let Some(token) = self.secrets.remove(&cal_refresh_key(&gone.id)) {
+                crate::oauth::revoke_in_background(&crate::oauth::GOOGLE_CALENDAR, token);
+                self.secrets_dirty = true;
+            }
             self.feed_meta.remove(&gone.id);
             self.events.retain(|e| e.feed_id != gone.id);
         }
@@ -1560,6 +1577,37 @@ impl App {
                 }
                 self.last_auth_url.clone()
             }
+            "gcal-signin" => {
+                // "" = connect, "+" = another account, "<address>" = reconnect
+                match arg {
+                    "" => self.start_signin(ConnectorId::GoogleCalendar, None, false),
+                    "+" => self.start_signin(ConnectorId::GoogleCalendar, None, true),
+                    a => self.start_signin(ConnectorId::GoogleCalendar, Some(a.to_string()), false),
+                }
+                self.last_auth_url.clone()
+            }
+            "gcal" => {
+                let feeds: Vec<String> = self
+                    .settings
+                    .dates
+                    .calendars
+                    .iter()
+                    .filter(|c| pip_core::gcal::feed_address(&c.url).is_some())
+                    .map(|c| {
+                        let m = self.feed_meta.get(&c.id);
+                        format!(
+                            "{} url={} events={} synced={} signed_out={} err={:?}",
+                            c.name,
+                            c.url,
+                            m.map(|m| m.events).unwrap_or(0),
+                            m.map(|m| m.synced_at).unwrap_or(0),
+                            m.is_some_and(|m| m.signed_out),
+                            m.and_then(|m| m.error.clone())
+                        )
+                    })
+                    .collect();
+                format!("signin={:?}\n{}", self.signin, feeds.join("\n"))
+            }
             "gmail-cancel" => {
                 self.cancel_gmail_signin();
                 "ok".into()
@@ -1664,7 +1712,14 @@ impl App {
             .calendars
             .iter()
             .filter(|c| c.enabled)
-            .map(|c| FeedJob { id: c.id.clone(), url: c.url.clone() })
+            .map(|c| FeedJob {
+                id: c.id.clone(),
+                url: c.url.clone(),
+                // Google-connected calendars carry their sign-in; link feeds don't need one.
+                google: pip_core::gcal::feed_address(&c.url).and_then(|_| {
+                    Some(calsync::GoogleAuth { keys: self.google_keys()?, refresh: self.secrets.get(&cal_refresh_key(&c.id))?.clone() })
+                }),
+            })
             .collect();
         if jobs.is_empty() {
             if !self.events.is_empty() {
@@ -1844,6 +1899,11 @@ fn refresh_key(account_id: &str) -> String {
     format!("gmail:{account_id}:refresh")
 }
 
+/// Sign-in for a calendar connected with "Continue with Google".
+fn cal_refresh_key(feed_id: &str) -> String {
+    format!("gcal:{feed_id}:refresh")
+}
+
 impl App {
     /// Calendar-link flow only: the clipboard listener is on just while the user is copying a link.
     pub fn update_clip_listener(&mut self) {
@@ -1879,23 +1939,87 @@ impl App {
     /// user pick a different account (adding another one). Otherwise Google uses the signed-in
     /// account directly, skipping the chooser when there's only one.
     pub fn start_gmail_signin(&mut self, hint: Option<String>, choose: bool) {
+        self.start_signin(ConnectorId::Gmail, hint, choose);
+    }
+
+    /// Starts a browser sign-in for one connector. Each asks for only its own permission, so the
+    /// user sees a single, understandable consent screen per service.
+    pub fn start_signin(&mut self, connector: ConnectorId, hint: Option<String>, choose: bool) {
         self.confirm_disconnect = None;
         let Some(keys) = self.google_keys() else { return };
         if let Some(c) = self.auth_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        match crate::oauth::prepare(&crate::oauth::GOOGLE, &keys, hint.as_deref(), choose) {
+        let (service, verify): (_, crate::oauth::Verify) = match connector {
+            ConnectorId::GoogleCalendar => (&crate::oauth::GOOGLE_CALENDAR, crate::calsync::verify_gcal),
+            _ => (&crate::oauth::GOOGLE, crate::mailsync::verify_gmail),
+        };
+        match crate::oauth::prepare(service, &keys, hint.as_deref(), choose) {
             Ok((pending, url)) => {
                 let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 self.auth_cancel = Some(cancel.clone());
-                self.signin = SignIn::Waiting { reconnecting: hint };
+                self.signin = SignIn::Waiting { connector, reconnecting: hint };
                 platform::open_url(&url);
                 self.last_auth_url = url;
-                crate::oauth::finish_in_background(self.hwnd, pending, cancel, crate::mailsync::verify_gmail);
+                crate::oauth::finish_in_background(self.hwnd, pending, cancel, verify);
             }
-            Err(e) => self.signin = SignIn::Problem(SignInProblem::Other(e)),
+            Err(e) => self.signin = SignIn::Problem(connector, SignInProblem::Other(e)),
         }
         self.ui_invalidate();
+    }
+
+    /// A Google calendar was connected: it becomes an ordinary calendar in Pip (with its own
+    /// on/off switch and "important" flag), synced through Google instead of a link.
+    fn on_calendar_signin(&mut self, result: crate::oauth::AuthResult) {
+        use crate::oauth::AuthResult;
+        match result {
+            AuthResult::Ok(crate::oauth::Linked { refresh, account: address, .. }) => {
+                let prev = self.settings.clone();
+                let url = pip_core::gcal::feed_url(&address);
+                let id = match self.settings.dates.calendars.iter().find(|c| c.url.eq_ignore_ascii_case(&url)) {
+                    Some(c) => c.id.clone(),
+                    None => {
+                        let id = format!("g{:x}{:04x}", now_unix(), tick_ms() & 0xffff);
+                        self.settings.dates.calendars.push(pip_core::calendar::CalendarFeed {
+                            id: id.clone(),
+                            name: address.clone(),
+                            url,
+                            updated_at: now_unix(),
+                            ..Default::default()
+                        });
+                        id
+                    }
+                };
+                self.secrets.insert(cal_refresh_key(&id), refresh);
+                self.secrets_dirty = true;
+                if let Some(m) = self.feed_meta.get_mut(&id) {
+                    m.error = None;
+                    m.signed_out = false;
+                }
+                self.settings_changed(&prev); // saves and syncs in a moment
+                if !self.pet.visible {
+                    self.set_visible(true);
+                }
+                self.message(format!("Connected to {address}'s calendar! I'll remind you before your events."), 7);
+                self.anim(AnimKind::Celebrate);
+                if self.ui.is_some() {
+                    self.effects.push(Effect::OpenSettings);
+                }
+            }
+            AuthResult::Failed(problem) => {
+                if problem.is_error() {
+                    self.store.log(&format!("Google Calendar sign-in failed: {problem:?}"));
+                }
+                if self.ui.is_none() {
+                    self.message(problem.explain("Google"), 8);
+                }
+                self.signin = SignIn::Problem(ConnectorId::GoogleCalendar, problem);
+                if self.ui.is_some() {
+                    self.effects.push(Effect::OpenSettings);
+                }
+            }
+            AuthResult::Cancelled => {}
+        }
     }
 
     /// "Open browser again" while waiting (tab closed by mistake, or opened behind other windows).
@@ -1914,7 +2038,7 @@ impl App {
     }
 
     pub fn dismiss_signin_problem(&mut self) {
-        if matches!(self.signin, SignIn::Problem(_)) {
+        if matches!(self.signin, SignIn::Problem(..)) {
             self.signin = SignIn::Idle;
             self.ui_invalidate();
         }
@@ -1922,11 +2046,16 @@ impl App {
 
     pub fn on_signin(&mut self, result: Box<crate::oauth::AuthResult>) {
         use crate::oauth::AuthResult;
-        if !matches!(self.signin, SignIn::Waiting { .. }) {
+        let Some(connector) = self.signin.connector().filter(|_| matches!(self.signin, SignIn::Waiting { .. })) else {
             return; // cancelled meanwhile
-        }
+        };
         self.auth_cancel = None;
         self.signin = SignIn::Idle;
+        if connector == ConnectorId::GoogleCalendar {
+            self.on_calendar_signin(*result);
+            self.ui_invalidate();
+            return;
+        }
         match *result {
             AuthResult::Ok(crate::oauth::Linked { refresh, access, expires_at, account: address, extra: history_id }) => {
                 let prev = self.settings.clone();
@@ -1972,7 +2101,7 @@ impl App {
                 if self.ui.is_none() {
                     self.message(problem.explain("Google"), 8);
                 }
-                self.signin = SignIn::Problem(problem);
+                self.signin = SignIn::Problem(connector, problem);
                 if self.ui.is_some() {
                     self.effects.push(Effect::OpenSettings);
                 }

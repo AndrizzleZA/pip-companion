@@ -364,3 +364,34 @@ two-click disconnect (revoked at Google), connect again, add second account (pic
 Google signs Pip out → Reconnect (preselected, no picker), mail still detected afterwards,
 user cancels on Google's screen, app rejected, tab closed → Cancel, offline → plain message →
 try again → connected. 51 unit tests pass; startup 22 ms, ~1.8 MB private memory.
+
+## 13. Google Calendar without a link, 2026-09-22
+
+The same "click, choose account, Allow" flow now covers calendars.
+
+**Why only Google.** Apple has no OAuth for iCloud calendars at all: third-party apps must use
+CalDAV with a hand-made app-specific password, which is a password, so Pip keeps the link flow
+there. Microsoft does support a proper sign-in, but registering the app needs an Azure directory,
+which in turn needs a (free) Azure sign-up with card verification — a decision for the owner of
+the app, not something Pip can do. Both stay on the guided link flow until then.
+
+**Shape.** A Google-connected calendar is an ordinary `CalendarFeed` whose url is `gcal:<address>`
+instead of an https link, so everything downstream (on/off, "important", alerts, the morning
+summary, the two-week window, the Calendars page) works unchanged. `calsync::sync_feed` branches on
+that prefix: refresh the access token, `calendarList` (only calendars ticked in Google Calendar),
+then `events.list` per calendar with `singleEvents=true` — Google expands repeats, so none of the
+RRULE machinery runs. Results are cached as JSON, so events survive restarts and offline spells
+exactly like `.ics` feeds do.
+
+- Scope: `calendar.readonly` only — a single permission, so Google shows no tick-boxes.
+- Its refresh token lives in `secrets.dat` under `gcal:<feed id>:refresh`; Disconnect revokes it
+  and deletes the cache.
+- Sign-in state is per connector (`SignIn::Waiting { connector, .. }`), so a cancelled Gmail
+  sign-in never shows on the calendar card and vice versa.
+- Parsing lives in `pip-core::gcal` (unit tested, ready for the mobile shells).
+
+Tested against the extended mock (calendarList + paged events): connect, 3 events from two
+calendars with the hidden one skipped, calendar default reminders applied, Google signs Pip out →
+Reconnect with the account preselected, events kept from cache while signed out and while offline,
+restart with no network, decline, and two-click Disconnect (token revoked, cache removed). Gmail
+and the link flow still pass their own tests. 55 unit tests; release 1.71 MB, startup 37 ms.

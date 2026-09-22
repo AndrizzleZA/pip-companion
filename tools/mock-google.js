@@ -22,6 +22,7 @@ const port = Number(process.argv[2] || 8787);
 const CLIENT_ID = "123456789012-pipmocktestclientabcdefghijkl.apps.googleusercontent.com";
 const CLIENT_SECRET = "GOCSPX-MockSecretForPipTests1234";
 const SCOPE = "https://www.googleapis.com/auth/gmail.metadata";
+const CAL_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 let challenges = {};        // code -> { challenge, redirect }
 let access = null;          // valid access token
 let refreshValid = "RT-1";
@@ -32,6 +33,14 @@ let messages = [];          // { id, historyId, labels, from, subject, date }
 const log = [];
 let mode = { auth: "ok", email: "andre.test@gmail.com" };
 let currentEmail = "andre.test@gmail.com";
+let grantedScope = SCOPE;
+// Calendars the test account has, and their events.
+let calendars = [
+  { id: "andre.test@gmail.com", summary: "Andre", primary: true, selected: true, accessRole: "owner", defaultReminders: [{ method: "popup", minutes: 10 }] },
+  { id: "fam@group.calendar.google.com", summary: "Family", selected: true, accessRole: "reader", defaultReminders: [] },
+  { id: "hidden@group.calendar.google.com", summary: "Hidden", selected: false, accessRole: "reader", defaultReminders: [] },
+];
+let calEvents = {};   // calendarId -> [event]
 const revoked = [];
 
 const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -49,7 +58,7 @@ http.createServer(async (req, res) => {
       const q = url.searchParams;
       if (q.get("client_id") !== CLIENT_ID) return json(res, 400, { error: "invalid_client" });
       if (q.get("code_challenge_method") !== "S256" || !q.get("code_challenge")) return json(res, 400, { error: "pkce_required" });
-      if (q.get("scope") !== SCOPE) return json(res, 400, { error: "unexpected_scope", scope: q.get("scope") });
+      if (q.get("scope") !== SCOPE && q.get("scope") !== CAL_SCOPE) return json(res, 400, { error: "unexpected_scope", scope: q.get("scope") });
       if (!(q.get("prompt") || "").includes("consent")) return json(res, 400, { error: "consent_prompt_expected" });
       const back = `${q.get("redirect_uri")}/?state=${encodeURIComponent(q.get("state"))}`;
       if (mode.auth === "hang") return json(res, 200, { note: "user closed the tab" });
@@ -58,8 +67,8 @@ http.createServer(async (req, res) => {
         return res.end();
       }
       const code = "CODE-" + crypto.randomBytes(6).toString("hex");
-      challenges[code] = { challenge: q.get("code_challenge"), redirect: q.get("redirect_uri"), partial: mode.auth === "partial", email: mode.email };
-      res.writeHead(302, { Location: `${back}&code=${encodeURIComponent(code)}&scope=${encodeURIComponent(SCOPE)}` });
+      challenges[code] = { challenge: q.get("code_challenge"), redirect: q.get("redirect_uri"), partial: mode.auth === "partial", email: mode.email, scope: q.get("scope") };
+      res.writeHead(302, { Location: `${back}&code=${encodeURIComponent(code)}&scope=${encodeURIComponent(q.get("scope"))}` });
       return res.end();
     }
     if (p === "/token" && req.method === "POST") {
@@ -74,11 +83,12 @@ http.createServer(async (req, res) => {
         if (f.get("redirect_uri") !== c.redirect) return json(res, 400, { error: "invalid_grant", error_description: "redirect mismatch" });
         currentEmail = c.email;
         if (c.partial) return json(res, 200, { access_token: newAccess(), expires_in: 3599, refresh_token: refreshValid, scope: "openid", token_type: "Bearer" });
-        return json(res, 200, { access_token: newAccess(), expires_in: 3599, refresh_token: refreshValid, scope: SCOPE, token_type: "Bearer" });
+        grantedScope = c.scope;
+        return json(res, 200, { access_token: newAccess(), expires_in: 3599, refresh_token: refreshValid, scope: c.scope, token_type: "Bearer" });
       }
       if (f.get("grant_type") === "refresh_token") {
         if (f.get("refresh_token") !== refreshValid) return json(res, 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
-        return json(res, 200, { access_token: newAccess(), expires_in: 3599, scope: SCOPE, token_type: "Bearer" });
+        return json(res, 200, { access_token: newAccess(), expires_in: 3599, scope: grantedScope, token_type: "Bearer" });
       }
       return json(res, 400, { error: "unsupported_grant_type" });
     }
@@ -105,6 +115,30 @@ http.createServer(async (req, res) => {
         return json(res, 200, { id: m.id, threadId: m.id, labelIds: m.labels, internalDate: String(m.date), payload: { headers: [{ name: "From", value: m.from }, { name: "Subject", value: m.subject }] } });
       }
       return json(res, 404, {});
+    }
+    // --- Google Calendar ---
+    if (p.startsWith("/calendar/v3/")) {
+      if (!authed(req)) return json(res, 401, { error: { code: 401, message: "Invalid Credentials" } });
+      const rest = p.slice("/calendar/v3/".length);
+      if (rest === "users/me/calendarList") return json(res, 200, { items: calendars });
+      if (rest === "users/me/calendarList/primary") return json(res, 200, { id: calendars.find((c) => c.primary).id });
+      const m = rest.match(/^calendars\/(.+)\/events$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]);
+        const all = calEvents[id] || [];
+        const offset = Number(url.searchParams.get("pageToken") || 0);
+        const page = all.slice(offset, offset + 2);   // page size 2 to exercise paging
+        const out = { items: page };
+        if (offset + 2 < all.length) out.nextPageToken = String(offset + 2);
+        return json(res, 200, out);
+      }
+      return json(res, 404, {});
+    }
+    if (p === "/_event" && req.method === "POST") {
+      const d = JSON.parse(await body(req));
+      const cal = d.calendarId || calendars[0].id;
+      (calEvents[cal] = calEvents[cal] || []).push(d.event);
+      return json(res, 200, { ok: true, count: calEvents[cal].length });
     }
     if (p === "/_deliver" && req.method === "POST") {
       const d = JSON.parse(await body(req));

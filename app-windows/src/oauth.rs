@@ -42,7 +42,9 @@ pub static GOOGLE: Service = Service {
 fn endpoint(url: &str) -> String {
     #[cfg(feature = "devtools")]
     {
-        let var = if url.ends_with("/auth") {
+        let var = if url.ends_with("/calendar/v3") {
+            "PIP_GCAL_API"
+        } else if url.ends_with("/auth") {
             "PIP_OAUTH_AUTH"
         } else if url.ends_with("/token") {
             "PIP_OAUTH_TOKEN"
@@ -56,6 +58,18 @@ fn endpoint(url: &str) -> String {
         }
     }
     url.to_string()
+}
+
+pub static GOOGLE_CALENDAR: Service = Service {
+    name: "Google",
+    auth: "https://accounts.google.com/o/oauth2/v2/auth",
+    token: "https://oauth2.googleapis.com/token",
+    revoke: "https://oauth2.googleapis.com/revoke",
+    scope: pip_core::gcal::SCOPE,
+};
+
+pub fn gcal_api() -> String {
+    endpoint(pip_core::gcal::API)
 }
 
 pub fn gmail_api() -> String {

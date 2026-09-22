@@ -51,7 +51,7 @@ pub const ALL: [Connector; 5] = [
         badge_rgb: 0x4285F4,
         purpose: "Reminders before your events",
         access: "Read-only: Pip can see your events but never change them.",
-        method: Method::Link(Provider::Google),
+        method: Method::SignIn,
     },
     Connector {
         id: ConnectorId::OutlookCalendar,
