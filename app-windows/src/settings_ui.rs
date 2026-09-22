@@ -1352,12 +1352,11 @@ impl App {
             let h = 118.0 * s;
             let (_, y) = self.card(c, h, false);
             text::draw(c.pm, &f.semibold, 14.0 * s, c.x0, y + 30.0 * s, c.pal.text, 1.0, "Which calendar do you use?");
-            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, y + 50.0 * s, c.pal.muted, 1.0, "Pip opens the right page and picks the link up when you copy it.");
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, y + 50.0 * s, c.pal.muted, 1.0, "Google signs you in; Outlook opens the right page and picks the link up when you copy it.");
             let mut bx = c.x0;
             let by = y + 70.0 * s;
-            for (label, p) in [("Google", Provider::Google), ("Outlook", Provider::Outlook), ("iCloud", Provider::ICloud), ("Other link", Provider::Other)] {
-                bx += c.button(bx, by, label, if p == Provider::Other { BtnStyle::Secondary } else { BtnStyle::Primary }, UiAct::PickProvider(p)) + 8.0 * s;
-            }
+            bx += c.button(bx, by, "Google", BtnStyle::Primary, UiAct::ConnectGoogleCalendar(None)) + 8.0 * s;
+            c.button(bx, by, "Outlook", BtnStyle::Secondary, UiAct::PickProvider(Provider::Outlook));
             let cw = ui::button_width("Cancel", s);
             c.button(c.x1 - cw, by, "Cancel", BtnStyle::Ghost, UiAct::WizardCancel);
             c.y += h + 12.0 * s;

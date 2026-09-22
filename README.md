@@ -29,9 +29,9 @@ the account. Pip only ever sees senders, subjects and labels of new mail, never 
 can’t send or delete. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
 ever signs Pip out, the account shows **Reconnect**. Choose important senders and subject words in
 Settings › Email. **Google Calendar** connects the same one-click way and behaves like any other calendar in Pip
-(on/off switch, “important” flag, offline cache). **Outlook, iCloud and other calendars** use the
-guided link flow described above — neither Microsoft nor Apple offers a calendar sign-in that
-works for a desktop app without an account of its own or an app password.
+(on/off switch, “important” flag, offline cache). **Outlook Calendar** still uses the guided link flow:
+registering a Microsoft app needs an Azure directory of its own. iCloud and free-form calendar links
+were removed — Apple offers no calendar sign-in at all, only CalDAV with an app password.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.

@@ -9,8 +9,6 @@ pub enum ConnectorId {
     Gmail,
     GoogleCalendar,
     OutlookCalendar,
-    ICloudCalendar,
-    OtherCalendar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +32,7 @@ pub struct Connector {
     pub method: Method,
 }
 
-pub const ALL: [Connector; 5] = [
+pub const ALL: [Connector; 3] = [
     Connector {
         id: ConnectorId::Gmail,
         name: "Gmail",
@@ -61,24 +59,6 @@ pub const ALL: [Connector; 5] = [
         purpose: "Reminders before your events",
         access: "Read-only: Pip can see your events but never change them.",
         method: Method::Link(Provider::Outlook),
-    },
-    Connector {
-        id: ConnectorId::ICloudCalendar,
-        name: "iCloud Calendar",
-        badge: "i",
-        badge_rgb: 0x8E8E93,
-        purpose: "Reminders before your events",
-        access: "Read-only: Pip can see your events but never change them.",
-        method: Method::Link(Provider::ICloud),
-    },
-    Connector {
-        id: ConnectorId::OtherCalendar,
-        name: "Other calendar",
-        badge: "+",
-        badge_rgb: 0x6B7385,
-        purpose: "Any calendar with a subscription (.ics / webcal) link",
-        access: "Read-only: Pip can see your events but never change them.",
-        method: Method::Link(Provider::Other),
     },
 ];
 
@@ -131,7 +111,7 @@ mod tests {
 
     #[test]
     fn catalogue_is_complete_and_plain() {
-        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar, ConnectorId::OutlookCalendar, ConnectorId::ICloudCalendar, ConnectorId::OtherCalendar] {
+        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar, ConnectorId::OutlookCalendar] {
             let c = get(id);
             assert!(!c.name.is_empty() && !c.purpose.is_empty() && !c.access.is_empty());
             // No jargon in anything the user reads.

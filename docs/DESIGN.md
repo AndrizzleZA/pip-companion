@@ -395,3 +395,23 @@ calendars with the hidden one skipped, calendar default reminders applied, Googl
 Reconnect with the account preselected, events kept from cache while signed out and while offline,
 restart with no network, decline, and two-click Disconnect (token revoked, cache removed). Gmail
 and the link flow still pass their own tests. 55 unit tests; release 1.71 MB, startup 37 ms.
+
+## 14. One-click or not at all, 2026-09-22
+
+User's rule: every connector works the same way (click, choose account, allow) or it goes.
+
+- **Removed:** iCloud Calendar and the generic "paste any .ics link" connector. Apple has no OAuth
+  for calendars — only CalDAV with a hand-made app-specific password — so iCloud could never meet
+  the rule. The `.ics` sync engine stays (Outlook uses it, and existing feeds keep working); only
+  the entries in the catalogue and the "Add calendar" picker are gone.
+- **Outlook Calendar** stays link-based for now: Microsoft only registers apps inside an Azure
+  directory, which needs a free Azure sign-up with card verification on the owner's account.
+  Pending that decision it keeps the guided link flow; otherwise it goes the same way as iCloud.
+- The picker on Settings › Calendars now offers Google (sign-in) and Outlook (link).
+
+**Google app published (production).** Pip's consent screen now carries a home page and privacy
+policy (https://sites.google.com/view/pip-companion, on the owner's Google account; the authorised
+domain must be the top private domain `google.com`), and the app's publishing status is
+**In production**. That ends the 7-day refresh-token expiry that "Testing" apps get; the
+"Google hasn't verified this app" notice stays until (and unless) the app goes through Google's
+paid verification, and the 100-user cap applies while unverified.
