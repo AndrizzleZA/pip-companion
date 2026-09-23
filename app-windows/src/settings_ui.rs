@@ -127,6 +127,9 @@ pub enum UiAct {
     GmailReopen,
     /// None = connect; Some("") = add another account; Some(address) = reconnect that one.
     ConnectGoogleCalendar(Option<String>),
+    SyncConnect,
+    PhoneSyncNow,
+    SyncDisconnect,
     MailImportantMarker,
     MailEvery(i32),
 }
@@ -1491,7 +1494,7 @@ impl App {
         let s = c.s;
         let f = fonts();
         let feeds = &self.settings.dates.calendars;
-        let rows: Vec<&Connector> = connectors::ALL.iter().filter(|x| x.id != ConnectorId::Gmail).collect();
+        let rows: Vec<&Connector> = connectors::ALL.iter().filter(|x| x.id == ConnectorId::GoogleCalendar).collect();
         let google_feeds: Vec<_> = feeds.iter().filter(|fd| pip_core::gcal::feed_address(&fd.url).is_some()).collect();
         let waiting_google = matches!(&self.signin, SignIn::Waiting { connector: ConnectorId::GoogleCalendar, .. });
         let google_problem = match &self.signin {
@@ -1572,6 +1575,91 @@ impl App {
         c.y += h + 12.0 * s;
     }
 
+    /// Phone sync: connect, then show the pairing code to type on the phone.
+    fn draw_sync_connector(&self, c: &mut Ctx) {
+        let s = c.s;
+        let f = fonts();
+        let inner = c.x1 - c.x0;
+        let conn = connectors::get(ConnectorId::PhoneSync);
+        let on = self.sync_connected();
+        let waiting = matches!(&self.signin, SignIn::Waiting { connector: ConnectorId::PhoneSync, .. });
+        let problem = match &self.signin {
+            SignIn::Problem(ConnectorId::PhoneSync, p) => Some(p),
+            _ => None,
+        };
+        let code = self.sync_pairing_code();
+        let status = if self.sync_status.signed_out {
+            Some((WARN_AMBER, "Signed out — connect again".to_string()))
+        } else if let Some(e) = &self.sync_status.error {
+            Some((ERR_RED, e.clone()))
+        } else if self.sync_status.last_at > 0 {
+            let from = if self.sync_status.last_device.is_empty() { String::new() } else { format!(" · last change from {}", self.sync_status.last_device) };
+            Some((c.pal.muted, format!("Synced {}{from}", ago(platform::now_unix() - self.sync_status.last_at))))
+        } else if on {
+            Some((c.pal.muted, "Syncing shortly…".to_string()))
+        } else {
+            None
+        };
+
+        let access_lines = if on { Vec::new() } else { text::wrap(&f.regular, 12.0 * s, conn.access, inner) };
+        let note = if waiting {
+            Some((c.pal.muted, SIGNIN_HINT.to_string()))
+        } else {
+            problem.map(|p| (if p.is_error() { ERR_RED } else { c.pal.muted }, p.explain("Google")))
+        };
+        let note_lines = note.as_ref().map(|(_, t)| text::wrap(&f.regular, 12.0 * s, t, inner - 16.0 * s)).unwrap_or_default();
+        let mut h = 74.0 * s + access_lines.len() as f32 * 18.0 * s + note_lines.len() as f32 * 18.0 * s;
+        if status.is_some() {
+            h += 26.0 * s;
+        }
+        if on && code.is_some() {
+            h += 62.0 * s;
+        }
+        h += 8.0 * s;
+
+        let (_, y) = self.card(c, h, false);
+        self.connector_header(c, y, conn, on.then_some((OK_GREEN, "On")));
+        let main = if waiting {
+            Some(("Cancel", BtnStyle::Ghost, UiAct::GmailCancel))
+        } else if self.google_keys().is_none() {
+            None
+        } else if on {
+            Some(("Sync now", BtnStyle::Secondary, UiAct::PhoneSyncNow))
+        } else {
+            Some(("Continue with Google", BtnStyle::Primary, UiAct::SyncConnect))
+        };
+        if let Some((label, style, act)) = main {
+            let bw = ui::button_width(label, s);
+            c.button(c.x1 - bw, y + 21.0 * s, label, style, act);
+        }
+        let mut ty = y + 70.0 * s;
+        for l in &access_lines {
+            ty += 18.0 * s;
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, c.pal.muted, 1.0, l);
+        }
+        for l in &note_lines {
+            ty += 18.0 * s;
+            let rgb = note.as_ref().map(|(r, _)| *r).unwrap_or(c.pal.muted);
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, rgb, 1.0, l);
+        }
+        if let Some((rgb, text_)) = &status {
+            ty += 22.0 * s;
+            let shown = text::ellipsize(&f.regular, 12.0 * s, text_, inner - 120.0 * s);
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, *rgb, 1.0, &shown);
+        }
+        if on {
+            if let Some(code) = &code {
+                ty += 16.0 * s;
+                fill_rrect(c.pm, c.x0, ty, inner, 44.0 * s, 10.0 * s, color(c.pal.surface2, 1.0));
+                text::draw(c.pm, &f.regular, 11.5 * s, c.x0 + 14.0 * s, ty + 17.0 * s, c.pal.muted, 1.0, "Type this on your phone, once:");
+                text::draw(c.pm, &f.semibold, 15.0 * s, c.x0 + 14.0 * s, ty + 36.0 * s, c.pal.text, 1.0, code);
+                let dw = ui::button_width("Disconnect", s);
+                c.button(c.x1 - dw - 8.0 * s, ty + 8.0 * s, "Disconnect", BtnStyle::Danger, UiAct::SyncDisconnect);
+            }
+        }
+        c.y += h + 12.0 * s;
+    }
+
     fn page_connections(&self, c: &mut Ctx) {
         let s = c.s;
         let f = fonts();
@@ -1586,6 +1674,8 @@ impl App {
         self.draw_gmail_section(c);
         section_label(c, "CALENDARS");
         self.draw_calendar_connectors(c);
+        section_label(c, "YOUR OTHER DEVICES");
+        self.draw_sync_connector(c);
         c.y += 4.0 * s;
         let privacy = "Sign-ins are stored encrypted for your Windows account on this PC and never sent anywhere else. Disconnecting also removes Pip\u{2019}s access on the service\u{2019}s side.";
         for line in text::wrap(&f.regular, 12.0 * s, privacy, inner) {
@@ -1627,7 +1717,7 @@ impl App {
 
     fn ui_do_email(&mut self, act: &UiAct) -> bool {
         let prev = self.settings.clone();
-        if !matches!(act, UiAct::MailDisconnect(_) | UiAct::CalDelete(_)) {
+        if !matches!(act, UiAct::MailDisconnect(_) | UiAct::CalDelete(_) | UiAct::SyncDisconnect) {
             self.confirm_disconnect = None;
         }
         match act {
@@ -1643,6 +1733,16 @@ impl App {
                     self.disconnect_mail(id);
                 } else {
                     self.confirm_disconnect = Some(id.clone());
+                }
+            }
+            UiAct::SyncConnect => self.start_signin(ConnectorId::PhoneSync, None, false),
+            UiAct::PhoneSyncNow => self.sync_now(true),
+            UiAct::SyncDisconnect => {
+                // Two clicks, like the other disconnects.
+                if self.confirm_disconnect.as_deref() == Some("sync") {
+                    self.disconnect_sync();
+                } else {
+                    self.confirm_disconnect = Some("sync".into());
                 }
             }
             UiAct::ConnectGoogleCalendar(which) => {

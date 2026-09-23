@@ -68,6 +68,15 @@ pub static GOOGLE_CALENDAR: Service = Service {
     scope: pip_core::gcal::SCOPE,
 };
 
+/// Phone sync: Pip's own hidden folder in the user's Drive, nothing else.
+pub static GOOGLE_SYNC: Service = Service {
+    name: "Google",
+    auth: "https://accounts.google.com/o/oauth2/v2/auth",
+    token: "https://oauth2.googleapis.com/token",
+    revoke: "https://oauth2.googleapis.com/revoke",
+    scope: "https://www.googleapis.com/auth/drive.appdata",
+};
+
 pub fn gcal_api() -> String {
     endpoint(pip_core::gcal::API)
 }

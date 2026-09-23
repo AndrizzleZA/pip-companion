@@ -458,3 +458,33 @@ Measured after installing: startup 41 ms, ~2.0 MB private, 1.78 MB executable. S
 Google connections carried over untouched (they live in `%APPDATA%\Pip`, which install never
 touches). Install and uninstall were tested end-to-end against a redirected profile first, so the
 real machine only saw the final, working version.
+
+## 17. Phase 4, part one — sync between devices, 2026-09-23
+
+Before any Android tooling, the risky half was built and proven on the desktop: the data model,
+the merge rules, the encryption and the transport.
+
+**Where it lives.** One small encrypted file in the user's own Google Drive *application data
+folder* — hidden from Drive, unreadable by other apps, reached with `drive.appdata`, which Google
+classes as non-sensitive (no extra review, and Pip can touch nothing else in the account).
+
+**What travels.** Reminders, important dates, the preferences block, water history, streak and
+acknowledgements. Never the Gmail/Calendar sign-ins: each device connects those itself, so no
+access token is ever copied.
+
+**Merge rules** (`pip-core::sync`, unit tested, order-independent): newest edit per record wins;
+deletions leave tombstones (recorded by the shell whenever an item disappears from settings) so a
+stale device can't resurrect them; progress merges upward — highest water count per day, longest
+streak, union of acknowledgements.
+
+**Keys.** A random 256-bit key is made by whichever device starts the sync; it is wrapped with a
+key derived (Argon2id) from a 16-character pairing code and left in the same folder. A second
+device signs in, types the code, and unwraps it. A device that finds an existing key file refuses
+to start a rival sync and asks for the code instead.
+
+**Tested end to end** against a mock Drive with two independent Pip profiles: first device starts
+the sync, second joins with the code, edits flow both ways, a deletion propagates and stays
+deleted, a wrong code is refused, an expired access token is refreshed and retried rather than
+reported as a sign-out, and an offline round leaves local data untouched. Two bugs were caught this
+way: a second device happily creating a rival key, and the file lookup trusting Drive's search
+result without checking the name.

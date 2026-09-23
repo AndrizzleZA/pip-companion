@@ -38,6 +38,9 @@ pub struct State {
     pub mail_pending: Vec<EmailMsg>,
     /// Recently notified message ids, so nothing is announced twice.
     pub mail_seen: Vec<String>,
+    /// Reminders/dates deleted here: id → when. Sync carries these so another device
+    /// doesn't hand the deleted item back. Pruned after three months.
+    pub sync_deleted: BTreeMap<String, i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

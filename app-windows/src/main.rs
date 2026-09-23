@@ -10,6 +10,7 @@
 mod app;
 mod install;
 mod calsync;
+mod drivesync;
 mod mailsync;
 mod oauth;
 mod net;
@@ -260,6 +261,11 @@ unsafe extern "system" fn pet_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         oauth::WM_SIGNIN => {
             let result = oauth::take_result(lp);
             with_app(move |a| a.on_signin(result));
+            Some(0)
+        }
+        drivesync::WM_DRIVESYNC => {
+            let result = drivesync::take_result(lp);
+            with_app(move |a| a.on_drivesync(result));
             Some(0)
         }
         calsync::WM_CALSYNC => {

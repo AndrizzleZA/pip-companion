@@ -6,6 +6,7 @@
 pub enum ConnectorId {
     Gmail,
     GoogleCalendar,
+    PhoneSync,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub struct Connector {
     pub method: Method,
 }
 
-pub const ALL: [Connector; 2] = [
+pub const ALL: [Connector; 3] = [
     Connector {
         id: ConnectorId::Gmail,
         name: "Gmail",
@@ -45,6 +46,15 @@ pub const ALL: [Connector; 2] = [
         badge_rgb: 0x4285F4,
         purpose: "Reminders before your events",
         access: "Read-only: Pip can see your events but never change them.",
+        method: Method::SignIn,
+    },
+    Connector {
+        id: ConnectorId::PhoneSync,
+        name: "Phone sync",
+        badge: "⇅",
+        badge_rgb: 0x3BB08F,
+        purpose: "Keep Pip the same on your phone and this PC",
+        access: "Your reminders and dates are encrypted on this device first — Google stores only unreadable data, in a hidden folder Pip can’t see beyond.",
         method: Method::SignIn,
     },
 ];
@@ -98,7 +108,7 @@ mod tests {
 
     #[test]
     fn catalogue_is_complete_and_plain() {
-        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar] {
+        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar, ConnectorId::PhoneSync] {
             let c = get(id);
             assert!(!c.name.is_empty() && !c.purpose.is_empty() && !c.access.is_empty());
             // No jargon in anything the user reads.

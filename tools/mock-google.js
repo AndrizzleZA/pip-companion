@@ -23,6 +23,7 @@ const CLIENT_ID = "123456789012-pipmocktestclientabcdefghijkl.apps.googleusercon
 const CLIENT_SECRET = "GOCSPX-MockSecretForPipTests1234";
 const SCOPE = "https://www.googleapis.com/auth/gmail.metadata";
 const CAL_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 let challenges = {};        // code -> { challenge, redirect }
 let access = null;          // valid access token
 let refreshValid = "RT-1";
@@ -41,13 +42,20 @@ let calendars = [
   { id: "hidden@group.calendar.google.com", summary: "Hidden", selected: false, accessRole: "reader", defaultReminders: [] },
 ];
 let calEvents = {};   // calendarId -> [event]
+// Drive app-data folder: name -> { id, bytes }
+let appData = {};
+let driveSeq = 0;
 const revoked = [];
 
 const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const json = (res, code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(b) }); res.end(b); };
 const body = (req) => new Promise((r) => { let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => r(d)); });
-const newAccess = () => (access = "AT-" + ++accessSeq);
-const authed = (req) => req.headers.authorization === "Bearer " + access;
+const issued = new Set();
+const newAccess = () => { access = "AT-" + ++accessSeq; issued.add(access); return access; };
+const authed = (req) => {
+  const t = (req.headers.authorization || "").replace("Bearer ", "");
+  return issued.has(t) && t !== "expired";
+};
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1:" + port);
@@ -58,7 +66,7 @@ http.createServer(async (req, res) => {
       const q = url.searchParams;
       if (q.get("client_id") !== CLIENT_ID) return json(res, 400, { error: "invalid_client" });
       if (q.get("code_challenge_method") !== "S256" || !q.get("code_challenge")) return json(res, 400, { error: "pkce_required" });
-      if (q.get("scope") !== SCOPE && q.get("scope") !== CAL_SCOPE) return json(res, 400, { error: "unexpected_scope", scope: q.get("scope") });
+      if (![SCOPE, CAL_SCOPE, DRIVE_SCOPE].includes(q.get("scope"))) return json(res, 400, { error: "unexpected_scope", scope: q.get("scope") });
       if (!(q.get("prompt") || "").includes("consent")) return json(res, 400, { error: "consent_prompt_expected" });
       const back = `${q.get("redirect_uri")}/?state=${encodeURIComponent(q.get("state"))}`;
       if (mode.auth === "hang") return json(res, 200, { note: "user closed the tab" });
@@ -116,6 +124,47 @@ http.createServer(async (req, res) => {
       }
       return json(res, 404, {});
     }
+    // --- Google Drive (appDataFolder only, which is all Pip may touch) ---
+    if (p.startsWith("/drive/v3/files") || p.startsWith("/upload/drive/v3/files")) {
+      if (!authed(req)) return json(res, 401, { error: { code: 401, message: "Invalid Credentials" } });
+      const upload = p.startsWith("/upload/");
+      const idInPath = p.replace(/^\/(upload\/)?drive\/v3\/files\/?/, "");
+      if (!upload && req.method === "GET" && !idInPath) {
+        const q = url.searchParams.get("q") || "";
+        const m = q.match(/name='([^']+)'/);
+        const name = m ? m[1] : null;
+        const files = Object.entries(appData)
+          .filter(([n]) => !name || n === name)
+          .map(([n, f]) => ({ id: f.id, name: n }));
+        return json(res, 200, { files });
+      }
+      if (!upload && req.method === "GET" && url.searchParams.get("alt") === "media") {
+        const f = Object.values(appData).find((x) => x.id === idInPath);
+        if (!f) return json(res, 404, { error: { code: 404 } });
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": f.bytes.length });
+        return res.end(f.bytes);
+      }
+      if (upload && (req.method === "POST" || req.method === "PATCH")) {
+        const chunks = [];
+        await new Promise((r) => { req.on("data", (c) => chunks.push(c)); req.on("end", r); });
+        const raw = Buffer.concat(chunks);
+        const text = raw.toString("latin1");
+        const nameMatch = text.match(/"name":"([^"]+)"/);
+        const name = nameMatch ? nameMatch[1] : "unnamed";
+        // The payload is the part after the second header block, minus the trailing boundary.
+        const marker = "application/octet-stream\r\n\r\n";
+        const start = text.indexOf(marker) + marker.length;
+        const end = text.lastIndexOf("\r\n--pipsyncboundary--");
+        const bytes = raw.subarray(start, end);
+        const id = appData[name] ? appData[name].id : "file" + ++driveSeq;
+        appData[name] = { id, bytes };
+        return json(res, 200, { id, name });
+      }
+      return json(res, 404, {});
+    }
+    if (p === "/_drive") return json(res, 200, Object.fromEntries(Object.entries(appData).map(([n, f]) => [n, f.bytes.length])));
+    if (p === "/_drive_clear") { appData = {}; return json(res, 200, {}); }
+
     // --- Google Calendar ---
     if (p.startsWith("/calendar/v3/")) {
       if (!authed(req)) return json(res, 401, { error: { code: 401, message: "Invalid Credentials" } });
@@ -147,7 +196,7 @@ http.createServer(async (req, res) => {
       messages.push(m);
       return json(res, 200, m);
     }
-    if (p === "/_expire_access") { access = "expired"; return json(res, 200, {}); }
+    if (p === "/_expire_access") { issued.clear(); access = "expired"; return json(res, 200, {}); }
     if (p === "/_expire_history") { minValidHistory = historyId; return json(res, 200, {}); }
     if (p === "/_revoke") { refreshValid = "revoked-" + Date.now(); return json(res, 200, {}); }
     if (p === "/_mode" && req.method === "POST") { Object.assign(mode, JSON.parse(await body(req))); return json(res, 200, mode); }

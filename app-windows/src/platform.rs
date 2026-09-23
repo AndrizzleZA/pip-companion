@@ -16,6 +16,11 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// This PC's name, so the other device can say where a change came from.
+pub fn device_name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "This PC".into())
+}
+
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

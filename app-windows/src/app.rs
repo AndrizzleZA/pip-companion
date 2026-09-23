@@ -37,6 +37,7 @@ pub const T_BLINK: usize = 9;
 pub const T_TRIM: usize = 10;
 pub const T_CALSYNC: usize = 11;
 pub const T_MAIL: usize = 14;
+pub const T_SYNC: usize = 15;
 
 const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
@@ -103,6 +104,13 @@ pub struct App {
     pub mail_status: HashMap<String, MailStatus>,
     mail_running: bool,
     pub signin: SignIn,
+    pub sync_access: Option<(String, i64)>,
+    pub sync_status: SyncStatus,
+    drive_running: bool,
+    /// Set while joining an existing sync with a typed pairing code.
+    pub sync_join_code: Option<String>,
+    /// Another device already syncs: Pip is waiting for its pairing code.
+    pub sync_needs_code: bool,
     /// Account whose Disconnect button was clicked once (the second click confirms).
     pub confirm_disconnect: Option<String>,
     auth_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -182,6 +190,11 @@ impl App {
             mail_status: HashMap::new(),
             mail_running: false,
             signin: SignIn::Idle,
+            sync_access: None,
+            sync_status: SyncStatus::default(),
+            drive_running: false,
+            sync_join_code: None,
+            sync_needs_code: false,
             confirm_disconnect: None,
             auth_cancel: None,
             last_auth_url: String::new(),
@@ -503,6 +516,10 @@ impl App {
             T_MAIL => {
                 self.kill_timer(T_MAIL);
                 self.check_mail(false);
+            }
+            T_SYNC => {
+                self.kill_timer(T_SYNC);
+                self.sync_now(true);
             }
             T_TRIM => {
                 self.kill_timer(T_TRIM);
@@ -1296,6 +1313,15 @@ impl App {
                 schedule::reminder_edited(&mut self.state, &r.id, now);
             }
         }
+        // Anything the user removed becomes a tombstone, so sync deletes it everywhere.
+        for id in prev.reminders.iter().map(|r| &r.id).filter(|id| !self.settings.reminders.iter().any(|r| &r.id == *id)) {
+            self.state.sync_deleted.insert(id.clone(), now);
+            self.state_dirty = true;
+        }
+        for id in prev.dates.items.iter().map(|d| &d.id).filter(|id| !self.settings.dates.items.iter().any(|d| &d.id == *id)) {
+            self.state.sync_deleted.insert(id.clone(), now);
+            self.state_dirty = true;
+        }
         self.state.prune(&self.settings);
         if prev.pet.always_on_top != self.settings.pet.always_on_top {
             self.apply_topmost();
@@ -1377,6 +1403,25 @@ impl App {
                 self.pending.retain(|p| p.key != ItemKey::Water);
                 self.pet.bubble = None;
                 self.present(d, true);
+                "ok".into()
+            }
+            "add-remind" => {
+                // Distinct id + real timestamp, so sync tests behave like the real UI.
+                let prev = self.settings.clone();
+                let id = format!("r{:x}{:04x}", now_unix(), tick_ms() & 0xffff);
+                self.settings.reminders.push(pip_core::settings::CustomReminder {
+                    id: id.clone(),
+                    title: if arg.is_empty() { "Reminder".into() } else { arg.into() },
+                    updated_at: now_unix(),
+                    ..Default::default()
+                });
+                self.settings_changed(&prev);
+                id
+            }
+            "del-remind" => {
+                let prev = self.settings.clone();
+                self.settings.reminders.retain(|r| r.title != arg && r.id != arg);
+                self.settings_changed(&prev);
                 "ok".into()
             }
             "remind" => {
@@ -1535,6 +1580,35 @@ impl App {
                 }
                 self.last_auth_url.clone()
             }
+            "sync-connect" => {
+                self.start_signin(ConnectorId::PhoneSync, None, false);
+                self.last_auth_url.clone()
+            }
+            "sync-now" => {
+                self.sync_now(true);
+                "started".into()
+            }
+            "sync-join" => {
+                self.sync_join_with_code(arg.to_string());
+                "joining".into()
+            }
+            "sync-disconnect" => {
+                self.confirm_disconnect = Some("sync".into());
+                self.disconnect_sync();
+                "ok".into()
+            }
+            "sync" => format!(
+                "connected={} key={} code={:?} last_at={} from={:?} err={:?} signed_out={} reminders={:?} dates={:?}",
+                self.sync_connected(),
+                self.secrets.contains_key("sync:key"),
+                self.sync_pairing_code(),
+                self.sync_status.last_at,
+                self.sync_status.last_device,
+                self.sync_status.error,
+                self.sync_status.signed_out,
+                self.settings.reminders.iter().map(|r| format!("{}@{}", r.title, r.time)).collect::<Vec<_>>(),
+                self.settings.dates.items.iter().map(|d| d.title.clone()).collect::<Vec<_>>()
+            ),
             "gcal-signin" => {
                 // "" = connect, "+" = another account, "<address>" = reconnect
                 match arg {
@@ -1597,7 +1671,7 @@ impl App {
 ")
                 )
             }
-            "sync" => {
+            "cal-sync" => {
                 self.start_sync(true);
                 "started".into()
             }
@@ -1770,6 +1844,7 @@ impl App {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let (service, verify): (_, crate::oauth::Verify) = match connector {
+            ConnectorId::PhoneSync => (&crate::oauth::GOOGLE_SYNC, crate::drivesync::verify_drive),
             ConnectorId::GoogleCalendar => (&crate::oauth::GOOGLE_CALENDAR, crate::calsync::verify_gcal),
             _ => (&crate::oauth::GOOGLE, crate::mailsync::verify_gmail),
         };
@@ -1870,6 +1945,23 @@ impl App {
         };
         self.auth_cancel = None;
         self.signin = SignIn::Idle;
+        if connector == ConnectorId::PhoneSync {
+            match *result {
+                AuthResult::Ok(crate::oauth::Linked { refresh, access, expires_at, .. }) => self.on_sync_signin(refresh, access, expires_at),
+                AuthResult::Failed(problem) => {
+                    if problem.is_error() {
+                        self.store.log(&format!("Drive sign-in failed: {problem:?}"));
+                    }
+                    self.signin = SignIn::Problem(ConnectorId::PhoneSync, problem);
+                    if self.ui.is_some() {
+                        self.effects.push(Effect::OpenSettings);
+                    }
+                }
+                AuthResult::Cancelled => {}
+            }
+            self.ui_invalidate();
+            return;
+        }
         if connector == ConnectorId::GoogleCalendar {
             self.on_calendar_signin(*result);
             self.ui_invalidate();
@@ -2045,5 +2137,181 @@ impl App {
             let single = self.state.mail_pending.len() == 1;
             platform::open_url(&pip_core::email::gmail::web_link(&address, single.then_some(m.id.as_str())));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phone sync (encrypted, through the user's own Google Drive app folder)
+// ---------------------------------------------------------------------------------------------
+
+/// Where the sync sign-in and key live in the encrypted secrets file.
+const SYNC_REFRESH_KEY: &str = "sync:refresh";
+const SYNC_DATA_KEY: &str = "sync:key";
+const SYNC_CODE_KEY: &str = "sync:code";
+
+#[derive(Clone, Debug, Default)]
+pub struct SyncStatus {
+    pub last_at: i64,
+    pub last_device: String,
+    pub error: Option<String>,
+    pub signed_out: bool,
+}
+
+impl App {
+    pub fn sync_connected(&self) -> bool {
+        self.secrets.contains_key(SYNC_REFRESH_KEY)
+    }
+
+    /// The code the user types on the next device. Generated once, then kept so it can be shown
+    /// again (it only unlocks the key that already sits in the user's own Drive folder).
+    pub fn sync_pairing_code(&self) -> Option<String> {
+        self.secrets.get(SYNC_CODE_KEY).cloned()
+    }
+
+    fn sync_key(&self) -> Option<pip_core::sync::Key> {
+        let hex = self.secrets.get(SYNC_DATA_KEY)?;
+        let b = hex.as_bytes();
+        if b.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
+        }
+        Some(out)
+    }
+
+    /// A sync sign-in came back. The key isn't decided here: the first sync round finds out
+    /// whether another device already syncs (then Pip asks for its pairing code) or whether this
+    /// device gets to start the sync with a fresh key.
+    fn on_sync_signin(&mut self, refresh: String, access: String, expires_at: i64) {
+        self.secrets.insert(SYNC_REFRESH_KEY.into(), refresh);
+        self.secrets_dirty = true;
+        self.sync_access = Some((access, expires_at));
+        self.schedule_save();
+        if !self.pet.visible {
+            self.set_visible(true);
+        }
+        self.message("Setting up sync…".into(), 4);
+        self.anim(AnimKind::Nod);
+        self.sync_now(true);
+        if self.ui.is_some() {
+            self.effects.push(Effect::OpenSettings);
+        }
+    }
+
+    pub fn schedule_sync(&mut self, in_ms: u32) {
+        if self.sync_connected() {
+            self.set_timer(T_SYNC, in_ms.max(1_000));
+        } else {
+            self.kill_timer(T_SYNC);
+        }
+    }
+
+    /// Pushes local changes and pulls anything new. `force` ignores the "nothing changed" check.
+    pub fn sync_now(&mut self, force: bool) {
+        if self.drive_running || !self.sync_connected() {
+            return;
+        }
+        let (Some(keys), Some(refresh)) = (self.google_keys(), self.secrets.get(SYNC_REFRESH_KEY).cloned()) else { return };
+
+        let now = now_unix();
+        if !force && now - self.sync_status.last_at < 60 {
+            return; // don't hammer Drive on every small edit
+        }
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&crate::oauth::random_bytes(24));
+        // Offered only if nobody else syncs yet.
+        let candidate = match (self.sync_key(), &self.sync_join_code) {
+            (None, None) => {
+                let mut k = [0u8; 32];
+                k.copy_from_slice(&crate::oauth::random_bytes(32));
+                let mut seed = [0u8; 10];
+                seed.copy_from_slice(&crate::oauth::random_bytes(10));
+                let mut n = [0u8; 24];
+                n.copy_from_slice(&crate::oauth::random_bytes(24));
+                Some((k, pip_core::sync::pairing::code_from_bytes(&seed), n))
+            }
+            _ => None,
+        };
+        let device = platform::device_name();
+        let local = pip_core::sync::SyncDoc::from_local(&self.settings, &self.state, &device, now);
+        self.drive_running = true;
+        crate::drivesync::start(
+            self.hwnd,
+            crate::drivesync::SyncJob {
+                keys,
+                refresh,
+                access: self.sync_access.clone(),
+                key: self.sync_key(),
+                pairing_code: self.sync_join_code.clone(),
+                candidate,
+                local,
+                nonce,
+                now,
+            },
+        );
+    }
+
+    pub fn on_drivesync(&mut self, result: Box<crate::drivesync::SyncResult>) {
+        self.drive_running = false;
+        let r = *result;
+        self.sync_access = r.access;
+        if let Some((key, code)) = r.created_key {
+            self.secrets.insert(SYNC_DATA_KEY.into(), key.iter().map(|b| format!("{b:02x}")).collect());
+            self.secrets.insert(SYNC_CODE_KEY.into(), code);
+            self.secrets_dirty = true;
+            self.schedule_save();
+            self.message("Phone sync is on! Settings › Connections shows the code to type on your phone.".into(), 7);
+            self.anim(AnimKind::Celebrate);
+        }
+        self.sync_needs_code = r.needs_code;
+        if let Some(key) = r.adopted_key {
+            // Joined an existing sync: keep the key, forget the typed code.
+            self.secrets.insert(SYNC_DATA_KEY.into(), key.iter().map(|b| format!("{b:02x}")).collect());
+            self.secrets_dirty = true;
+            self.sync_join_code = None;
+            self.schedule_save();
+        }
+        self.sync_status.error = r.error.clone();
+        self.sync_status.signed_out = r.signed_out;
+        if let Some(doc) = r.merged {
+            let prev = self.settings.clone();
+            doc.apply(&mut self.settings, &mut self.state);
+            self.sync_status.last_at = now_unix();
+            self.sync_status.last_device = doc.device.clone();
+            self.state_dirty = true;
+            if prev != self.settings {
+                self.settings_changed(&prev);
+            } else {
+                self.schedule_save();
+            }
+            self.reschedule();
+        }
+        // Healthy: every quarter hour. Failing: back off to an hour.
+        self.schedule_sync(if self.sync_status.error.is_some() { 60 * 60_000 } else { 15 * 60_000 });
+        self.ui_invalidate();
+    }
+
+    /// "This phone/PC already syncs": adopt the existing key using the code from the other device.
+    pub fn sync_join_with_code(&mut self, code: String) {
+        self.sync_join_code = Some(code);
+        self.sync_now(true);
+    }
+
+    pub fn disconnect_sync(&mut self) {
+        self.confirm_disconnect = None;
+        if let Some(token) = self.secrets.remove(SYNC_REFRESH_KEY) {
+            crate::oauth::revoke_in_background(&crate::oauth::GOOGLE_SYNC, token);
+        }
+        // The key stays on this device only if sync is set up again; drop it with the sign-in.
+        self.secrets.remove(SYNC_DATA_KEY);
+        self.secrets.remove(SYNC_CODE_KEY);
+        self.secrets_dirty = true;
+        self.sync_access = None;
+        self.sync_status = SyncStatus::default();
+        self.kill_timer(T_SYNC);
+        self.schedule_save();
+        self.ui_invalidate();
     }
 }

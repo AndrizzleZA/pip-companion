@@ -118,7 +118,7 @@ impl SyncDoc {
             }),
             reminders: settings.reminders.clone(),
             dates: settings.dates.items.clone(),
-            deleted: BTreeMap::new(),
+            deleted: state.sync_deleted.clone(),
             progress: Progress { water, streak: state.streak, best_streak: state.best_streak, acked },
         }
     }
@@ -207,6 +207,10 @@ impl SyncDoc {
                 settings.dates.keywords = p.date_keywords.clone();
             }
         }
+        // Remember the merged tombstones, and forget ones older than three months.
+        state.sync_deleted = self.deleted.clone();
+        let cutoff = self.updated_at - 90 * 86_400;
+        state.sync_deleted.retain(|_, when| *when >= cutoff);
         settings.reminders = self.reminders.clone();
         settings.reminders.sort_by_key(|r| r.time);
         settings.dates.items = self.dates.clone();
