@@ -13,7 +13,6 @@ use crate::tray::Tray;
 use pip_core::agenda;
 use pip_core::calendar::Event;
 use pip_core::connectors::{ConnectorId, SignInProblem};
-use pip_core::links::{self, LinkCheck, Provider};
 use std::collections::HashMap;
 use chrono::{Local, Timelike};
 use pip_core::schedule::{self, Delivery, Due, ItemKey, Priority};
@@ -37,19 +36,7 @@ pub const T_NEXT: usize = 8;
 pub const T_BLINK: usize = 9;
 pub const T_TRIM: usize = 10;
 pub const T_CALSYNC: usize = 11;
-pub const T_CLIPWAIT: usize = 12;
-pub const T_CLIPREAD: usize = 13;
 pub const T_MAIL: usize = 14;
-
-/// Clipboard watching lasts at most this long after starting to add a calendar.
-pub const CLIPWAIT_MS: u32 = 10 * 60_000;
-
-/// "Add a calendar" in progress: Pip waits for the link to be copied in the browser.
-pub struct CalWizard {
-    pub provider: Provider,
-    /// Last problem noticed with a copied link, shown in Settings.
-    pub hint: Option<String>,
-}
 
 const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
@@ -104,14 +91,10 @@ pub struct App {
     sync_running: bool,
     sync_failures: u32,
     secrets_dirty: bool,
-    pub cal_wizard: Option<CalWizard>,
-    /// The provider picker is showing in Settings › Calendars.
-    pub cal_picking: bool,
     /// Page to show when Settings opens next.
     pub open_page: Option<usize>,
     /// Encrypted-at-rest secrets, decrypted in memory (calendar links, Google keys, sign-ins).
     pub secrets: std::collections::BTreeMap<String, String>,
-    clip_listening: bool,
     pub mail_access: HashMap<String, (String, i64)>,
     pub mail_status: HashMap<String, MailStatus>,
     mail_running: bool,
@@ -189,11 +172,8 @@ impl App {
             sync_running: false,
             sync_failures: 0,
             secrets_dirty: false,
-            cal_wizard: None,
-            cal_picking: false,
             open_page: None,
             secrets: Default::default(),
-            clip_listening: false,
             mail_access: HashMap::new(),
             mail_status: HashMap::new(),
             mail_running: false,
@@ -515,15 +495,6 @@ impl App {
             T_CALSYNC => {
                 self.kill_timer(T_CALSYNC);
                 self.start_sync(true);
-            }
-            T_CLIPREAD => {
-                self.kill_timer(T_CLIPREAD);
-                self.read_clipboard_for_wizard();
-            }
-            T_CLIPWAIT => {
-                self.kill_timer(T_CLIPWAIT);
-                self.end_cal_wizard();
-                self.update_clip_listener();
             }
             T_MAIL => {
                 self.kill_timer(T_MAIL);
@@ -1090,7 +1061,6 @@ impl App {
     pub const ID_DND_OFF: u32 = 112;
     pub const ID_TOP: u32 = 120;
     pub const ID_SETTINGS: u32 = 130;
-    pub const ID_ADD_CAL: u32 = 131;
     pub const ID_QUIT: u32 = 140;
 
     /// Builds the context menu (shared by pet right-click and the tray icon).
@@ -1130,7 +1100,6 @@ impl App {
             );
             if self.settings.dates.calendars.is_empty() {
                 AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
-                AppendMenuW(m, MF_STRING, Self::ID_ADD_CAL as usize, w("Add a calendar…").as_ptr());
             }
             AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
             AppendMenuW(m, MF_STRING, Self::ID_SETTINGS as usize, w("Settings…").as_ptr());
@@ -1178,15 +1147,6 @@ impl App {
                 self.ui_invalidate();
             }
             Self::ID_SETTINGS => self.effects.push(Effect::OpenSettings),
-            Self::ID_ADD_CAL => {
-                self.open_page = Some(crate::settings_ui::CALENDARS_PAGE);
-                self.cal_picking = true;
-                self.effects.push(Effect::OpenSettings);
-                if let Some(ui) = &mut self.ui {
-                    ui.page = crate::settings_ui::page_at(crate::settings_ui::CALENDARS_PAGE);
-                }
-                self.ui_invalidate();
-            }
             Self::ID_QUIT => self.effects.push(Effect::Quit),
             _ => {}
         }
@@ -1558,12 +1518,6 @@ impl App {
                 self.settings_changed(&prev);
                 "ok".into()
             }
-            "wizard" => {
-                self.effects.push(Effect::OpenSettings);
-                let p = match arg { "google" => Provider::Google, "outlook" => Provider::Outlook, "icloud" => Provider::ICloud, _ => Provider::Other };
-                self.begin_cal_wizard(p);
-                "ok".into()
-            }
             "menu" => {
                 self.menu_command(arg.parse().unwrap_or(0));
                 "ok".into()
@@ -1775,120 +1729,6 @@ impl App {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Guided "add a calendar": open the right page, then pick the link up from the clipboard.
-// The clipboard is only watched during this flow (max 10 minutes), via Windows' change
-// notification — no polling, and anything that isn't a calendar link is ignored and forgotten.
-// ---------------------------------------------------------------------------------------------
-
-impl App {
-    pub fn provider_page(provider: Provider) -> Option<&'static str> {
-        match provider {
-            Provider::Google => Some("https://calendar.google.com/calendar/r/settings"),
-            Provider::Outlook => Some("https://outlook.live.com/mail/0/options/calendar/SharedCalendars"),
-            Provider::ICloud => Some("https://www.icloud.com/calendar/"),
-            Provider::Other => None,
-        }
-    }
-
-    pub fn begin_cal_wizard(&mut self, provider: Provider) {
-        self.cal_picking = false;
-        self.cal_wizard = Some(CalWizard { provider, hint: None });
-        self.update_clip_listener();
-        self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
-        if let Some(url) = App::provider_page(provider) {
-            platform::open_url(url);
-        }
-        // Maybe it's already on the clipboard — but only take a link from the chosen provider, so an
-        // old unrelated link lying around isn't added by surprise.
-        let text = platform::clipboard_text().filter(|t| match links::check(t, false) {
-            LinkCheck::Calendar { provider: p, .. } => p == provider,
-            _ => false,
-        });
-        self.try_calendar_text(text, provider == Provider::Other, true);
-        self.ui_invalidate();
-    }
-
-    pub fn end_cal_wizard(&mut self) {
-        self.cal_wizard = None;
-        self.update_clip_listener();
-        self.cal_picking = false;
-        self.ui_invalidate();
-    }
-
-    /// WM_CLIPBOARDUPDATE while adding a calendar. Reading is deferred: the app that just copied
-    /// may open the clipboard again right away (.NET, some browsers), and grabbing it in that
-    /// instant would make *their* copy fail. Bursts of updates coalesce into one read.
-    pub fn on_clipboard(&mut self) {
-        if self.cal_wizard.is_some() {
-            self.set_timer(T_CLIPREAD, 200);
-        }
-    }
-
-    fn read_clipboard_for_wizard(&mut self) {
-        let Some(w) = &self.cal_wizard else { return };
-        let lenient = w.provider == Provider::Other;
-        let text = platform::clipboard_text();
-        self.try_calendar_text(text, lenient, false);
-    }
-
-    /// The "Paste link" button: take whatever is on the clipboard now.
-    pub fn paste_calendar_now(&mut self) {
-        let text = platform::clipboard_text();
-        if !self.try_calendar_text(text, true, false) {
-            if let Some(w) = &mut self.cal_wizard {
-                w.hint.get_or_insert_with(|| "Copy the calendar link first, then press Paste link.".into());
-            }
-            self.ui_invalidate();
-        }
-    }
-
-    /// Adds the calendar if `text` holds a usable link. Returns true when one was added.
-    fn try_calendar_text(&mut self, text: Option<String>, lenient: bool, quiet: bool) -> bool {
-        let Some(text) = text else { return false };
-        match links::check(&text, lenient) {
-            LinkCheck::Calendar { url, provider } => {
-                if self.settings.dates.calendars.iter().any(|c| c.url.trim() == url) {
-                    if let Some(w) = &mut self.cal_wizard {
-                        w.hint = Some("That calendar is already added.".into());
-                    }
-                    self.ui_invalidate();
-                    return false;
-                }
-                let prev = self.settings.clone();
-                let id = format!("c{:x}{:04x}", now_unix(), tick_ms() & 0xffff);
-                self.settings.dates.calendars.push(pip_core::calendar::CalendarFeed {
-                    id,
-                    url,
-                    updated_at: now_unix(),
-                    ..Default::default()
-                });
-                self.settings_changed(&prev); // encrypts the link and syncs in a moment
-                self.end_cal_wizard();
-                let what = provider.your_calendar();
-                if !self.pet.visible {
-                    self.set_visible(true);
-                }
-                self.message(format!("Got it! I'll keep an eye on {what}. Important events will get a gentle nudge."), 6);
-                self.anim(AnimKind::Celebrate);
-                true
-            }
-            LinkCheck::Mistake(m) => {
-                if let Some(w) = &mut self.cal_wizard {
-                    w.hint = Some(m.clone());
-                }
-                if !quiet {
-                    self.message(m, 8);
-                    self.anim(AnimKind::Wiggle);
-                }
-                self.ui_invalidate();
-                false
-            }
-            LinkCheck::NotALink => false,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
 // Important email (Gmail, metadata-only)
 // ---------------------------------------------------------------------------------------------
 //
@@ -1905,31 +1745,6 @@ fn cal_refresh_key(feed_id: &str) -> String {
 }
 
 impl App {
-    /// Calendar-link flow only: the clipboard listener is on just while the user is copying a link.
-    pub fn update_clip_listener(&mut self) {
-        let want = self.cal_wizard.is_some();
-        if want == self.clip_listening {
-            if want {
-                self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
-            }
-            return;
-        }
-        unsafe {
-            if want {
-                windows_sys::Win32::System::DataExchange::AddClipboardFormatListener(self.hwnd);
-            } else {
-                windows_sys::Win32::System::DataExchange::RemoveClipboardFormatListener(self.hwnd);
-            }
-        }
-        self.clip_listening = want;
-        if want {
-            self.set_timer(T_CLIPWAIT, CLIPWAIT_MS);
-        } else {
-            self.kill_timer(T_CLIPWAIT);
-            self.kill_timer(T_CLIPREAD);
-        }
-    }
-
     /// Pip's built-in Google identity (None only in developer builds made without it).
     pub fn google_keys(&self) -> Option<crate::oauth::ClientKeys> {
         crate::oauth::builtin_google_client()

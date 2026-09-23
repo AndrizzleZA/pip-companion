@@ -18,20 +18,16 @@ and roadmap.
   small badge on the pet after a few minutes; click the pet to bring it back.
 
 **Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Dates (with an optional
-heads-up a few days before). South African public holidays are built in. In Settings › Calendars (or right-click › Add a
-calendar…), pick Google, Outlook or iCloud: Pip opens the right page and picks the link up as soon as
-you copy it — no pasting needed. Then events show on today's card, and important ones (own alert, important calendar or a
-keyword like "dentist") get a gentle alert. A quiet morning summary lists what's on.
+heads-up a few days before). South African public holidays are built in. Calendars come from Google
+(Settings › Connections): events show on today’s card, important ones (own alert, important calendar
+or a keyword like “dentist”) get a gentle alert, and a quiet morning summary lists what’s on.
 
-**Connections.** Settings › Connections lists everything Pip can link to. **Gmail**: click *Continue
-with Google*, choose your account and Allow in the browser — Pip notices when you are done and shows
-the account. Pip only ever sees senders, subjects and labels of new mail, never the contents, and
-can’t send or delete. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
-ever signs Pip out, the account shows **Reconnect**. Choose important senders and subject words in
-Settings › Email. **Google Calendar** connects the same one-click way and behaves like any other calendar in Pip
-(on/off switch, “important” flag, offline cache). **Outlook Calendar** still uses the guided link flow:
-registering a Microsoft app needs an Azure directory of its own. iCloud and free-form calendar links
-were removed — Apple offers no calendar sign-in at all, only CalDAV with an app password.
+**Connections.** Settings › Connections has two entries, and both work the same way: click *Continue
+with Google*, choose your account, Allow, and you’re back in Pip, connected. **Gmail** gives Pip the
+sender, subject and labels of new mail — never the contents — and it can’t send or delete. **Google
+Calendar** is read-only. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
+ever signs Pip out, the entry shows **Reconnect**. Important senders and subject words live in
+Settings › Email.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.

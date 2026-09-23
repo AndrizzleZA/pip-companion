@@ -1,22 +1,18 @@
 //! The catalogue of services Pip can connect to, described in plain language. Shells render
-//! this list (Settings › Connections) and map each entry to how it connects: a browser sign-in
-//! (OAuth) or a private subscription link. Adding a service = one entry here + its sync code.
-
-use crate::links::Provider;
+//! this list (Settings › Connections). Every connector is a browser sign-in: click, choose the
+//! account, allow. Adding a service = one entry here + its sync code.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectorId {
     Gmail,
     GoogleCalendar,
-    OutlookCalendar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
-    /// "Sign in with …" in the browser; Pip gets a revocable, limited permission.
+    /// "Sign in with …" in the browser; Pip gets a revocable, limited permission. Every connector
+    /// works this way: a service that cannot offer it does not become a connector at all.
     SignIn,
-    /// A private read-only calendar link, picked up when the user copies it.
-    Link(Provider),
 }
 
 pub struct Connector {
@@ -32,7 +28,7 @@ pub struct Connector {
     pub method: Method,
 }
 
-pub const ALL: [Connector; 3] = [
+pub const ALL: [Connector; 2] = [
     Connector {
         id: ConnectorId::Gmail,
         name: "Gmail",
@@ -50,15 +46,6 @@ pub const ALL: [Connector; 3] = [
         purpose: "Reminders before your events",
         access: "Read-only: Pip can see your events but never change them.",
         method: Method::SignIn,
-    },
-    Connector {
-        id: ConnectorId::OutlookCalendar,
-        name: "Outlook Calendar",
-        badge: "O",
-        badge_rgb: 0x0F6CBD,
-        purpose: "Reminders before your events",
-        access: "Read-only: Pip can see your events but never change them.",
-        method: Method::Link(Provider::Outlook),
     },
 ];
 
@@ -111,7 +98,7 @@ mod tests {
 
     #[test]
     fn catalogue_is_complete_and_plain() {
-        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar, ConnectorId::OutlookCalendar] {
+        for id in [ConnectorId::Gmail, ConnectorId::GoogleCalendar] {
             let c = get(id);
             assert!(!c.name.is_empty() && !c.purpose.is_empty() && !c.access.is_empty());
             // No jargon in anything the user reads.

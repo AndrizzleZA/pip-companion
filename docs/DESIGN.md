@@ -415,3 +415,22 @@ domain must be the top private domain `google.com`), and the app's publishing st
 **In production**. That ends the 7-day refresh-token expiry that "Testing" apps get; the
 "Google hasn't verified this app" notice stays until (and unless) the app goes through Google's
 paid verification, and the 100-user cap applies while unverified.
+
+## 15. Google-only connectors, 2026-09-23
+
+The owner declined the Azure sign-up Microsoft requires, so by the standing rule ("one click or it
+goes") the Outlook connector and the whole subscription-link flow were removed:
+
+- `pip-core::links` (link recognition) deleted; `Method` now has a single variant, `SignIn`.
+- Gone from the shell: the provider picker, the guided "copy the link" wizard, its hints and
+  10-minute window, the **clipboard listener** (`AddClipboardFormatListener`, `WM_CLIPBOARDUPDATE`,
+  the T_CLIPWAIT/T_CLIPREAD timers) and the tray's "Add a calendar…" entry. Pip no longer watches
+  the clipboard at all, which removes an OS hook and a whole class of privacy questions.
+- The `.ics` engine (`core::calendar` + the calsync ICS branch) stays: it costs nothing at rest and
+  keeps any pre-existing subscribed feed syncing. Nothing in the UI can create one any more.
+- Settings › Calendars still lists calendars (name, on/off, important, delete); connecting and
+  disconnecting happens on Connections.
+
+Result: every connector in Pip is now a browser sign-in. 52 unit tests; release 1.69 MB (−16 KB),
+startup 31 ms, ~1.9 MB private memory. Both connectors re-verified against the mock afterwards:
+connect, reconnect, disconnect, and Gmail's rules still firing.
