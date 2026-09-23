@@ -107,10 +107,15 @@ pub struct App {
     pub sync_access: Option<(String, i64)>,
     pub sync_status: SyncStatus,
     drive_running: bool,
-    /// Set while joining an existing sync with a typed pairing code.
-    pub sync_join_code: Option<String>,
-    /// Another device already syncs: Pip is waiting for its pairing code.
-    pub sync_needs_code: bool,
+    /// This device asked to join an existing sync and is waiting for an Approve tap elsewhere.
+    pub sync_waiting: bool,
+    /// The other device said Not now; nothing happens here until the user asks again.
+    pub sync_refused: bool,
+    /// Devices asking to be let in, shown as "… wants to sync".
+    pub sync_requests: Vec<pip_core::sync::join::Request>,
+    /// Taps waiting to go out with the next sync round.
+    sync_approve: Option<pip_core::sync::join::Request>,
+    sync_deny: Vec<String>,
     /// Account whose Disconnect button was clicked once (the second click confirms).
     pub confirm_disconnect: Option<String>,
     auth_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -193,8 +198,11 @@ impl App {
             sync_access: None,
             sync_status: SyncStatus::default(),
             drive_running: false,
-            sync_join_code: None,
-            sync_needs_code: false,
+            sync_waiting: false,
+            sync_refused: false,
+            sync_requests: Vec::new(),
+            sync_approve: None,
+            sync_deny: Vec::new(),
             confirm_disconnect: None,
             auth_cancel: None,
             last_auth_url: String::new(),
@@ -1588,9 +1596,29 @@ impl App {
                 self.sync_now(true);
                 "started".into()
             }
-            "sync-join" => {
-                self.sync_join_with_code(arg.to_string());
-                "joining".into()
+            "sync-ask-again" => {
+                self.ask_to_join_again();
+                "asking".into()
+            }
+            "sync-approve" => {
+                let id = if arg.is_empty() { self.sync_requests.first().map(|r| r.id.clone()) } else { Some(arg.to_string()) };
+                match id {
+                    Some(id) => {
+                        self.approve_join(&id);
+                        "approving".into()
+                    }
+                    None => "nothing waiting".into(),
+                }
+            }
+            "sync-deny" => {
+                let id = if arg.is_empty() { self.sync_requests.first().map(|r| r.id.clone()) } else { Some(arg.to_string()) };
+                match id {
+                    Some(id) => {
+                        self.deny_join(&id);
+                        "denying".into()
+                    }
+                    None => "nothing waiting".into(),
+                }
             }
             "sync-disconnect" => {
                 self.confirm_disconnect = Some("sync".into());
@@ -1598,10 +1626,12 @@ impl App {
                 "ok".into()
             }
             "sync" => format!(
-                "connected={} key={} code={:?} last_at={} from={:?} err={:?} signed_out={} reminders={:?} dates={:?}",
+                "connected={} key={} waiting={} refused={} asking={:?} last_at={} from={:?} err={:?} signed_out={} reminders={:?} dates={:?}",
                 self.sync_connected(),
                 self.secrets.contains_key("sync:key"),
-                self.sync_pairing_code(),
+                self.sync_waiting,
+                self.sync_refused,
+                self.sync_requests.iter().map(|r| format!("{}:{}", r.id, r.device)).collect::<Vec<_>>(),
                 self.sync_status.last_at,
                 self.sync_status.last_device,
                 self.sync_status.error,
@@ -2144,10 +2174,10 @@ impl App {
 // Phone sync (encrypted, through the user's own Google Drive app folder)
 // ---------------------------------------------------------------------------------------------
 
-/// Where the sync sign-in and key live in the encrypted secrets file.
+/// Where the sync sign-in, the shared key and a join attempt live in the secrets file.
 const SYNC_REFRESH_KEY: &str = "sync:refresh";
 const SYNC_DATA_KEY: &str = "sync:key";
-const SYNC_CODE_KEY: &str = "sync:code";
+const SYNC_JOIN_KEY: &str = "sync:join";
 
 #[derive(Clone, Debug, Default)]
 pub struct SyncStatus {
@@ -2157,33 +2187,66 @@ pub struct SyncStatus {
     pub signed_out: bool,
 }
 
+fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    let b = s.as_bytes();
+    if b.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
 impl App {
     pub fn sync_connected(&self) -> bool {
         self.secrets.contains_key(SYNC_REFRESH_KEY)
     }
 
-    /// The code the user types on the next device. Generated once, then kept so it can be shown
-    /// again (it only unlocks the key that already sits in the user's own Drive folder).
-    pub fn sync_pairing_code(&self) -> Option<String> {
-        self.secrets.get(SYNC_CODE_KEY).cloned()
+    /// True once this device holds the shared key, i.e. it is really syncing.
+    pub fn sync_ready(&self) -> bool {
+        self.sync_key().is_some()
     }
 
     fn sync_key(&self) -> Option<pip_core::sync::Key> {
-        let hex = self.secrets.get(SYNC_DATA_KEY)?;
-        let b = hex.as_bytes();
-        if b.len() != 64 {
-            return None;
-        }
-        let mut out = [0u8; 32];
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
-        }
-        Some(out)
+        unhex32(self.secrets.get(SYNC_DATA_KEY)?)
     }
 
-    /// A sync sign-in came back. The key isn't decided here: the first sync round finds out
-    /// whether another device already syncs (then Pip asks for its pairing code) or whether this
-    /// device gets to start the sync with a fresh key.
+    fn set_sync_key(&mut self, key: pip_core::sync::Key) {
+        self.secrets.insert(SYNC_DATA_KEY.into(), hex32(&key));
+        self.secrets.remove(SYNC_JOIN_KEY); // the join attempt is over
+        self.secrets_dirty = true;
+        self.sync_waiting = false;
+        self.schedule_save();
+    }
+
+    /// The join attempt this device has in flight, and whether it has reached the cloud yet.
+    /// The seed stays here; only the public half is ever published.
+    fn sync_joining(&self) -> Option<(crate::drivesync::Joining, bool)> {
+        let raw = self.secrets.get(SYNC_JOIN_KEY)?;
+        let mut parts = raw.split('|');
+        let id = parts.next()?.to_string();
+        let seed = unhex32(parts.next()?)?;
+        let created_at = parts.next()?.parse().ok()?;
+        let published = parts.next() == Some("1");
+        Some((crate::drivesync::Joining { id, seed, device: platform::device_name(), created_at }, published))
+    }
+
+    fn set_sync_joining(&mut self, j: &crate::drivesync::Joining, published: bool) {
+        let flag = if published { "1" } else { "0" };
+        self.secrets.insert(SYNC_JOIN_KEY.into(), format!("{}|{}|{}|{flag}", j.id, hex32(&j.seed), j.created_at));
+        self.secrets_dirty = true;
+        self.schedule_save();
+    }
+
+    /// A sync sign-in came back. Which device starts the sync isn't decided here: the first round
+    /// finds out whether this account already syncs (then Pip asks to be let in) or not (then this
+    /// device starts it with a fresh key).
     fn on_sync_signin(&mut self, refresh: String, access: String, expires_at: i64) {
         self.secrets.insert(SYNC_REFRESH_KEY.into(), refresh);
         self.secrets_dirty = true;
@@ -2208,9 +2271,17 @@ impl App {
         }
     }
 
+    /// Called when the Connections page opens, so a waiting device shows up within a second or two
+    /// instead of at the next quarter-hourly round.
+    pub fn sync_peek(&mut self) {
+        if self.sync_connected() && now_unix() - self.sync_status.last_at > 20 {
+            self.sync_now(true);
+        }
+    }
+
     /// Pushes local changes and pulls anything new. `force` ignores the "nothing changed" check.
     pub fn sync_now(&mut self, force: bool) {
-        if self.drive_running || !self.sync_connected() {
+        if self.drive_running || !self.sync_connected() || (self.sync_refused && self.sync_key().is_none()) {
             return;
         }
         let (Some(keys), Some(refresh)) = (self.google_keys(), self.secrets.get(SYNC_REFRESH_KEY).cloned()) else { return };
@@ -2221,19 +2292,32 @@ impl App {
         }
         let mut nonce = [0u8; 24];
         nonce.copy_from_slice(&crate::oauth::random_bytes(24));
-        // Offered only if nobody else syncs yet.
-        let candidate = match (self.sync_key(), &self.sync_join_code) {
-            (None, None) => {
+        // With no key yet, carry both answers: a key in case this device is the first, and a
+        // request to be let in in case it isn't.
+        let (candidate, joining, joining_published) = match self.sync_key() {
+            Some(_) => (None, None, false),
+            None => {
                 let mut k = [0u8; 32];
                 k.copy_from_slice(&crate::oauth::random_bytes(32));
-                let mut seed = [0u8; 10];
-                seed.copy_from_slice(&crate::oauth::random_bytes(10));
-                let mut n = [0u8; 24];
-                n.copy_from_slice(&crate::oauth::random_bytes(24));
-                Some((k, pip_core::sync::pairing::code_from_bytes(&seed), n))
+                let (j, published) = match self.sync_joining() {
+                    Some((j, p)) if now - j.created_at <= pip_core::sync::join::EXPIRES_SECS => (j, p),
+                    _ => {
+                        let j = self.new_joining(now);
+                        self.set_sync_joining(&j, false);
+                        (j, false)
+                    }
+                };
+                (Some(k), Some(j), published)
             }
-            _ => None,
         };
+        let approve = self.sync_approve.take().map(|req| {
+            let mut random = [0u8; 32];
+            random.copy_from_slice(&crate::oauth::random_bytes(32));
+            let mut n = [0u8; 24];
+            n.copy_from_slice(&crate::oauth::random_bytes(24));
+            (req, random, n)
+        });
+        let deny = std::mem::take(&mut self.sync_deny);
         let device = platform::device_name();
         let local = pip_core::sync::SyncDoc::from_local(&self.settings, &self.state, &device, now);
         self.drive_running = true;
@@ -2244,8 +2328,11 @@ impl App {
                 refresh,
                 access: self.sync_access.clone(),
                 key: self.sync_key(),
-                pairing_code: self.sync_join_code.clone(),
+                joining,
+                joining_published,
                 candidate,
+                approve,
+                deny,
                 local,
                 nonce,
                 now,
@@ -2253,25 +2340,54 @@ impl App {
         );
     }
 
+    /// A fresh attempt to be let in: a random id for the file name and a private seed.
+    fn new_joining(&self, now: i64) -> crate::drivesync::Joining {
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&crate::oauth::random_bytes(32));
+        let id: String = crate::oauth::random_bytes(5).iter().map(|b| format!("{b:02x}")).collect();
+        crate::drivesync::Joining { id, seed, device: platform::device_name(), created_at: now }
+    }
+
     pub fn on_drivesync(&mut self, result: Box<crate::drivesync::SyncResult>) {
         self.drive_running = false;
         let r = *result;
         self.sync_access = r.access;
-        if let Some((key, code)) = r.created_key {
-            self.secrets.insert(SYNC_DATA_KEY.into(), key.iter().map(|b| format!("{b:02x}")).collect());
-            self.secrets.insert(SYNC_CODE_KEY.into(), code);
+        if r.join_published {
+            if let Some((j, _)) = self.sync_joining() {
+                self.set_sync_joining(&j, true);
+            }
+        }
+        self.sync_waiting = r.waiting;
+        if r.refused {
+            self.secrets.remove(SYNC_JOIN_KEY); // asking again starts a fresh attempt
             self.secrets_dirty = true;
+            self.sync_refused = true;
+            self.sync_waiting = false;
             self.schedule_save();
-            self.message("Phone sync is on! Settings › Connections shows the code to type on your phone.".into(), 7);
+            self.message("Your other device said not now, so sync is still off here.".into(), 8);
+        }
+        if let Some(key) = r.created_key {
+            self.set_sync_key(key);
+            self.message("Sync is on! Sign in to Pip on your phone with the same Google account.".into(), 8);
             self.anim(AnimKind::Celebrate);
         }
-        self.sync_needs_code = r.needs_code;
         if let Some(key) = r.adopted_key {
-            // Joined an existing sync: keep the key, forget the typed code.
-            self.secrets.insert(SYNC_DATA_KEY.into(), key.iter().map(|b| format!("{b:02x}")).collect());
-            self.secrets_dirty = true;
-            self.sync_join_code = None;
-            self.schedule_save();
+            self.set_sync_key(key);
+            self.message("Approved — this device is in sync now!".into(), 6);
+            self.anim(AnimKind::Celebrate);
+        }
+        if r.fetched_requests {
+            // Mention anyone new; the Connections page carries the Approve button.
+            let known: Vec<&str> = self.sync_requests.iter().map(|q| q.id.as_str()).collect();
+            if let Some(q) = r.requests.iter().find(|q| !known.contains(&q.id.as_str())) {
+                let who = q.device.clone();
+                if !self.pet.visible {
+                    self.set_visible(true);
+                }
+                self.message(format!("{who} wants to sync with Pip — open Settings to let it in."), 10);
+                self.anim(AnimKind::Nod);
+            }
+            self.sync_requests = r.requests;
         }
         self.sync_status.error = r.error.clone();
         self.sync_status.signed_out = r.signed_out;
@@ -2288,15 +2404,45 @@ impl App {
             }
             self.reschedule();
         }
-        // Healthy: every quarter hour. Failing: back off to an hour.
-        self.schedule_sync(if self.sync_status.error.is_some() { 60 * 60_000 } else { 15 * 60_000 });
+        // A tap that arrived mid-round, or a device waiting to be let in, deserves a quick retry.
+        let soon = self.sync_approve.is_some() || !self.sync_deny.is_empty();
+        self.schedule_sync(if soon {
+            1_000
+        } else if self.sync_waiting {
+            10_000
+        } else if self.sync_status.error.is_some() {
+            60 * 60_000
+        } else {
+            15 * 60_000
+        });
         self.ui_invalidate();
     }
 
-    /// "This phone/PC already syncs": adopt the existing key using the code from the other device.
-    pub fn sync_join_with_code(&mut self, code: String) {
-        self.sync_join_code = Some(code);
+    /// "Yes, that's my phone": seal the key for it on the next round, which starts right away.
+    pub fn approve_join(&mut self, id: &str) {
+        let Some(req) = self.sync_requests.iter().find(|r| r.id == id).cloned() else { return };
+        self.sync_requests.retain(|r| r.id != id);
+        self.message(format!("Letting {} in…", req.device), 4);
+        self.sync_approve = Some(req);
         self.sync_now(true);
+        self.ui_invalidate();
+    }
+
+    /// "Ask again" after a refusal: a brand-new request, with a new key pair.
+    pub fn ask_to_join_again(&mut self) {
+        self.sync_refused = false;
+        self.secrets.remove(SYNC_JOIN_KEY);
+        self.secrets_dirty = true;
+        self.sync_now(true);
+        self.ui_invalidate();
+    }
+
+    /// "Not now": the device is told, and can ask again from its own end.
+    pub fn deny_join(&mut self, id: &str) {
+        self.sync_requests.retain(|r| r.id != id);
+        self.sync_deny.push(id.to_string());
+        self.sync_now(true);
+        self.ui_invalidate();
     }
 
     pub fn disconnect_sync(&mut self) {
@@ -2304,12 +2450,17 @@ impl App {
         if let Some(token) = self.secrets.remove(SYNC_REFRESH_KEY) {
             crate::oauth::revoke_in_background(&crate::oauth::GOOGLE_SYNC, token);
         }
-        // The key stays on this device only if sync is set up again; drop it with the sign-in.
+        // The key is only useful with the sign-in, so it goes at the same time.
         self.secrets.remove(SYNC_DATA_KEY);
-        self.secrets.remove(SYNC_CODE_KEY);
+        self.secrets.remove(SYNC_JOIN_KEY);
         self.secrets_dirty = true;
         self.sync_access = None;
         self.sync_status = SyncStatus::default();
+        self.sync_waiting = false;
+        self.sync_refused = false;
+        self.sync_requests.clear();
+        self.sync_approve = None;
+        self.sync_deny.clear();
         self.kill_timer(T_SYNC);
         self.schedule_save();
         self.ui_invalidate();

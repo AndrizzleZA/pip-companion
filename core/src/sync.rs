@@ -8,8 +8,8 @@
 //!     count, the longest streak, the union of acknowledgements. Nothing ever nags twice.
 //!
 //! Everything is encrypted before it leaves the device ([`seal`]), with a key that only the
-//! user's own devices have: the key is generated once, and moves to the next device through a
-//! short pairing code the user types in ([`pairing`]).
+//! user's own devices have: the key is generated once, and reaches each further device through
+//! a single Approve tap ([`join`]) — nothing is ever typed.
 
 use crate::dates::ImportantDate;
 use crate::settings::{CustomReminder, NotifySettings, QuietSettings, Settings, WaterSettings};
@@ -395,72 +395,102 @@ pub fn open(key: &Key, bytes: &[u8]) -> Result<SyncDoc, String> {
     let cipher = XChaCha20Poly1305::new(key.into());
     let plain = cipher
         .decrypt(XNonce::from_slice(nonce), Payload { msg: body, aad: b"pip-sync-v1" })
-        .map_err(|_| "This sync data was written with a different pairing code".to_string())?;
+        .map_err(|_| "This sync data belongs to a different sync".to_string())?;
     serde_json::from_slice(&plain).map_err(|e| format!("The sync data couldn't be read ({e})"))
 }
 
-/// Moving the key to a second device: the PC shows a short code, the phone types it in.
+/// Adding a device without typing anything.
 ///
-/// The code itself is never the key. It unlocks a copy of the real key that the first device
-/// leaves in the cloud, so a guessed code alone is useless without access to the account, and a
-/// stolen cloud file is useless without the code.
-pub mod pairing {
+/// The new device makes a key pair and leaves a join request; a device that already has the sync
+/// key shows "… wants to sync" and, on approval, seals the key so that only the requester can
+/// open it. The cloud only ever carries sealed bytes, and the user only ever taps Approve.
+pub mod join {
     use super::Key;
-    use argon2::{Algorithm, Argon2, Params, Version};
+    use blake2::{Blake2b512, Digest};
+    use serde::{Deserialize, Serialize};
+    use x25519_dalek::{PublicKey, StaticSecret};
 
-    /// Characters that can't be confused when read aloud or typed (no I, O, 0, 1).
-    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    /// 16 characters of that alphabet = 80 bits, shown as four groups of four.
-    pub const CODE_LEN: usize = 16;
-
-    /// Formats 10 random bytes as the code the user reads off the screen.
-    pub fn code_from_bytes(random: &[u8; 10]) -> String {
-        let mut bits = 0u32;
-        let mut have = 0u32;
-        let mut out = String::with_capacity(CODE_LEN + 3);
-        for (i, b) in random.iter().enumerate() {
-            bits = (bits << 8) | *b as u32;
-            have += 8;
-            while have >= 5 {
-                have -= 5;
-                let idx = ((bits >> have) & 31) as usize;
-                if out.len() % 5 == 4 {
-                    out.push('-');
-                }
-                out.push(ALPHABET[idx] as char);
-            }
-            let _ = i;
-        }
-        out
+    /// What a new device publishes while it waits to be let in.
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+    #[serde(default)]
+    pub struct Request {
+        /// Random id for this attempt, used in the file name.
+        pub id: String,
+        /// Shown to the user on the approving device ("Andre's phone wants to sync").
+        pub device: String,
+        /// The requester's public key, 32 bytes as hex.
+        pub public_key: String,
+        pub created_at: i64,
     }
 
-    /// Accepts the code however the user typed it: spaces, dashes, lower case, O for 0.
-    pub fn normalise(typed: &str) -> String {
-        typed
-            .chars()
-            .filter_map(|c| match c.to_ascii_uppercase() {
-                'O' => Some('0'),
-                'I' | 'L' => Some('1'),
-                c if c.is_ascii_alphanumeric() => Some(c),
-                _ => None,
-            })
-            .collect()
+    /// A join request is only offered for this long, so an abandoned attempt disappears.
+    pub const EXPIRES_SECS: i64 = 15 * 60;
+
+    pub fn is_stale(r: &Request, now: i64) -> bool {
+        now - r.created_at > EXPIRES_SECS
     }
 
-    /// Turns the typed code into a key-encryption key. Deliberately slow (Argon2id), so guessing
-    /// codes against a stolen file is impractical.
-    pub fn key_from_code(code: &str, salt: &[u8]) -> Result<Key, String> {
-        // Argon2 wants at least 8 bytes of salt; short app-provided salts are padded with a
-        // constant so callers can pass something readable like b"pip-sync".
-        let mut salted = salt.to_vec();
-        while salted.len() < 16 {
-            salted.extend_from_slice(b"pip-sync-padding");
-        }
-        let params = Params::new(64 * 1024, 3, 1, Some(32)).map_err(|e| e.to_string())?;
-        let a2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-        let mut out = [0u8; 32];
-        a2.hash_password_into(normalise(code).as_bytes(), &salted, &mut out).map_err(|e| e.to_string())?;
+    /// The private half stays on the requesting device only.
+    pub struct Secret(StaticSecret);
+
+    /// Makes the key pair for one join attempt. The random bytes come from the platform.
+    pub fn new_request(random: &[u8; 32], id: String, device: String, now: i64) -> (Secret, Request) {
+        let secret = StaticSecret::from(*random);
+        let public = PublicKey::from(&secret);
+        let req = Request { id, device, public_key: hex(public.as_bytes()), created_at: now };
+        (Secret(secret), req)
+    }
+
+    fn shared(secret: &StaticSecret, other_public: &[u8; 32]) -> Key {
+        let point = secret.diffie_hellman(&PublicKey::from(*other_public));
+        let mut h = Blake2b512::new();
+        h.update(b"pip-device-join-v1");
+        h.update(point.as_bytes());
+        let out = h.finalize();
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&out[..32]);
+        key
+    }
+
+    /// Approving device: seal the sync key for whoever made this request. The random bytes are an
+    /// ephemeral key, so approving twice never repeats itself.
+    pub fn grant(req: &Request, sync_key: &Key, random: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, String> {
+        let their_public = unhex(&req.public_key).ok_or("That join request looks damaged")?;
+        let ephemeral = StaticSecret::from(*random);
+        let wrap = shared(&ephemeral, &their_public);
+        let mut holder = super::SyncDoc::default();
+        holder.device = hex(sync_key);
+        let mut out = PublicKey::from(&ephemeral).as_bytes().to_vec();
+        out.extend_from_slice(&super::seal(&wrap, nonce, &holder)?);
         Ok(out)
+    }
+
+    /// Requesting device: open what the approver left, recovering the sync key.
+    pub fn accept(secret: &Secret, sealed: &[u8]) -> Result<Key, String> {
+        if sealed.len() < 33 {
+            return Err("The approval is incomplete".into());
+        }
+        let mut their_public = [0u8; 32];
+        their_public.copy_from_slice(&sealed[..32]);
+        let wrap = shared(&secret.0, &their_public);
+        let holder = super::open(&wrap, &sealed[32..]).map_err(|_| "That approval was meant for another device".to_string())?;
+        unhex(&holder.device).ok_or_else(|| "The shared key is damaged".to_string())
+    }
+
+    pub fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    pub fn unhex(s: &str) -> Option<[u8; 32]> {
+        let b = s.as_bytes();
+        if b.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
+        }
+        Some(out)
     }
 }
 
@@ -495,37 +525,26 @@ mod crypto_tests {
     }
 
     #[test]
-    fn pairing_codes_are_readable_and_forgiving() {
-        let code = pairing::code_from_bytes(&[0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE]);
-        assert_eq!(code.len(), pairing::CODE_LEN + 3, "four groups of four");
-        assert!(code.chars().all(|c| c == '-' || c.is_ascii_uppercase() || c.is_ascii_digit()));
+    fn a_new_device_is_let_in_with_one_approval() {
+        // The phone asks to join.
+        let (secret, req) = join::new_request(&[3u8; 32], "abc".into(), "Andre\u{2019}s phone".into(), 1_000);
+        assert_eq!(req.device, "Andre\u{2019}s phone");
+        assert!(!join::is_stale(&req, 1_100));
+        assert!(join::is_stale(&req, 1_000 + join::EXPIRES_SECS + 1), "an abandoned request expires");
 
-        // Typed back in any reasonable way, it unlocks the same key.
-        let salt = b"pip-sync-salt";
-        let a = pairing::key_from_code(&code, salt).unwrap();
-        let b = pairing::key_from_code(&code.to_lowercase().replace('-', " "), salt).unwrap();
-        assert_eq!(a, b);
-        assert_ne!(a, pairing::key_from_code("ABCD-EFGH-JKLM-NPQR", salt).unwrap());
+        // The PC approves, sealing the real key for that phone only.
+        let sync_key: Key = [42u8; 32];
+        let sealed = join::grant(&req, &sync_key, &[9u8; 32], &[4u8; 24]).unwrap();
+        assert!(!sealed.windows(4).any(|w| w == [42u8; 4]), "the key must not travel in the clear");
+        assert_eq!(join::accept(&secret, &sealed).unwrap(), sync_key);
     }
 
     #[test]
-    fn a_key_travels_to_the_second_device_through_the_code() {
-        // Device 1: a real key, wrapped with the code key and left in the cloud.
-        let data_key: Key = [42u8; 32];
-        let code = pairing::code_from_bytes(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let code_key = pairing::key_from_code(&code, b"salt").unwrap();
-        let mut holder = SyncDoc::default();
-        holder.device = "wrapped-key".into();
-        holder.deleted.insert(hex(&data_key), 0); // the wrapped payload rides in a document
-        let wrapped = seal(&code_key, &[3u8; 24], &holder).unwrap();
-
-        // Device 2: types the code, recovers the same key.
-        let recovered_key = pairing::key_from_code(&format!(" {} ", code.to_lowercase()), b"salt").unwrap();
-        let out = open(&recovered_key, &wrapped).unwrap();
-        assert_eq!(out.deleted.keys().next().unwrap(), &hex(&data_key));
-    }
-
-    fn hex(k: &Key) -> String {
-        k.iter().map(|b| format!("{b:02x}")).collect()
+    fn an_approval_only_opens_on_the_device_that_asked() {
+        let (_, req) = join::new_request(&[1u8; 32], "a".into(), "phone".into(), 0);
+        let (other_secret, _) = join::new_request(&[2u8; 32], "b".into(), "someone else".into(), 0);
+        let sealed = join::grant(&req, &[7u8; 32], &[8u8; 32], &[5u8; 24]).unwrap();
+        assert!(join::accept(&other_secret, &sealed).is_err());
+        assert!(join::accept(&other_secret, &sealed[..10]).is_err());
     }
 }

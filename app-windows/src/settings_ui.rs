@@ -130,6 +130,10 @@ pub enum UiAct {
     SyncConnect,
     PhoneSyncNow,
     SyncDisconnect,
+    /// "Yes, that's mine" / "Not now" on a device waiting to be let in.
+    SyncApprove(String),
+    SyncDeny(String),
+    SyncAskAgain,
     MailImportantMarker,
     MailEvery(i32),
 }
@@ -263,7 +267,11 @@ impl App {
         if let Some(p) = self.open_page.take() {
             ui.page = page_at(p);
         }
+        let connections = ui.page == Page::Connections;
         self.ui = Some(ui);
+        if connections {
+            self.sync_peek();
+        }
     }
 
     pub fn ui_destroyed(&mut self) {
@@ -283,6 +291,9 @@ impl App {
             ui.page = PAGES[index.min(PAGES.len() - 1)].0;
             ui.scroll = 0.0;
             ui.focus = None;
+        }
+        if PAGES[index.min(PAGES.len() - 1)].0 == Page::Connections {
+            self.sync_peek();
         }
         self.ui_invalidate();
         self.ui_arm_usage();
@@ -842,6 +853,9 @@ impl App {
                 self.ui_arm_usage();
                 if p == Page::About {
                     self.ui_usage_tick();
+                }
+                if p == Page::Connections {
+                    self.sync_peek();
                 }
                 return;
             }
@@ -1575,7 +1589,7 @@ impl App {
         c.y += h + 12.0 * s;
     }
 
-    /// Phone sync: connect, then show the pairing code to type on the phone.
+    /// Phone sync: connect, then let other devices in with a single Approve.
     fn draw_sync_connector(&self, c: &mut Ctx) {
         let s = c.s;
         let f = fonts();
@@ -1587,7 +1601,7 @@ impl App {
             SignIn::Problem(ConnectorId::PhoneSync, p) => Some(p),
             _ => None,
         };
-        let code = self.sync_pairing_code();
+        let asking = if on { self.sync_requests.clone() } else { Vec::new() };
         let status = if self.sync_status.signed_out {
             Some((WARN_AMBER, "Signed out — connect again".to_string()))
         } else if let Some(e) = &self.sync_status.error {
@@ -1595,6 +1609,10 @@ impl App {
         } else if self.sync_status.last_at > 0 {
             let from = if self.sync_status.last_device.is_empty() { String::new() } else { format!(" · last change from {}", self.sync_status.last_device) };
             Some((c.pal.muted, format!("Synced {}{from}", ago(platform::now_unix() - self.sync_status.last_at))))
+        } else if self.sync_refused {
+            Some((WARN_AMBER, "Your other device said not now".to_string()))
+        } else if self.sync_waiting {
+            Some((c.pal.muted, "Waiting to be let in…".to_string()))
         } else if on {
             Some((c.pal.muted, "Syncing shortly…".to_string()))
         } else {
@@ -1612,13 +1630,18 @@ impl App {
         if status.is_some() {
             h += 26.0 * s;
         }
-        if on && code.is_some() {
-            h += 62.0 * s;
+        if on {
+            h += asking.len() as f32 * 56.0 * s;
+            if self.sync_waiting || self.sync_refused {
+                h += 56.0 * s;
+            }
+            h += 44.0 * s; // the Disconnect row
         }
         h += 8.0 * s;
 
         let (_, y) = self.card(c, h, false);
-        self.connector_header(c, y, conn, on.then_some((OK_GREEN, "On")));
+        let badge = if self.sync_ready() { Some((OK_GREEN, "On")) } else if on { Some((c.pal.muted, "Setting up")) } else { None };
+        self.connector_header(c, y, conn, badge);
         let main = if waiting {
             Some(("Cancel", BtnStyle::Ghost, UiAct::GmailCancel))
         } else if self.google_keys().is_none() {
@@ -1648,14 +1671,39 @@ impl App {
             text::draw(c.pm, &f.regular, 12.0 * s, c.x0, ty - 4.0 * s, *rgb, 1.0, &shown);
         }
         if on {
-            if let Some(code) = &code {
-                ty += 16.0 * s;
+            // Anyone asking to be let in, one tap each.
+            for r in &asking {
+                ty += 12.0 * s;
                 fill_rrect(c.pm, c.x0, ty, inner, 44.0 * s, 10.0 * s, color(c.pal.surface2, 1.0));
-                text::draw(c.pm, &f.regular, 11.5 * s, c.x0 + 14.0 * s, ty + 17.0 * s, c.pal.muted, 1.0, "Type this on your phone, once:");
-                text::draw(c.pm, &f.semibold, 15.0 * s, c.x0 + 14.0 * s, ty + 36.0 * s, c.pal.text, 1.0, code);
-                let dw = ui::button_width("Disconnect", s);
-                c.button(c.x1 - dw - 8.0 * s, ty + 8.0 * s, "Disconnect", BtnStyle::Danger, UiAct::SyncDisconnect);
+                let aw = ui::button_width("Approve", s);
+                let nw = ui::button_width("Not now", s);
+                let title = format!("{} wants to sync", r.device);
+                let shown = text::ellipsize(&f.semibold, 13.0 * s, &title, (inner - aw - nw - 48.0 * s).max(0.0));
+                text::draw(c.pm, &f.semibold, 13.0 * s, c.x0 + 14.0 * s, ty + 19.0 * s, c.pal.text, 1.0, &shown);
+                text::draw(c.pm, &f.regular, 11.5 * s, c.x0 + 14.0 * s, ty + 35.0 * s, c.pal.muted, 1.0, "Approve only if you just signed in there.");
+                c.button(c.x1 - aw - 8.0 * s, ty + 8.0 * s, "Approve", BtnStyle::Primary, UiAct::SyncApprove(r.id.clone()));
+                c.button(c.x1 - aw - nw - 16.0 * s, ty + 8.0 * s, "Not now", BtnStyle::Ghost, UiAct::SyncDeny(r.id.clone()));
+                ty += 44.0 * s;
             }
+            if self.sync_refused {
+                ty += 12.0 * s;
+                fill_rrect(c.pm, c.x0, ty, inner, 44.0 * s, 10.0 * s, color(c.pal.surface2, 1.0));
+                text::draw(c.pm, &f.semibold, 13.0 * s, c.x0 + 14.0 * s, ty + 19.0 * s, c.pal.text, 1.0, "Not approved");
+                text::draw(c.pm, &f.regular, 11.5 * s, c.x0 + 14.0 * s, ty + 35.0 * s, c.pal.muted, 1.0, "Your other device said not now. You can ask it again.");
+                let aw = ui::button_width("Ask again", s);
+                c.button(c.x1 - aw - 8.0 * s, ty + 8.0 * s, "Ask again", BtnStyle::Primary, UiAct::SyncAskAgain);
+                ty += 44.0 * s;
+            } else if self.sync_waiting {
+                ty += 12.0 * s;
+                fill_rrect(c.pm, c.x0, ty, inner, 44.0 * s, 10.0 * s, color(c.pal.surface2, 1.0));
+                text::draw(c.pm, &f.semibold, 13.0 * s, c.x0 + 14.0 * s, ty + 19.0 * s, c.pal.text, 1.0, "Waiting for your other device");
+                text::draw(c.pm, &f.regular, 11.5 * s, c.x0 + 14.0 * s, ty + 35.0 * s, c.pal.muted, 1.0, "Open Pip there and tap Approve. Nothing to type.");
+                ty += 44.0 * s;
+            }
+            ty += 14.0 * s;
+            let dlabel = if self.confirm_disconnect.as_deref() == Some("sync") { "Yes, disconnect" } else { "Disconnect" };
+            let dw = ui::button_width(dlabel, s);
+            c.button(c.x1 - dw, ty, dlabel, BtnStyle::Danger, UiAct::SyncDisconnect);
         }
         c.y += h + 12.0 * s;
     }
@@ -1736,6 +1784,9 @@ impl App {
                 }
             }
             UiAct::SyncConnect => self.start_signin(ConnectorId::PhoneSync, None, false),
+            UiAct::SyncApprove(id) => self.approve_join(id),
+            UiAct::SyncDeny(id) => self.deny_join(id),
+            UiAct::SyncAskAgain => self.ask_to_join_again(),
             UiAct::PhoneSyncNow => self.sync_now(true),
             UiAct::SyncDisconnect => {
                 // Two clicks, like the other disconnects.

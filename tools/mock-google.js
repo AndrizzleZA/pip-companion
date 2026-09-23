@@ -144,6 +144,12 @@ http.createServer(async (req, res) => {
         res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": f.bytes.length });
         return res.end(f.bytes);
       }
+      if (!upload && req.method === "DELETE" && idInPath) {
+        const entry = Object.entries(appData).find(([, f]) => f.id === idInPath);
+        if (entry) delete appData[entry[0]];
+        res.writeHead(204);
+        return res.end();
+      }
       if (upload && (req.method === "POST" || req.method === "PATCH")) {
         const chunks = [];
         await new Promise((r) => { req.on("data", (c) => chunks.push(c)); req.on("end", r); });
