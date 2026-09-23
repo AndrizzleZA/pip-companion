@@ -23,6 +23,9 @@ pub struct Settings {
     pub reminders: Vec<CustomReminder>,
     pub dates: DatesSettings,
     pub email: EmailSettings,
+    /// Newest edit to the settings that sync as one block (water, quiet, alerts, pet name).
+    /// Per-item settings (reminders, dates) carry their own timestamps.
+    pub prefs_updated_at: i64,
 }
 
 impl Default for Settings {
@@ -36,6 +39,7 @@ impl Default for Settings {
             reminders: Vec::new(),
             dates: DatesSettings::default(),
             email: EmailSettings::default(),
+            prefs_updated_at: 0,
         }
     }
 }

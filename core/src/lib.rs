@@ -20,6 +20,7 @@ pub mod mood;
 pub mod schedule;
 pub mod settings;
 pub mod state;
+pub mod sync;
 pub mod time;
 
 pub use mood::{mood, Mood};

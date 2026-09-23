@@ -8,3 +8,6 @@ description = "Platform-independent brain of Pip: settings, reminder engine, pol
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# Sync: authenticated encryption + a slow hash for the short pairing code.
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "getrandom"] }
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
