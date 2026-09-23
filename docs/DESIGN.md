@@ -434,3 +434,27 @@ goes") the Outlook connector and the whole subscription-link flow were removed:
 Result: every connector in Pip is now a browser sign-in. 52 unit tests; release 1.69 MB (−16 KB),
 startup 31 ms, ~1.9 MB private memory. Both connectors re-verified against the mock afterwards:
 connect, reconnect, disconnect, and Gmail's rules still firing.
+
+## 16. Phase 5 — installing without an installer, 2026-09-23
+
+Pip is one executable, so it installs itself rather than shipping NSIS/Inno/WiX and a second
+program to maintain:
+
+- `pip.exe` run from a folder offers **Install Pip on this PC?** once (No = run portable). The same
+  buttons live in Settings › About, and `--install` / `--uninstall [--silent]` work from a command
+  line (that's what Apps & features calls).
+- Install: copy to `%LOCALAPPDATA%\Programs\Pip`, Start-menu shortcut, `HKCU\…\Uninstall\Pip`
+  entry (name, version, publisher, size, icon, uninstall strings) and autostart pointing at the
+  installed copy. Everything is **per-user**: no administrator rights, no UAC prompt, nothing
+  outside the user's own profile.
+- Uninstall: autostart, shortcut and registry entry removed, `%APPDATA%\Pip` deleted, then a
+  detached `cmd` removes the executable and folder a few seconds later (a running program can't
+  delete itself). The command line is passed with `raw_arg` because cmd.exe wants it verbatim.
+- The shortcut is written by the shell scripting host once, at install time — a .lnk needs COM
+  plumbing that isn't worth carrying in the binary, and nothing runs at runtime.
+- Settings › About says where this copy lives and offers Install or Remove accordingly.
+
+Measured after installing: startup 41 ms, ~2.0 MB private, 1.78 MB executable. Settings and both
+Google connections carried over untouched (they live in `%APPDATA%\Pip`, which install never
+touches). Install and uninstall were tested end-to-end against a redirected profile first, so the
+real machine only saw the final, working version.

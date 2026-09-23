@@ -47,6 +47,10 @@ pub enum Effect {
     Menu(i32, i32),
     OpenSettings,
     CloseSettings,
+    /// Copy Pip into place and hand over to the installed copy.
+    Install,
+    /// Remove Pip from this PC (asks first).
+    Uninstall,
     Quit,
 }
 

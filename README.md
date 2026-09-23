@@ -7,6 +7,14 @@ software*: one ~1 MB executable, one process, a few MB of RAM, and no CPU while 
 See [docs/DESIGN.md](docs/DESIGN.md) for the research, architecture decision, performance targets
 and roadmap.
 
+## Installing
+
+Double-click `pip.exe` and choose **Yes** when it offers to install. Pip copies itself to
+`%LOCALAPPDATA%\Programs\Pip`, adds a Start-menu entry, starts with Windows and appears in
+**Apps & features** like any other program — all per-user, so no administrator rights and no UAC
+prompt. Choose **No** to run it from where it is (portable). Settings › About has the same
+**Install** button, and **Remove Pip** when it is installed.
+
 ## Using it
 
 - **Drag** the pet anywhere; it remembers the spot and snaps onto the taskbar edge.

@@ -8,6 +8,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod install;
 mod calsync;
 mod mailsync;
 mod oauth;
@@ -62,6 +63,29 @@ fn run_effects() {
             match e {
                 Effect::Menu(x, y) => show_menu(x, y),
                 Effect::OpenSettings => open_settings(),
+                Effect::Install => match install::install(true) {
+                    Ok(exe) => {
+                        // Hand over to the installed copy, then let this one go.
+                        let _ = std::process::Command::new(&exe).spawn();
+                        with_app(|a| a.shutdown());
+                        unsafe { PostQuitMessage(0) };
+                    }
+                    Err(e) => unsafe {
+                        MessageBoxW(std::ptr::null_mut(), wide(&e).as_ptr(), wide("Pip").as_ptr(), MB_OK | MB_ICONWARNING);
+                    },
+                },
+                Effect::Uninstall => {
+                    // The dialog is modal; if the user says no, Pip simply carries on.
+                    let text = wide("Remove Pip from this PC?
+
+Your settings and connections will be deleted too.");
+                    let yes = unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), wide("Pip").as_ptr(), MB_YESNO | MB_ICONQUESTION) } == IDYES;
+                    if yes {
+                        install::uninstall(false);
+                        with_app(|a| a.shutdown());
+                        unsafe { PostQuitMessage(0) };
+                    }
+                }
                 Effect::CloseSettings => {
                     if let Some(h) = with_app(|a| a.ui.as_ref().map(|u| u.hwnd)).flatten() {
                         unsafe { DestroyWindow(h) };
@@ -342,6 +366,18 @@ fn instance_title() -> String {
     }
 }
 
+/// Quietly asks a running Pip to quit (used before replacing or deleting its executable).
+pub fn send_command_to(_exe: &std::path::Path, cmd: &str) {
+    unsafe {
+        let hwnd = FindWindowW(wide(PET_CLASS).as_ptr(), wide(&instance_title()).as_ptr());
+        if !hwnd.is_null() {
+            let bytes = cmd.as_bytes();
+            let cds = COPYDATASTRUCT { dwData: COPYDATA_MAGIC, cbData: bytes.len() as u32, lpData: bytes.as_ptr() as *mut _ };
+            SendMessageW(hwnd, WM_COPYDATA, 0, &cds as *const _ as LPARAM);
+        }
+    }
+}
+
 /// `pip.exe --cmd "<command>"`: sends a command to the running instance, prints the reply.
 fn send_command(cmd: &str) -> i32 {
     unsafe {
@@ -391,6 +427,33 @@ fn main() {
         unsafe { windows_sys::Win32::System::Console::AttachConsole(u32::MAX) };
         let code = send_command(&cmd);
         std::process::exit(code);
+    }
+
+    if args.iter().any(|a| a == "--uninstall") {
+        install::run_uninstall(args.iter().any(|a| a == "--silent"));
+        return;
+    }
+    if args.iter().any(|a| a == "--install") {
+        match install::install(true) {
+            Ok(exe) => {
+                let _ = std::process::Command::new(&exe).spawn();
+            }
+            Err(e) => {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                        std::ptr::null_mut(),
+                        wide(&e).as_ptr(),
+                        wide("Pip").as_ptr(),
+                        windows_sys::Win32::UI::WindowsAndMessaging::MB_OK,
+                    )
+                };
+            }
+        }
+        return;
+    }
+    // Started from a folder (download, USB stick, build directory): offer to install once.
+    if install::offer_install_if_loose() {
+        return; // the installed copy takes over
     }
 
     platform::set_dpi_awareness();

@@ -211,6 +211,12 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "Pip";
 
 pub fn set_autostart(enable: bool) -> bool {
+    let exe = std::env::current_exe().unwrap_or_default();
+    set_autostart_to(&exe, enable)
+}
+
+/// Same, but for a specific copy of Pip (used right after installing).
+pub fn set_autostart_to(exe: &std::path::Path, enable: bool) -> bool {
     unsafe {
         let mut key: HKEY = std::ptr::null_mut();
         if RegOpenKeyExW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &mut key)
@@ -220,8 +226,7 @@ pub fn set_autostart(enable: bool) -> bool {
         }
         let name = wide(RUN_VALUE);
         let ok = if enable {
-            let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-            let cmd = wide(&format!("\"{exe}\" --autostart"));
+            let cmd = wide(&format!("\"{}\" --autostart", exe.display()));
             RegSetValueExW(
                 key,
                 name.as_ptr(),

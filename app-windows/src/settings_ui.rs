@@ -1,7 +1,7 @@
 //! Settings window. Custom-drawn with the same renderer as the pet, so it matches the creature's
 //! look and adds no UI framework. It exists only while open; closing frees all of it.
 
-use crate::app::{hm, App};
+use crate::app::{hm, App, Effect};
 use crate::platform::{self, tick_ms, Usage};
 use crate::render::creature::{self, Expr, Pose};
 use crate::render::text::{self, fonts};
@@ -98,6 +98,8 @@ pub enum UiAct {
     RemImportant(String),
     RemDelete(String),
     OpenData,
+    Install,
+    Uninstall,
     ResetPos,
     TestReminder,
     Holidays(HolidayRegion),
@@ -632,6 +634,25 @@ impl App {
         bx += c.button(bx, y, "Open data folder", BtnStyle::Secondary, UiAct::OpenData) + 8.0 * s;
         bx += c.button(bx, y, "Reset position", BtnStyle::Secondary, UiAct::ResetPos) + 8.0 * s;
         c.button(bx, y, "Test a reminder", BtnStyle::Secondary, UiAct::TestReminder);
+        c.y += 46.0 * s;
+
+        // Where this copy of Pip lives, and how to install or remove it.
+        let installed = crate::install::running_installed();
+        let note = if installed {
+            "Pip is installed on this PC and starts with Windows. You can remove it here or from Apps & features.".to_string()
+        } else {
+            format!("Pip is running from {}. Installing copies it to your account’s programs folder and adds it to the Start menu.", crate::install::current_folder())
+        };
+        for l in text::wrap(&f.regular, 12.5 * s, &note, c.x1 - c.x0) {
+            text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y + 14.0 * s, c.pal.muted, 1.0, &l);
+            c.y += 19.0 * s;
+        }
+        c.y += 14.0 * s;
+        if installed {
+            c.button(c.x0, c.y, "Remove Pip…", BtnStyle::Danger, UiAct::Uninstall);
+        } else {
+            c.button(c.x0, c.y, "Install Pip on this PC", BtnStyle::Primary, UiAct::Install);
+        }
         c.y += 40.0 * s;
     }
 
@@ -892,6 +913,14 @@ impl App {
                 }
             }
             UiAct::RemDelete(id) => st.reminders.retain(|r| r.id != id),
+            UiAct::Install => {
+                self.effects.push(Effect::Install);
+                return;
+            }
+            UiAct::Uninstall => {
+                self.effects.push(Effect::Uninstall);
+                return;
+            }
             UiAct::OpenData => {
                 platform::open_folder(self.store.dir());
                 return;
