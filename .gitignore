@@ -4,3 +4,12 @@
 
 # Pip's Google sign-in identity (see app-windows/build.rs)
 /app-windows/google-client.json
+
+# Android
+app-android/.gradle/
+app-android/build/
+app-android/app/build/
+app-android/local.properties
+app-android/app/src/main/jniLibs/
+# Pip's Google sign-in identity for the phone (an app identifier, not a user secret)
+app-android/google-client-android.json

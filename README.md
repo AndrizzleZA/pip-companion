@@ -30,12 +30,17 @@ heads-up a few days before). South African public holidays are built in. Calenda
 (Settings › Connections): events show on today’s card, important ones (own alert, important calendar
 or a keyword like “dentist”) get a gentle alert, and a quiet morning summary lists what’s on.
 
-**Connections.** Settings › Connections has two entries, and both work the same way: click *Continue
+**Connections.** Settings › Connections has three entries, and they all work the same way: click *Continue
 with Google*, choose your account, Allow, and you’re back in Pip, connected. **Gmail** gives Pip the
 sender, subject and labels of new mail — never the contents — and it can’t send or delete. **Google
 Calendar** is read-only. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
 ever signs Pip out, the entry shows **Reconnect**. Important senders and subject words live in
 Settings › Email.
+
+**Your other devices.** Sync keeps reminders, dates, water history and preferences the same on every
+device, through one encrypted file in your own Google Drive app folder — Pip has no server. Sign in
+with the same Google account on the next device and it asks to join; this one shows *“… wants to
+sync — Approve”*. One tap, nothing to type, and the key is sealed so only that device can open it.
 
 The pet naps during quiet hours, when you're away (5 min without input) and while the PC is locked,
 and holds reminders during fullscreen games, videos and presentations.
@@ -64,11 +69,35 @@ but can’t connect Google accounts (release builds print a warning). `node tool
 powershell -ExecutionPolicy Bypass -File tools/measure.ps1 -Minutes 10   # resource targets
 ```
 
+## The phone app
+
+`app-android/` is Pip on Android: the same Rust brain (`app-android/rust`, a small JNI bridge over
+`pip-core`) behind a Compose screen. Sign in with the same Google account as the PC, tap Approve on
+the PC when it asks, and the same reminders appear.
+
+Building it needs a JDK 17, the Android SDK (platform 34, build-tools 34, NDK 26) and `cargo-ndk`:
+
+```bash
+rustup target add aarch64-linux-android
+cargo install cargo-ndk
+cd app-android && ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
+```
+
+Gradle runs `cargo ndk` first, so the `.so` in `jniLibs` is always built from the Rust you have —
+nothing binary is checked in. `local.properties` points at the SDK; `ANDROID_NDK_HOME` must point at
+the NDK.
+
+**Google sign-in identity.** Like the desktop, the phone needs Pip's own OAuth client — type
+*Android*, with the package name `com.pip.companion` and the signing certificate's SHA-1. Save the
+client id as `app-android/google-client-android.json` (git-ignored); the build compiles it in.
+Android clients carry no secret: Google checks the app's signature instead.
+
 ## Layout
 
 ```
 core/          pip-core: settings, reminder engine, quiet hours/DND policy, mood, copy (no OS code)
 app-windows/   Windows shell: layered pet window, renderer, tray, settings window, persistence
+app-android/   Android shell: Compose screen, Google sign-in, sync; rust/ is the JNI bridge to pip-core
 docs/          design document
 tools/         measurement script, mock Google server for sign-in tests
 ```

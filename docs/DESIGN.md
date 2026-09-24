@@ -477,10 +477,9 @@ deletions leave tombstones (recorded by the shell whenever an item disappears fr
 stale device can't resurrect them; progress merges upward — highest water count per day, longest
 streak, union of acknowledgements.
 
-**Keys.** A random 256-bit key is made by whichever device starts the sync; it is wrapped with a
-key derived (Argon2id) from a 16-character pairing code and left in the same folder. A second
-device signs in, types the code, and unwraps it. A device that finds an existing key file refuses
-to start a rival sync and asks for the code instead.
+**Keys.** A random 256-bit key is made by whichever device starts the sync. It first travelled to
+the next device wrapped in a typed pairing code; §18 replaces that with a single Approve tap. A
+device that finds an existing sync refuses to start a rival one and asks to be let in instead.
 
 **Tested end to end** against a mock Drive with two independent Pip profiles: first device starts
 the sync, second joins with the code, edits flow both ways, a deletion propagates and stays
@@ -488,3 +487,63 @@ deleted, a wrong code is refused, an expired access token is refreshed and retri
 reported as a sign-out, and an offline round leaves local data untouched. Two bugs were caught this
 way: a second device happily creating a rival key, and the file lookup trusting Drive's search
 result without checking the name.
+
+## 18. Adding a device with one tap, 2026-09-23
+
+The pairing code in §17 was the wrong shape for this app. Everywhere else a connection is *Continue
+with Google → choose → Allow → done*; sync alone asked the user to read sixteen characters off one
+screen and type them into another. Same complaint as the Gmail setup guide, one layer down.
+
+**The flow now.** Both devices sign in to the same Google account, nothing else. The new device
+makes a key pair, leaves the public half in the shared folder as a join request, and waits. The
+device that already holds the key shows *"Andre's phone wants to sync — Approve / Not now"*. One
+tap seals the sync key for that one requester (X25519 to a shared point, Blake2b to a key,
+XChaCha20-Poly1305 to seal). Only the device that kept the private half can open it.
+
+**Why this is no weaker than a code.** The code only ever protected a file sitting in the user's own
+Drive folder, so an attacker needed the Google account first — and with the account they could read
+the code file anyway. The approval binds the key to one public key that the user has just said yes
+to, and the sealed bytes are useless to anyone else. Google still sees only sealed bytes; the device
+name in a join request is the one thing in the clear, so the user can tell which device is asking.
+
+**Refusing properly.** *Not now* leaves a dated refusal marker. Without it the refused device simply
+re-published its request seconds later and the card came back — found in testing, not in review. The
+refused device now stops asking and offers *Ask again*.
+
+**Housekeeping.** Requests, approvals and refusals expire after fifteen minutes and are swept up by
+whichever device passes next, so the folder returns to a single encrypted document. A round lists the
+folder once and works from that listing. The Connections page looks for waiting devices as it opens,
+so a device that has just signed in appears within a second or two instead of at the next quarter-hour.
+
+**Tested** with two, then three, profiles against the mock Drive: first device starts the sync,
+second asks and is approved, a third is refused and stops asking, asks again and is let in, edits
+flow both ways and a deletion stays deleted.
+
+## 19. Phase 4, part two — Pip on the phone, 2026-09-23
+
+**One brain, two shells.** The phone runs the same Rust as the PC. Everything that has to agree
+byte for byte — the merge rules and the encryption — lives in `pip-core`; Kotlin owns the things
+a phone owns: the screen, the browser sign-in, HTTP and (next) alarms.
+
+**The bridge is one function.** The roadmap said UniFFI. The surface turned out to be eight calls
+on JSON objects, so a hand-written JNI shim (`app-android/rust`, ~150 lines) does the same job
+without a code generator in the build, and `pip-core` stays free of binding dependencies.
+`Native.ask("merge", …)` in, JSON out, failures as `{"error": "…"}` so the app can show a sentence
+instead of a stack trace. Byte strings travel as hex: a few kilobytes, no dependency either side.
+
+**Signing in.** Android apps get their own OAuth client, with no secret — Google checks the app's
+signature instead. The consent screen opens in the phone's own browser (Custom Tabs), PKCE ties the
+answer to that one attempt, and Google hands it back to `com.pip.companion:/oauth2redirect`. The
+permission is `drive.appdata` and nothing else, exactly as on the PC.
+
+**Joining.** The phone's half of §18: sign in with the same Google account, and it leaves a join
+request; the PC shows *"… wants to sync — Approve"*. The phone can approve other devices too — the
+same code path, because there is no "main" device. If the account has no sync yet, whichever device
+arrives first starts it, so a phone-first user isn't stuck.
+
+**What it does today.** Sign in, join or be joined, pull the shared document, show reminders and
+switch them on or off, push changes back. Notifications and the water card come next; this milestone
+was about proving the same data, the same rules and the same key on a second kind of device.
+
+**Size.** The Rust library is ~700 KB for arm64; the debug APK is a few megabytes with Compose. Only
+arm64 is built — emulator ABIs can be added when something needs them.
