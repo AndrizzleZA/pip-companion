@@ -14,6 +14,7 @@ class Sync(private val store: Store, private val deviceName: String) {
 
     data class Outcome(
         val synced: Boolean = false,
+        val lostRace: Boolean = false,
         val waiting: Boolean = false,
         val refused: Boolean = false,
         val joined: Boolean = false,
@@ -51,6 +52,9 @@ class Sync(private val store: Store, private val deviceName: String) {
         val now = Auth.now()
         var files = Drive.list(access)
         fun idOf(name: String) = files.entries.firstOrNull { it.value == name }?.key
+        // Drive keeps two files of the same name as two files, so two devices that start a sync in
+        // the same moment each get one. Every device agrees on the lowest id; the rest are rivals.
+        fun docs() = files.entries.filter { it.value == DOC }.map { it.key }.sorted()
 
         // Whatever the user tapped goes first.
         if (approve != null) {
@@ -98,7 +102,7 @@ class Sync(private val store: Store, private val deviceName: String) {
                 }
                 // Only keep waiting while there is actually a sync to be let into. If it has gone,
                 // waiting would mean waiting for an approval nobody can give.
-                idOf(DOC) == null -> {
+                docs().isEmpty() -> {
                     asked?.let { Drive.delete(access, it) }
                     key = Auth.randomHex(32)
                     store.syncKey = key
@@ -130,8 +134,22 @@ class Sync(private val store: Store, private val deviceName: String) {
             "local_doc",
             JSONObject().put("settings", store.settings).put("state", store.state).put("device", deviceName).put("now", now),
         )
-        val docId = idOf(DOC)
-        val remote = docId?.let { Native.ask("open", JSONObject().put("key", key).put("bytes", Drive.fetch(access, it).toHex())) }
+        files = Drive.list(access)
+        val all = docs()
+        val docId = all.firstOrNull()
+        val remote = docId?.let {
+            try {
+                Native.ask("open", JSONObject().put("key", key).put("bytes", Drive.fetch(access, it).toHex()))
+            } catch (e: PipError) {
+                // The agreed document isn't ours: another device won the start. Stand down and ask
+                // to be let in — what is here merges upward once we are.
+                store.syncKey = null
+                store.joining = null
+                return Outcome(lostRace = true, waiting = true)
+            }
+        }
+        // We can read it, so any other copy is a rival that lost.
+        for (rival in all.drop(1)) Drive.delete(access, rival)
         val merged = if (remote == null) local else Native.ask("merge", JSONObject().put("local", local).put("remote", remote))
         if (remote == null || remote.toString() != merged.toString()) {
             val sealed = Native.ask("seal", JSONObject().put("doc", merged).put("key", key).put("nonce", Auth.randomHex(24))).getString("bytes")

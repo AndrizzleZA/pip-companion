@@ -150,6 +150,7 @@ class MainActivity : ComponentActivity() {
 
     private fun noteFor(outcome: Sync.Outcome?): String? = when {
         outcome == null -> null
+        outcome.lostRace -> "Your PC set sync up first, so Pip asked it to let this phone in."
         outcome.waiting -> "Open Pip on your PC and tap Approve. Nothing to type."
         outcome.refused -> "Your PC said not now, so this phone isn't syncing yet."
         outcome.synced -> "Up to date."

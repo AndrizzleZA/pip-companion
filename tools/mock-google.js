@@ -42,8 +42,9 @@ let calendars = [
   { id: "hidden@group.calendar.google.com", summary: "Hidden", selected: false, accessRole: "reader", defaultReminders: [] },
 ];
 let calEvents = {};   // calendarId -> [event]
-// Drive app-data folder: name -> { id, bytes }
-let appData = {};
+// Drive app-data folder: a list of { id, name, bytes }. Names are NOT unique here, exactly as in
+// Drive itself — two devices creating "pip-sync.bin" at once end up with two files.
+let appData = [];
 let driveSeq = 0;
 const revoked = [];
 
@@ -133,20 +134,18 @@ http.createServer(async (req, res) => {
         const q = url.searchParams.get("q") || "";
         const m = q.match(/name='([^']+)'/);
         const name = m ? m[1] : null;
-        const files = Object.entries(appData)
-          .filter(([n]) => !name || n === name)
-          .map(([n, f]) => ({ id: f.id, name: n }));
+        const files = appData.filter((f) => !name || f.name === name).map((f) => ({ id: f.id, name: f.name }));
         return json(res, 200, { files });
       }
       if (!upload && req.method === "GET" && url.searchParams.get("alt") === "media") {
-        const f = Object.values(appData).find((x) => x.id === idInPath);
+        const f = appData.find((x) => x.id === idInPath);
         if (!f) return json(res, 404, { error: { code: 404 } });
         res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": f.bytes.length });
         return res.end(f.bytes);
       }
       if (!upload && req.method === "DELETE" && idInPath) {
-        const entry = Object.entries(appData).find(([, f]) => f.id === idInPath);
-        if (entry) delete appData[entry[0]];
+        const at = appData.findIndex((f) => f.id === idInPath);
+        if (at >= 0) appData.splice(at, 1);
         res.writeHead(204);
         return res.end();
       }
@@ -162,14 +161,25 @@ http.createServer(async (req, res) => {
         const start = text.indexOf(marker) + marker.length;
         const end = text.lastIndexOf("\r\n--pipsyncboundary--");
         const bytes = raw.subarray(start, end);
-        const id = appData[name] ? appData[name].id : "file" + ++driveSeq;
-        appData[name] = { id, bytes };
-        return json(res, 200, { id, name });
+        const target = idInPath ? appData.find((f) => f.id === idInPath) : null;
+        if (target) {
+          target.bytes = bytes;
+          return json(res, 200, { id: target.id, name: target.name });
+        }
+        const file = { id: "file" + ++driveSeq, name, bytes };
+        appData.push(file);
+        return json(res, 200, { id: file.id, name: file.name });
       }
       return json(res, 404, {});
     }
-    if (p === "/_drive") return json(res, 200, Object.fromEntries(Object.entries(appData).map(([n, f]) => [n, f.bytes.length])));
-    if (p === "/_drive_clear") { appData = {}; return json(res, 200, {}); }
+    if (p === "/_drive") return json(res, 200, appData.map((f) => `${f.name}:${f.id}:${f.bytes.length}`));
+    if (p === "/_drive_clear") { appData = []; return json(res, 200, {}); }
+    // Forces the race a real Drive allows: a second file with the same name.
+    if (p === "/_drive_dup") {
+      const src = appData.find((f) => f.name === "pip-sync.bin");
+      if (src) appData.push({ id: "file" + ++driveSeq, name: src.name, bytes: Buffer.from(src.bytes) });
+      return json(res, 200, { files: appData.length });
+    }
 
     // --- Google Calendar ---
     if (p.startsWith("/calendar/v3/")) {

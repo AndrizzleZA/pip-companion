@@ -2358,6 +2358,16 @@ impl App {
             }
         }
         self.sync_waiting = r.waiting;
+        if r.lost_race {
+            // Another device started this sync at the same moment. Let go of our key and ask to
+            // join theirs; nothing here is lost, it merges upward once we are in.
+            self.secrets.remove(SYNC_DATA_KEY);
+            self.secrets.remove(SYNC_JOIN_KEY);
+            self.secrets_dirty = true;
+            self.sync_waiting = true;
+            self.schedule_save();
+            self.message("Your other device set sync up first, so Pip is asking it to let this one in.".into(), 8);
+        }
         if r.refused {
             self.secrets.remove(SYNC_JOIN_KEY); // asking again starts a fresh attempt
             self.secrets_dirty = true;

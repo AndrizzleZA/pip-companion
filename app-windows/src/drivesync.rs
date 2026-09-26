@@ -94,11 +94,6 @@ fn fetch(token: &str, id: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-pub fn download(token: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
-    let Some(id) = find(token, name)? else { return Ok(None) };
-    fetch(token, &id)
-}
-
 /// Tidies up a request or an answer once it has done its job.
 fn remove(token: &str, name: &str) -> Result<(), String> {
     let Some(id) = find(token, name)? else { return Ok(()) };
@@ -114,9 +109,27 @@ fn remove_id(token: &str, id: &str) -> Result<(), String> {
     }
 }
 
+/// Two devices that start a sync in the same moment each create `pip-sync.bin`, and Drive keeps
+/// both as separate files. Everyone therefore agrees on one of them — the lowest id, which every
+/// device computes the same way — and the rest are duplicates to be cleared away by whoever can
+/// actually read the agreed one.
+fn canonical_doc(token: &str) -> Result<(Option<String>, Vec<String>), String> {
+    let mut ids: Vec<String> = list(token)?.into_iter().filter(|(_, n)| n == DOC_NAME).map(|(id, _)| id).collect();
+    ids.sort();
+    let mut ids = ids.into_iter();
+    let agreed = ids.next();
+    Ok((agreed, ids.collect()))
+}
+
 /// Creates or replaces a file in the app folder (multipart: metadata + bytes in one request).
 pub fn upload(token: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
     let existing = find(token, name)?;
+    upload_to(token, name, bytes, existing)
+}
+
+/// Writes to one particular file, so a round that has already agreed which document is the sync
+/// can't be redirected to a rival copy by a lookup that returns whichever Drive lists first.
+fn upload_to(token: &str, name: &str, bytes: &[u8], existing: Option<String>) -> Result<(), String> {
     const BOUNDARY: &str = "pipsyncboundary";
     let meta = match &existing {
         Some(_) => format!("{{\"name\":\"{name}\"}}"),
@@ -174,6 +187,8 @@ pub struct SyncResult {
     pub waiting: bool,
     /// The other device tapped Not now.
     pub refused: bool,
+    /// Another device started this sync at the same moment and won; this one should ask to join.
+    pub lost_race: bool,
     /// Devices asking to join, for the "… wants to sync" card.
     pub requests: Vec<join::Request>,
     /// The round got far enough to read them, so an empty list really means nobody is waiting.
@@ -351,21 +366,39 @@ pub fn sync_once(job: &SyncJob) -> SyncResult {
     out.requests = waiting;
     out.fetched_requests = true;
 
-    let remote = match with_token(job, &mut out, &mut token, |t| download(t, DOC_NAME)) {
-        Ok(Some(bytes)) => match sync::open(&key, &bytes) {
-            Ok(doc) => Some(doc),
-            Err(e) => {
-                out.error = Some(e);
-                return out;
-            }
-        },
-        Ok(None) => None,
+    let (agreed, duplicates) = match with_token(job, &mut out, &mut token, canonical_doc) {
+        Ok(v) => v,
         Err(e) => {
             out.signed_out = e.contains("signed Pip out");
             out.error = Some(e);
             return out;
         }
     };
+    let remote = match &agreed {
+        Some(id) => match with_token(job, &mut out, &mut token, |t| fetch(t, id)) {
+            Ok(Some(bytes)) => match sync::open(&key, &bytes) {
+                Ok(doc) => Some(doc),
+                Err(_) => {
+                    // The agreed document isn't ours: another device started this sync at the same
+                    // moment and won. Stand down and ask it to let us in — our own reminders are
+                    // still here and merge upward once we're in.
+                    out.lost_race = true;
+                    return out;
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                out.signed_out = e.contains("signed Pip out");
+                out.error = Some(e);
+                return out;
+            }
+        },
+        None => None,
+    };
+    // We can read the agreed document, so any other copy is a rival that lost.
+    for id in &duplicates {
+        let _ = remove_id(&token, id);
+    }
 
     let merged = match &remote {
         Some(r) => job.local.merge(r),
@@ -380,7 +413,7 @@ pub fn sync_once(job: &SyncJob) -> SyncResult {
                 return out;
             }
         };
-        if let Err(e) = with_token(job, &mut out, &mut token, |t| upload(t, DOC_NAME, &sealed)) {
+        if let Err(e) = with_token(job, &mut out, &mut token, |t| upload_to(t, DOC_NAME, &sealed, agreed.clone())) {
             out.signed_out = e.contains("signed Pip out");
             out.error = Some(e);
             return out;
