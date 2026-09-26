@@ -96,17 +96,18 @@ class Sync(private val store: Store, private val deviceName: String) {
                     asked?.let { Drive.delete(access, it) }
                     return Outcome(refused = true)
                 }
-                attempt.published && asked != null -> return Outcome(waiting = true)
-                idOf(DOC) != null || attempt.published -> {
-                    publish(access, attempt, idOf(joinName(attempt.id)))
-                    return Outcome(waiting = true)
-                }
-                else -> {
-                    // Nothing in this account yet, so whichever device got here first starts the
-                    // sync — the same rule the PC follows, so neither can make a rival one.
+                // Only keep waiting while there is actually a sync to be let into. If it has gone,
+                // waiting would mean waiting for an approval nobody can give.
+                idOf(DOC) == null -> {
+                    asked?.let { Drive.delete(access, it) }
                     key = Auth.randomHex(32)
                     store.syncKey = key
                     store.joining = null
+                }
+                asked != null -> return Outcome(waiting = true)
+                else -> {
+                    publish(access, attempt, null)
+                    return Outcome(waiting = true)
                 }
             }
         }

@@ -309,7 +309,7 @@ pub fn sync_once(job: &SyncJob) -> SyncResult {
                 let _ = remove_id(&token, asked);
             }
             return out;
-        } else if job.joining_published {
+        } else if job.joining_published && id_of(DOC_NAME).is_some() {
             // Nobody has tapped anything yet. Put the request back if it aged out of the folder.
             out.waiting = true;
             if asked.is_none() {
@@ -328,10 +328,15 @@ pub fn sync_once(job: &SyncJob) -> SyncResult {
             out.waiting = true;
             return out;
         } else {
+            // Nothing to join — either this is the first device, or the sync this one was waiting
+            // for is gone. Either way, waiting for an approval nobody can give would strand it.
             let Some(candidate) = job.candidate else {
                 out.error = Some("Sync isn't set up on this device yet".into());
                 return out;
             };
+            if let Some(asked) = &asked {
+                let _ = remove_id(&token, asked); // our own request, now pointless
+            }
             key = Some(candidate);
             out.created_key = Some(candidate);
         }
