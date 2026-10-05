@@ -32,9 +32,7 @@ pub fn page_at(i: usize) -> Page {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Pet,
-    Water,
     Reminders,
-    Dates,
     Connections,
     Calendars,
     Email,
@@ -42,13 +40,13 @@ pub enum Page {
     About,
 }
 
-const PAGES: [(Page, &str, &str); 9] = [
+/// Water lives with the reminders because it is one, and dates live with the calendar because
+/// that is what they are. Fewer pages, nothing hidden.
+const PAGES: [(Page, &str, &str); 7] = [
     (Page::Pet, "Companion", "Name, look and behaviour"),
-    (Page::Water, "Water", "Gentle hydration reminders"),
-    (Page::Reminders, "Reminders", "Things you'd like to remember"),
-    (Page::Dates, "Dates", "Birthdays, anniversaries and holidays"),
+    (Page::Reminders, "Reminders", "Your reminders, and water"),
     (Page::Connections, "Connections", "Services Pip keeps an eye on for you"),
-    (Page::Calendars, "Calendars", "Your calendars and event alerts"),
+    (Page::Calendars, "Calendar", "Dates, holidays and your calendars"),
     (Page::Email, "Email", "A gentle nudge for mail that matters"),
     (Page::Quiet, "Quiet & alerts", "When and how it speaks up"),
     (Page::About, "About", "Stats, privacy and resource use"),
@@ -369,10 +367,9 @@ impl App {
 
         match page {
             Page::Pet => self.page_pet(&mut c, &focus),
-            Page::Water => self.page_water(&mut c),
+
             Page::Reminders => self.page_reminders(&mut c, &focus),
             Page::Quiet => self.page_quiet(&mut c),
-            Page::Dates => self.page_dates(&mut c, &focus),
             Page::Calendars => self.page_calendars(&mut c, &focus, &kw_buf),
             Page::Connections => self.page_connections(&mut c),
             Page::Email => self.page_email(&mut c, &focus, &kw_buf),
@@ -389,7 +386,7 @@ impl App {
         text::draw(&mut pm, &f.regular, 12.5 * s, x0, 66.0 * s, pal.muted, 1.0, sub);
         let add = match page {
             Page::Reminders if self.settings.reminders.len() < 50 => Some(("+ Add reminder", UiAct::AddReminder)),
-            Page::Dates if self.settings.dates.items.len() < 200 => Some(("+ Add date", UiAct::AddDate)),
+            Page::Calendars if self.settings.dates.items.len() < 200 => Some(("+ Add date", UiAct::AddDate)),
             _ => None,
         };
         if let Some((label, act)) = add {
@@ -464,7 +461,8 @@ impl App {
         c.toggle(cy, p.start_with_system, UiAct::Startup);
     }
 
-    fn page_water(&self, c: &mut Ctx) {
+    /// Water is a reminder Pip already knows how to time, so it sits with the rest of them.
+    fn water_section(&self, c: &mut Ctx) {
         let w = &self.settings.water;
         let cy = c.row("Water reminders", Some("Gentle nudges, counted from your last glass"));
         c.toggle(cy, w.enabled, UiAct::WaterOn);
@@ -498,6 +496,10 @@ impl App {
     fn page_reminders(&self, c: &mut Ctx, focus: &Option<Field>) {
         let s = c.s;
         let f = fonts();
+        section_label(c, "WATER");
+        self.water_section(c);
+        section_label(c, "YOUR REMINDERS");
+        c.y += 6.0 * s;
         if self.settings.reminders.is_empty() {
             c.y += 40.0 * s;
             let msg = "No reminders yet.";
@@ -1116,7 +1118,9 @@ impl App {
         (x, y)
     }
 
-    fn page_dates(&self, c: &mut Ctx, focus: &Option<Field>) {
+    /// Birthdays, anniversaries and holidays: the dates you keep yourself, as opposed to the
+    /// calendars you subscribe to further down the page.
+    fn dates_section(&self, c: &mut Ctx, focus: &Option<Field>) {
         let s = c.s;
         let f = fonts();
         let d = &self.settings.dates;
@@ -1208,6 +1212,9 @@ impl App {
     fn page_calendars(&self, c: &mut Ctx, focus: &Option<Field>, kw_buf: &str) {
         let s = c.s;
         let f = fonts();
+        section_label(c, "IMPORTANT DATES");
+        self.dates_section(c, focus);
+        section_label(c, "CALENDARS");
         let d = &self.settings.dates;
         let x1 = c.x1;
         let now = platform::now_unix();

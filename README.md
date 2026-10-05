@@ -25,7 +25,7 @@ prompt. Choose **No** to run it from where it is (portable). Settings › About 
 - Reminders appear as a speech bubble: **Done / Snooze / Dismiss**. Ignored bubbles fold into a
   small badge on the pet after a few minutes; click the pet to bring it back.
 
-**Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Dates (with an optional
+**Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Calendar (with an optional
 heads-up a few days before). South African public holidays are built in. Calendars come from Google
 (Settings › Connections): events show on today’s card, important ones (own alert, important calendar
 or a keyword like “dentist”) get a gentle alert, and a quiet morning summary lists what’s on.

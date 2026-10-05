@@ -584,3 +584,23 @@ out from under someone mid-sentence. Android 14 lets people revoke full-screen a
 day circles, and an Important switch. Saving and deleting go through the engine (`save_reminder`,
 `delete_reminder`) so times are ordered and deduplicated exactly as on the PC and a deletion leaves
 a tombstone — the phone cannot write a document the PC would read differently.
+
+## 21. Seven pages instead of nine, 2026-10-05
+
+Settings had grown a page per feature, which is how a small app starts feeling like a big one.
+Two of them were not really their own thing:
+
+- **Water** is a reminder. It has a time window, days of the week and a daily goal, and the engine
+  schedules it the same way it schedules the rest. It is now a **Water** section at the top of
+  Reminders, above your own.
+- **Dates** are what a calendar is for. Birthdays, anniversaries and holidays now sit as an
+  **Important dates** section at the top of the renamed **Calendar** page, with the subscribed
+  calendars and their alert rules below.
+
+Nothing was hidden and nothing was dropped: every row, card and action moved across intact, the
+header's add button follows the page it belongs to ("+ Add reminder", "+ Add date"), and the two
+page functions became sections rather than being left behind unused. The early "nothing here yet"
+return that used to end the Dates page now ends only its section, so the calendars below it still
+draw.
+
+Seven pages: Companion, Reminders, Connections, Calendar, Email, Quiet & alerts, About.
