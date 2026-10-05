@@ -89,6 +89,7 @@ fun EditReminder(draft: Draft, onSave: (Draft) -> Unit, onDelete: () -> Unit, on
     var days by remember { mutableStateOf(draft.days) }
     var important by remember { mutableStateOf(draft.important) }
     var picking by remember { mutableStateOf<Int?>(null) } // index being set, or times.size for a new one
+    var typeIt by remember { mutableStateOf(false) } // typing a time rather than turning the dial
     var confirmDelete by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -216,7 +217,16 @@ fun EditReminder(draft: Draft, onSave: (Draft) -> Unit, onDelete: () -> Unit, on
                 }) { Text("Set") }
             },
             dismissButton = { TextButton(onClick = { picking = null }) { Text("Cancel") } },
-            text = { TimePicker(state = state) },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // The dial is nice to nudge; typing is quicker when you know the time. The
+                    // choice sticks while the reminder is open, so it isn't a decision each time.
+                    if (typeIt) TimeInput(state = state) else TimePicker(state = state)
+                    TextButton(onClick = { typeIt = !typeIt }) {
+                        Text(if (typeIt) "Use the clock" else "Type it instead")
+                    }
+                }
+            },
         )
     }
 
