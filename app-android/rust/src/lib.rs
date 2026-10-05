@@ -12,7 +12,7 @@
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
-use pip_core::settings::Settings;
+use pip_core::settings::{CustomReminder, Settings};
 use pip_core::state::State;
 use pip_core::schedule::{self, ItemKey};
 use pip_core::sync::{self, join, SyncDoc};
@@ -107,6 +107,31 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
         // --- when things go off ---------------------------------------------------------------
         // The phone asks the same engine the PC uses, so an alarm rings at the same minute on both.
 
+        // Add or change one reminder. Goes through the engine so the times end up ordered and
+        // unique, the legacy single time stays in step, and the phone can't write something the PC
+        // would read differently.
+        "save_reminder" => {
+            let mut settings: Settings = from_field(a, "settings")?;
+            let mut r: CustomReminder = from_field(a, "reminder")?;
+            r.updated_at = int_field(a, "now")?;
+            r.tidy_times();
+            match settings.reminders.iter_mut().find(|x| x.id == r.id) {
+                Some(existing) => *existing = r,
+                None => settings.reminders.push(r),
+            }
+            settings.sanitize();
+            to_value(&settings)
+        }
+        // Remove one, and remember that it was removed so a device that has been offline can't
+        // bring it back.
+        "delete_reminder" => {
+            let mut settings: Settings = from_field(a, "settings")?;
+            let mut state: State = from_field(a, "state")?;
+            let id = str_field(a, "id")?.to_string();
+            settings.reminders.retain(|r| r.id != id);
+            state.sync_deleted.insert(id, int_field(a, "now")?);
+            Ok(json!({ "settings": to_value(&settings)?, "state": to_value(&state)? }))
+        }
         // When the next reminder goes off. The phone arms one alarm for this and nothing else:
         // `next_event` also reports quiet-hours boundaries and the day rolling over, and waking a
         // phone — and lighting the status-bar alarm icon — for those would be a lie and a tax on
@@ -287,6 +312,38 @@ mod tests {
         // boundary it can do nothing about.
         let none = json!({ "settings": { "reminders": [] }, "state": {}, "now": 1_789_974_000, "tz_offset_min": 120 });
         assert!(dispatch("next_reminder", &none).unwrap()["at"].is_null());
+    }
+
+    /// Editing on the phone has to leave the document in the shape the PC expects.
+    #[test]
+    fn a_reminder_edited_on_the_phone_is_tidied_the_same_way() {
+        let saved = dispatch(
+            "save_reminder",
+            &json!({
+                "settings": {},
+                "reminder": { "id": "r1", "title": "Take pills", "times": ["20:00", "08:00", "08:00"], "days": 31, "enabled": true },
+                "now": 1_000,
+            }),
+        )
+        .unwrap();
+        let r = &saved["reminders"][0];
+        assert_eq!(r["times"], json!(["08:00", "20:00"]), "sorted, duplicate dropped");
+        assert_eq!(r["time"], "08:00", "and the field an older Pip reads");
+        assert_eq!(r["updated_at"], 1_000);
+
+        // Changing it replaces it rather than adding a second one.
+        let again = dispatch(
+            "save_reminder",
+            &json!({ "settings": saved, "reminder": { "id": "r1", "title": "Pills", "times": ["09:00"], "days": 31 }, "now": 2_000 }),
+        )
+        .unwrap();
+        assert_eq!(again["reminders"].as_array().unwrap().len(), 1);
+        assert_eq!(again["reminders"][0]["title"], "Pills");
+
+        // Deleting leaves a tombstone, so an offline PC can't resurrect it.
+        let gone = dispatch("delete_reminder", &json!({ "settings": again, "state": {}, "id": "r1", "now": 3_000 })).unwrap();
+        assert_eq!(gone["settings"]["reminders"].as_array().unwrap().len(), 0);
+        assert_eq!(gone["state"]["sync_deleted"]["r1"], 3_000);
     }
 
     #[test]

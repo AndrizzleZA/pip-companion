@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -46,9 +47,11 @@ class MainActivity : ComponentActivity() {
         val asking: List<JSONObject> = emptyList(),
         /// Pip can't actually alert anyone — notifications are off, or alarms can't be exact.
         val silenced: String? = null,
+        /// The reminder being edited, if any.
+        val editing: Draft? = null,
     )
 
-    data class Reminder(val id: String, val title: String, val times: String, val enabled: Boolean)
+    data class Reminder(val id: String, val title: String, val times: String, val days: String, val enabled: Boolean)
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
 
@@ -58,7 +61,19 @@ class MainActivity : ComponentActivity() {
         sync = Sync(store, deviceName())
         Alarms.channel(this)
         refresh()
-        setContent { PipTheme { Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts) } }
+        setContent {
+            PipTheme {
+                Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts, ::edit, ::addReminder)
+                ui.value.editing?.let { draft ->
+                    EditReminder(
+                        draft = draft,
+                        onSave = ::saveReminder,
+                        onDelete = { deleteReminder(draft.id) },
+                        onCancel = { ui.value = ui.value.copy(editing = null) },
+                    )
+                }
+            }
+        }
         if (store.refreshToken != null) syncNow()
         // Whatever happens, make sure the next reminder is armed — a reminder that doesn't go off
         // is the whole app failing.
@@ -147,6 +162,61 @@ class MainActivity : ComponentActivity() {
         syncNow()
     }
 
+    /// Opens one reminder for editing.
+    private fun edit(id: String) {
+        val list = store.reminders()
+        for (i in 0 until list.length()) {
+            val r = list.getJSONObject(i)
+            if (r.optString("id") == id) {
+                ui.value = ui.value.copy(editing = Draft.of(r))
+                return
+            }
+        }
+    }
+
+    private fun addReminder() {
+        ui.value = ui.value.copy(editing = Draft.blank("r" + Auth.randomHex(6)))
+    }
+
+    /// Saving goes through the engine, so the times end up ordered and the PC reads them the same.
+    private fun saveReminder(draft: Draft) {
+        try {
+            val settings = Native.ask(
+                "save_reminder",
+                JSONObject().put("settings", store.settings).put("reminder", draft.toJson()).put("now", Auth.now()),
+            )
+            store.saveSettings(settings)
+        } catch (e: Exception) {
+            ui.value = ui.value.copy(editing = null, note = e.message)
+            return
+        }
+        ui.value = ui.value.copy(editing = null)
+        afterEdit()
+    }
+
+    private fun deleteReminder(id: String) {
+        try {
+            val out = Native.ask(
+                "delete_reminder",
+                JSONObject().put("settings", store.settings).put("state", store.state).put("id", id).put("now", Auth.now()),
+            )
+            store.saveSettings(out.getJSONObject("settings"))
+            store.saveState(out.getJSONObject("state"))
+        } catch (e: Exception) {
+            ui.value = ui.value.copy(editing = null, note = e.message)
+            return
+        }
+        ui.value = ui.value.copy(editing = null)
+        afterEdit()
+    }
+
+    /// Any edit: redraw, re-arm the alarm, and push it to the other device.
+    private fun afterEdit() {
+        refresh()
+        Alarms.arm(this, store)
+        if (store.refreshToken != null) syncNow()
+    }
+
     /** Turning a reminder on or off is a normal edit; the next round carries it everywhere. */
     private fun toggle(id: String) {
         val list = store.reminders()
@@ -191,6 +261,7 @@ class MainActivity : ComponentActivity() {
                     id = r.optString("id"),
                     title = r.optString("title").ifEmpty { "Reminder" },
                     times = times.joinToString(", "),
+                    days = describeDays(r.optInt("days", Draft.WEEKDAYS)),
                     enabled = r.optBoolean("enabled", true),
                 )
             }
@@ -203,6 +274,7 @@ class MainActivity : ComponentActivity() {
             reminders = reminders,
             asking = outcome?.asking ?: emptyList(),
             silenced = silencedReason(),
+            editing = ui.value.editing,
         )
     }
 
@@ -231,6 +303,8 @@ private fun Home(
     askAgain: () -> Unit,
     toggle: (String) -> Unit,
     fixAlerts: () -> Unit,
+    edit: (String) -> Unit,
+    add: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
@@ -302,15 +376,20 @@ private fun Home(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Reminders", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = syncNow, enabled = !s.busy) { Text("Sync now") }
+                    Button(onClick = add, enabled = !s.busy) { Text("+ Add") }
                 }
                 if (s.reminders.isEmpty()) {
-                    Text("Nothing yet. Add one on your PC and it will appear here.", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Nothing yet. Add one here, or on your PC — either way it shows up on both.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 for (r in s.reminders) {
                     ListItem(
                         headlineContent = { Text(r.title) },
-                        supportingContent = { Text(r.times) },
+                        supportingContent = { Text(r.times + "  ·  " + r.days) },
                         trailingContent = { Switch(checked = r.enabled, onCheckedChange = { toggle(r.id) }, enabled = !s.busy) },
+                        modifier = Modifier.clickable(enabled = !s.busy) { edit(r.id) },
                     )
                     HorizontalDivider()
                 }

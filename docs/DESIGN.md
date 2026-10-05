@@ -547,3 +547,40 @@ was about proving the same data, the same rules and the same key on a second kin
 
 **Size.** The Rust library is ~700 KB for arm64; the debug APK is a few megabytes with Compose. Only
 arm64 is built — emulator ABIs can be added when something needs them.
+
+## 20. Reminders that ring, and happen more than once a day, 2026-10-05
+
+**Several times a day.** A reminder carries a list of times, not one. "Take pills · 08:00, 14:00,
+20:00 · weekdays" is a single thing to name, switch off and delete — the shape every medication app
+settles on, because three separate reminders with the same title is a list nobody can maintain. Each
+time is its own occurrence: answering the morning one leaves the evening one alone. Records written
+by an older Pip have a single `time` and no list; they are migrated on load, and that field is still
+written so an un-updated device isn't left blind. The field is crate-private, since setting it alone
+would have changed nothing — a mistake one of the tests made before it was closed off.
+
+**Alarms on the phone.** `setAlarmClock` is the only API Android treats as a real alarm: exact,
+allowed out of Doze, and shown in the status bar so the phone doesn't promise something it won't do.
+Repeating alarms are deliberately inexact, so Pip arms exactly one — the next reminder — and arms
+the next when it fires; a boot receiver puts it back, because Android forgets alarms on restart.
+Pip qualifies for `USE_EXACT_ALARM`, so there is no permission to beg for, and it still checks
+`canScheduleExactAlarms` and degrades to an inexact alarm rather than going quiet.
+
+**Asleep: the alarm screen. Awake: a notification.** Locked or dark, the full-screen intent takes
+over the way a morning alarm does — title, time, Snooze, Done — and keeps the screen on while it
+rings. In use, the same two buttons arrive as a heads-up, because nothing should seize the screen
+out from under someone mid-sentence. Android 14 lets people revoke full-screen alerts, so Pip asks
+`canUseFullScreenIntent` and falls back instead of failing.
+
+**What the first real alarm taught us**, none of which the mock could have:
+- it stopped ringing when the screen turned off — the phone woke, showed the alarm, dozed, and the
+  `onStop` handler silenced it. It now holds the screen and rings for a minute before giving up,
+  leaving the notification behind rather than losing the reminder;
+- arming from `next_event` woke the phone for quiet-hours boundaries and midnight and lit the alarm
+  icon for them. It arms for reminders only, and cancels outright when there are none;
+- a reminder from hours earlier was still "due" and rang like a fresh one. Late ones are a quiet
+  "Earlier today" note now.
+
+**Editing on the phone.** One screen: a name, the times as chips you tap to change and add to, seven
+day circles, and an Important switch. Saving and deleting go through the engine (`save_reminder`,
+`delete_reminder`) so times are ordered and deduplicated exactly as on the PC and a deletion leaves
+a tombstone — the phone cannot write a document the PC would read differently.

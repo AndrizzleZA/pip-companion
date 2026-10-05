@@ -37,6 +37,12 @@ Calendar** is read-only. Disconnect (asks once more) also withdraws Pip’s acce
 ever signs Pip out, the entry shows **Reconnect**. Important senders and subject words live in
 Settings › Email.
 
+**Reminders.** A reminder has a name, one or more times of day, and the days it repeats — so
+"take pills" at 08:00, 14:00 and 20:00 is one reminder, not three. On the phone they behave like the
+phone’s own alarm: exact, out of Doze, and over the lock screen with Snooze and Done. While you are
+using the phone the same two buttons arrive as a notification instead of taking the screen. You can
+add and edit reminders on either device.
+
 **Your other devices.** Sync keeps reminders, dates, water history and preferences the same on every
 device, through one encrypted file in your own Google Drive app folder — Pip has no server. Sign in
 with the same Google account on the next device and it asks to join; this one shows *“… wants to
