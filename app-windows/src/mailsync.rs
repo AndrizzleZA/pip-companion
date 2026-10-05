@@ -184,18 +184,29 @@ pub fn verify_gmail(access: &str) -> Result<(String, String), pip_core::connecto
     }
 }
 
-pub fn start(hwnd: HWND, keys: ClientKeys, rules: EmailSettings, jobs: Vec<MailJob>) {
+/// Starts a check in the background. `false` means the thread never started, and the caller has to
+/// put itself back together; otherwise an answer always comes back, even an empty one.
+pub fn start(hwnd: HWND, keys: ClientKeys, rules: EmailSettings, jobs: Vec<MailJob>) -> bool {
     let hwnd_bits = hwnd as usize;
     let now = crate::platform::now_unix();
-    let _ = std::thread::Builder::new().name("pip-mail".into()).stack_size(256 * 1024).spawn(move || {
-        let results: Vec<MailResult> = jobs.iter().map(|j| check(&keys, &rules, j, now)).collect();
-        let ptr = Box::into_raw(Box::new(results));
-        unsafe {
-            if PostMessageW(hwnd_bits as HWND, WM_MAILSYNC, 0, ptr as isize) == 0 {
-                drop(Box::from_raw(ptr));
+    std::thread::Builder::new()
+        .name("pip-mail".into())
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            // A panic in here would otherwise leave the app waiting for a check that never lands,
+            // so it reports an empty result and the next check goes ahead as normal.
+            let results: Vec<MailResult> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                jobs.iter().map(|j| check(&keys, &rules, j, now)).collect()
+            }))
+            .unwrap_or_default();
+            let ptr = Box::into_raw(Box::new(results));
+            unsafe {
+                if PostMessageW(hwnd_bits as HWND, WM_MAILSYNC, 0, ptr as isize) == 0 {
+                    drop(Box::from_raw(ptr));
+                }
             }
-        }
-    });
+        })
+        .is_ok()
 }
 
 /// # Safety

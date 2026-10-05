@@ -630,3 +630,41 @@ the two can never disagree. The address is stored lowercase and never duplicated
 
 Proven against the mock Gmail: off then on; starred-but-read ignored; the button present, clicked,
 and then absent for that sender's next email, with one rule added and no second.
+
+## 23. Background work that can't stop for good, 2026-10-05
+
+A real email, starred on arrival and left unread, produced no nudge. The rule was right and the build
+was installed; mail checking itself had quietly stopped three hours earlier and never resumed.
+
+The timers for mail, calendar and phone sync were one-shot by habit: the handler killed its own timer
+and the round was re-armed only at the end of a *completed* pass.
+
+```rust
+T_MAIL => {
+    self.kill_timer(T_MAIL);
+    self.check_mail(false);
+}
+```
+
+Every early return in between — no Google keys yet, no jobs, locked, away, a flag still saying
+"running" — therefore ended that subsystem until the app was restarted, silently and permanently. The
+first check after launch raced the secrets being opened, lost, and that was the end of email for the
+session. The calendar had the same shape plus one of its own: its re-arm sat inside `if result.online`,
+so a single offline pass stopped it for good. `calsync::start` even carried a comment promising that
+"the next scheduled sync will try again" when there was no next one.
+
+The rule now is that **a background round always leaves its successor armed**, whatever happens:
+
+- The handler arms the next attempt *before* making it, so no return path inside can be the last one.
+  A round that completes normally replaces that net with its proper interval.
+- Every early return in `check_mail` calls `schedule_mail()`. The schedulers, not the callers, decide
+  when there is genuinely nothing to arm — no accounts, no keys, no calendars — so stopping is a
+  decision made in one place instead of an accident in five.
+- A `running` flag is a hint, not a lock. Each is stamped with its start time and written off after
+  `MAIL_STALL_SECS` / `SYNC_STALL_SECS`, so a worker that dies without reporting costs one cycle
+  rather than the session.
+- `mailsync::start` returns whether the thread actually started, and catches a panic inside it so an
+  answer — even an empty one — always comes back.
+
+The general rule: anything that repeats must be impossible to stop by accident. Prefer a wasted cycle
+over a subsystem that goes quiet without saying so.

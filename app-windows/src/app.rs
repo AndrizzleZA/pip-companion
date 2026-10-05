@@ -43,6 +43,13 @@ const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
 const STARTUP_GRACE_MS: u64 = 45_000;
 const AWAY_AFTER_MS: u64 = 5 * 60_000;
+/// A mail check that hasn't reported back in this long is written off. A worker that dies without
+/// posting its result must not stop Pip looking at email for the rest of the day.
+const MAIL_STALL_SECS: i64 = 180;
+/// Same idea for the two syncs: a round that never reported back is written off after this.
+const SYNC_STALL_SECS: i64 = 300;
+/// How long before a background round that couldn't run is attempted again.
+const RETRY_MS: u32 = 15 * 60_000;
 
 pub enum Effect {
     Menu(i32, i32),
@@ -94,6 +101,7 @@ pub struct App {
     pub events: Vec<Event>,
     pub feed_meta: HashMap<String, FeedMeta>,
     sync_running: bool,
+    sync_started: i64,
     sync_failures: u32,
     secrets_dirty: bool,
     /// Page to show when Settings opens next.
@@ -103,10 +111,13 @@ pub struct App {
     pub mail_access: HashMap<String, (String, i64)>,
     pub mail_status: HashMap<String, MailStatus>,
     mail_running: bool,
+    /// When the in-flight check started, so a stalled one can be written off.
+    mail_started: i64,
     pub signin: SignIn,
     pub sync_access: Option<(String, i64)>,
     pub sync_status: SyncStatus,
     drive_running: bool,
+    drive_started: i64,
     /// This device asked to join an existing sync and is waiting for an Approve tap elsewhere.
     pub sync_waiting: bool,
     /// The other device said Not now; nothing happens here until the user asks again.
@@ -187,6 +198,7 @@ impl App {
             events: Vec::new(),
             feed_meta: HashMap::new(),
             sync_running: false,
+            sync_started: 0,
             sync_failures: 0,
             secrets_dirty: false,
             open_page: None,
@@ -194,10 +206,12 @@ impl App {
             mail_access: HashMap::new(),
             mail_status: HashMap::new(),
             mail_running: false,
+            mail_started: 0,
             signin: SignIn::Idle,
             sync_access: None,
             sync_status: SyncStatus::default(),
             drive_running: false,
+            drive_started: 0,
             sync_waiting: false,
             sync_refused: false,
             sync_requests: Vec::new(),
@@ -518,15 +532,17 @@ impl App {
                 self.render();
             }
             T_CALSYNC => {
-                self.kill_timer(T_CALSYNC);
+                // The net goes up before the attempt: an early return, an offline pass or a worker
+                // that never reports back must not stop the calendar for the rest of the session.
+                // A round that finishes normally replaces this with its own, longer interval.
+                self.schedule_calsync(RETRY_MS);
                 self.start_sync(true);
             }
             T_MAIL => {
-                self.kill_timer(T_MAIL);
                 self.check_mail(false);
             }
             T_SYNC => {
-                self.kill_timer(T_SYNC);
+                self.schedule_sync(RETRY_MS);
                 self.sync_now(true);
             }
             T_TRIM => {
@@ -1801,9 +1817,18 @@ impl App {
 // ---------------------------------------------------------------------------------------------
 
 impl App {
+    /// The next calendar round; nothing is armed when there are no calendars to fetch.
+    pub fn schedule_calsync(&mut self, in_ms: u32) {
+        if self.settings.dates.calendars.iter().any(|c| c.enabled) {
+            self.set_timer(T_CALSYNC, in_ms.max(1_000));
+        } else {
+            self.kill_timer(T_CALSYNC);
+        }
+    }
+
     /// Starts a sync job (`online = false` only re-reads the on-disk caches, e.g. at midnight).
     pub fn start_sync(&mut self, online: bool) {
-        if self.sync_running {
+        if self.sync_running && now_unix() - self.sync_started < SYNC_STALL_SECS {
             return;
         }
         let jobs: Vec<FeedJob> = self
@@ -1829,6 +1854,7 @@ impl App {
             return;
         }
         self.sync_running = true;
+        self.sync_started = now_unix();
         let today = local(&Local, now_unix()).date();
         calsync::start(self.hwnd, self.store.dir().to_path_buf(), jobs, online, today);
     }
@@ -1855,7 +1881,11 @@ impl App {
             // Hourly when healthy; back off to 15, 30, 60, 120 minutes while failing.
             self.sync_failures = if failures > 0 { self.sync_failures + 1 } else { 0 };
             let minutes = if self.sync_failures == 0 { 60 } else { (15u32 << (self.sync_failures - 1).min(3)).min(120) };
-            self.set_timer(T_CALSYNC, minutes * 60_000);
+            self.schedule_calsync(minutes * 60_000);
+        } else {
+            // Read from the cache because there was no network. Try again rather than waiting for
+            // something else to happen to kick a round off.
+            self.schedule_calsync(RETRY_MS);
         }
         self.reschedule();
         self.ui_invalidate();
@@ -2119,15 +2149,21 @@ impl App {
 
     /// Starts a check. `force` also checks while away/locked (e.g. "Check now").
     pub fn check_mail(&mut self, force: bool) {
-        if self.mail_running {
+        if self.mail_running && now_unix() - self.mail_started < MAIL_STALL_SECS {
+            self.schedule_mail();
             return;
         }
         if !force && (self.locked || self.away) {
-            // Nobody to tell; unlock / coming back triggers a check.
-            self.kill_timer(T_MAIL);
+            // Nobody to tell. Coming back checks straight away, but a check is still left armed:
+            // if that wake-up is ever missed, email shouldn't stop for good.
+            self.schedule_mail();
             return;
         }
-        let Some(keys) = self.google_keys() else { return };
+        // Can be missing early in startup, before the secrets are open.
+        let Some(keys) = self.google_keys() else {
+            self.schedule_mail();
+            return;
+        };
         let jobs: Vec<crate::mailsync::MailJob> = self
             .settings
             .email
@@ -2144,10 +2180,16 @@ impl App {
             })
             .collect();
         if jobs.is_empty() {
+            self.schedule_mail();
             return;
         }
         self.mail_running = true;
-        crate::mailsync::start(self.hwnd, keys, self.settings.email.clone(), jobs);
+        self.mail_started = now_unix();
+        if !crate::mailsync::start(self.hwnd, keys, self.settings.email.clone(), jobs) {
+            // Couldn't even start the thread: don't sit in "checking" forever, try again later.
+            self.mail_running = false;
+            self.schedule_mail();
+        }
     }
 
     pub fn on_mailsync(&mut self, results: Box<Vec<crate::mailsync::MailResult>>) {
@@ -2319,7 +2361,10 @@ impl App {
 
     /// Pushes local changes and pulls anything new. `force` ignores the "nothing changed" check.
     pub fn sync_now(&mut self, force: bool) {
-        if self.drive_running || !self.sync_connected() || (self.sync_refused && self.sync_key().is_none()) {
+        if self.drive_running && now_unix() - self.drive_started < SYNC_STALL_SECS {
+            return;
+        }
+        if !self.sync_connected() || (self.sync_refused && self.sync_key().is_none()) {
             return;
         }
         let (Some(keys), Some(refresh)) = (self.google_keys(), self.secrets.get(SYNC_REFRESH_KEY).cloned()) else { return };
@@ -2359,6 +2404,7 @@ impl App {
         let device = platform::device_name();
         let local = pip_core::sync::SyncDoc::from_local(&self.settings, &self.state, &device, now);
         self.drive_running = true;
+        self.drive_started = now_unix();
         crate::drivesync::start(
             self.hwnd,
             crate::drivesync::SyncJob {

@@ -275,7 +275,7 @@ pub fn start(hwnd: HWND, dir: PathBuf, jobs: Vec<FeedJob>, online: bool, from_da
         }
     });
     if spawned.is_err() {
-        // Extremely unlikely; the next scheduled sync will try again.
+        // Extremely unlikely, and the caller has already armed the next round, which will retry.
     }
 }
 
