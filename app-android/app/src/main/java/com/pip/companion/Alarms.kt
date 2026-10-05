@@ -1,0 +1,256 @@
+package com.pip.companion
+
+import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import org.json.JSONObject
+import java.util.TimeZone
+
+/**
+ * Reminders that behave like the phone's own alarm clock.
+ *
+ * Android only treats `setAlarmClock` as a real alarm: it fires at the minute, gets out of Doze to
+ * do it, and puts the alarm icon in the status bar so the phone tells the truth about what it will
+ * do. Repeating alarms are deliberately inexact, so Pip arms exactly one — the next thing due — and
+ * arms the one after it when that fires. The engine that decides "what is next" is the same Rust
+ * the PC runs, so both devices ring at the same minute.
+ */
+object Alarms {
+    const val CHANNEL = "reminders"
+    private const val RING = 1001          // the one pending alarm
+    const val ACTION_RING = "com.pip.companion.RING"
+    const val ACTION_SNOOZE = "com.pip.companion.SNOOZE"
+    const val ACTION_DONE = "com.pip.companion.DONE"
+    const val EXTRA_ID = "id"
+    const val EXTRA_TITLE = "title"
+    const val EXTRA_OCCURRENCE = "occurrence"
+
+    fun channel(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL) != null) return
+        val c = NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH)
+        c.description = "Your reminders, at the time you set them"
+        c.enableVibration(true)
+        c.setBypassDnd(false)
+        // Alarm usage: it plays at alarm volume and survives "ring/vibrate" being turned down.
+        c.setSound(
+            Settings.System.DEFAULT_ALARM_ALERT_URI ?: Settings.System.DEFAULT_NOTIFICATION_URI,
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build(),
+        )
+        nm.createNotificationChannel(c)
+    }
+
+    private fun args(store: Store, now: Long): JSONObject = JSONObject()
+        .put("settings", store.settings)
+        .put("state", store.state)
+        .put("now", now)
+        .put("tz_offset_min", TimeZone.getDefault().getOffset(now * 1000) / 60000)
+
+    /** Arms one alarm for the next thing due. Call after any change: edits, sync, a reminder going off. */
+    fun arm(context: Context, store: Store) {
+        channel(context)
+        val now = Auth.now()
+        val am = context.getSystemService(AlarmManager::class.java)
+        val at = try {
+            val answer = Native.ask("next_reminder", args(store, now))
+            if (answer.isNull("at")) {
+                cancel(context, am) // no reminders: no alarm icon, no wake-ups
+                return
+            }
+            answer.getLong("at")
+        } catch (e: Exception) {
+            return
+        }
+        val fire = PendingIntent.getBroadcast(
+            context,
+            RING,
+            Intent(context, AlarmReceiver::class.java).setAction(ACTION_RING),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // Tapping the alarm icon in the status bar opens Pip.
+        val show = PendingIntent.getActivity(
+            context,
+            RING + 1,
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val whenMs = at * 1000
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(whenMs, show), fire)
+        } else {
+            // Exact alarms turned off for Pip: still fire, just without the promise of the minute.
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, whenMs, fire)
+        }
+    }
+
+    /** Everything due at this moment, straight from the engine. */
+    fun due(store: Store, now: Long = Auth.now()): List<JSONObject> = try {
+        val items = Native.ask("due", args(store, now)).getJSONArray("items")
+        (0 until items.length()).map { items.getJSONObject(it) }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Rings one reminder. Locked phone: the alarm screen, like a morning alarm. Otherwise a
+     * heads-up notification with the same two buttons, so nothing takes over the screen while the
+     * phone is in use.
+     */
+    fun ring(context: Context, id: String, title: String, occurrence: Long, late: Boolean = false) {
+        channel(context)
+        val nm = context.getSystemService(NotificationManager::class.java)
+        val full = Intent(context, AlarmActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra(EXTRA_ID, id)
+            .putExtra(EXTRA_TITLE, title)
+            .putExtra(EXTRA_OCCURRENCE, occurrence)
+        val fullPending = PendingIntent.getActivity(
+            context,
+            occurrence.toInt(),
+            full,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // Something hours old shouldn't go off like a fresh alarm — it's a note that it was missed.
+        val notification = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_pip_notification)
+            .setContentTitle(title)
+            .setContentText(if (late) "Earlier today" else "Reminder")
+            .setCategory(if (late) NotificationCompat.CATEGORY_REMINDER else NotificationCompat.CATEGORY_ALARM)
+            .setPriority(if (late) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_MAX)
+            .setSilent(late)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setContentIntent(fullPending)
+            .addAction(0, "Snooze", action(context, ACTION_SNOOZE, id, title, occurrence))
+            .addAction(0, "Done", action(context, ACTION_DONE, id, title, occurrence))
+
+        // Android 14 lets people take full-screen alerts away; honour that and just buzz instead.
+        val canTakeOver = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE || nm.canUseFullScreenIntent()
+        if (canTakeOver && !late) notification.setFullScreenIntent(fullPending, true)
+
+        if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            nm.notify(noteId(occurrence), notification.build())
+        }
+    }
+
+    private fun cancel(context: Context, am: AlarmManager) {
+        val fire = PendingIntent.getBroadcast(
+            context,
+            RING,
+            Intent(context, AlarmReceiver::class.java).setAction(ACTION_RING),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        am.cancel(fire)
+    }
+
+    fun clear(context: Context, occurrence: Long) {
+        context.getSystemService(NotificationManager::class.java).cancel(noteId(occurrence))
+    }
+
+    private fun noteId(occurrence: Long): Int = (occurrence % Int.MAX_VALUE).toInt()
+
+    private fun action(context: Context, what: String, id: String, title: String, occurrence: Long): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            (occurrence.toInt() * 31) + what.hashCode(),
+            Intent(context, AlarmReceiver::class.java)
+                .setAction(what)
+                .putExtra(EXTRA_ID, id)
+                .putExtra(EXTRA_TITLE, title)
+                .putExtra(EXTRA_OCCURRENCE, occurrence),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+    /** "Done" — this occurrence is answered. Writes through so the PC hears about it too. */
+    fun done(context: Context, store: Store, id: String, occurrence: Long) {
+        val now = Auth.now()
+        try {
+            val out = Native.ask(
+                "ack",
+                JSONObject().put("settings", store.settings).put("state", store.state)
+                    .put("id", id).put("occurrence", occurrence).put("now", now),
+            )
+            store.saveSettings(out.getJSONObject("settings"))
+            store.saveState(out.getJSONObject("state"))
+        } catch (e: Exception) {
+            return
+        }
+        clear(context, occurrence)
+        arm(context, store)
+    }
+
+    /** "Snooze" — ask again shortly. The length is the one set in Pip's settings. */
+    fun snooze(context: Context, store: Store, id: String, occurrence: Long) {
+        val minutes = store.settings.optJSONObject("notify")?.optInt("snooze_min", 10) ?: 10
+        val until = Auth.now() + minutes * 60
+        try {
+            val state = Native.ask("snooze", JSONObject().put("state", store.state).put("id", id).put("until", until))
+            store.saveState(state)
+        } catch (e: Exception) {
+            return
+        }
+        clear(context, occurrence)
+        arm(context, store)
+    }
+}
+
+/** The alarm going off, and the two things you can say back to it. */
+class AlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val store = Store(context)
+        val id = intent.getStringExtra(Alarms.EXTRA_ID).orEmpty()
+        val title = intent.getStringExtra(Alarms.EXTRA_TITLE).orEmpty()
+        val occurrence = intent.getLongExtra(Alarms.EXTRA_OCCURRENCE, 0)
+        when (intent.action) {
+            Alarms.ACTION_SNOOZE -> Alarms.snooze(context, store, id, occurrence)
+            Alarms.ACTION_DONE -> Alarms.done(context, store, id, occurrence)
+            else -> {
+                // Ring whatever is due, then arm the next one — the alarm we just used is spent.
+                for (item in Alarms.due(store)) {
+                    Alarms.ring(
+                        context,
+                        item.optString("id"),
+                        item.optString("title"),
+                        item.optLong("occurrence"),
+                        item.optBoolean("late"),
+                    )
+                }
+                Alarms.arm(context, store)
+            }
+        }
+    }
+}
+
+/** Android forgets alarms when the phone restarts, so Pip puts them back. */
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            Alarms.arm(context, Store(context))
+        }
+    }
+}
+
+/** Someone turned exact alarms back on (or off) for Pip; re-arm with whatever we may now use. */
+class ExactAlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        Alarms.arm(context, Store(context))
+    }
+}
+
+/** Opens the phone's "Alarms & reminders" screen for Pip. */
+fun exactAlarmSettings(context: Context): Intent =
+    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + context.packageName))

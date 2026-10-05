@@ -14,6 +14,7 @@ use jni::sys::jstring;
 use jni::JNIEnv;
 use pip_core::settings::Settings;
 use pip_core::state::State;
+use pip_core::schedule::{self, ItemKey};
 use pip_core::sync::{self, join, SyncDoc};
 use serde_json::{json, Value};
 
@@ -103,8 +104,79 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let req: join::Request = from_field(a, "request")?;
             Ok(json!({ "stale": join::is_stale(&req, int_field(a, "now")?) }))
         }
+        // --- when things go off ---------------------------------------------------------------
+        // The phone asks the same engine the PC uses, so an alarm rings at the same minute on both.
+
+        // When the next reminder goes off. The phone arms one alarm for this and nothing else:
+        // `next_event` also reports quiet-hours boundaries and the day rolling over, and waking a
+        // phone — and lighting the status-bar alarm icon — for those would be a lie and a tax on
+        // the battery.
+        "next_reminder" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let state: State = from_field(a, "state")?;
+            let now = int_field(a, "now")?;
+            let zone = zone(a)?;
+            let at = settings
+                .reminders
+                .iter()
+                .filter_map(|r| schedule::reminder_next(r, &state, now, &zone))
+                .min();
+            Ok(json!({ "at": at }))
+        }
+        // The next instant anything is due, so the shell can arm one alarm for it.
+        "next_event" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let state: State = from_field(a, "state")?;
+            let now = int_field(a, "now")?;
+            Ok(json!({ "at": schedule::next_event(&settings, &state, now, &zone(a)?) }))
+        }
+        // Everything due right now, as the phone needs to show it.
+        "due" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let state: State = from_field(a, "state")?;
+            let now = int_field(a, "now")?;
+            let items: Vec<Value> = schedule::due_items(&settings, &state, now, &zone(a)?)
+                .into_iter()
+                .filter_map(|d| match &d.key {
+                    // Reminders only for now: the phone has no water card or agenda yet, and a
+                    // notification for something it can't show would be a dead end.
+                    ItemKey::Custom(id) => {
+                        let r = settings.reminders.iter().find(|r| &r.id == id)?;
+                        Some(json!({
+                            "id": id,
+                            "title": r.title,
+                            "occurrence": d.occurrence,
+                            "important": r.important,
+                            "late": d.late,
+                        }))
+                    }
+                    _ => None,
+                })
+                .collect();
+            Ok(json!({ "items": items }))
+        }
+        // "Done": this occurrence is answered and won't come back.
+        "ack" => {
+            let mut settings: Settings = from_field(a, "settings")?;
+            let mut state: State = from_field(a, "state")?;
+            schedule::ack_custom(&mut settings, &mut state, str_field(a, "id")?, int_field(a, "occurrence")?, int_field(a, "now")?);
+            Ok(json!({ "settings": to_value(&settings)?, "state": to_value(&state)? }))
+        }
+        // "Snooze": ask again at `until`.
+        "snooze" => {
+            let mut state: State = from_field(a, "state")?;
+            schedule::snooze_custom(&mut state, str_field(a, "id")?, int_field(a, "until")?);
+            to_value(&state)
+        }
         _ => Err(format!("Pip doesn't know how to {name}")),
     }
+}
+
+/// The phone's current offset from UTC. Passed in rather than discovered, so the engine behaves
+/// exactly as it does on the PC and a test can pin it.
+fn zone(a: &Value) -> Result<chrono::FixedOffset, String> {
+    let minutes = a.get("tz_offset_min").and_then(Value::as_i64).unwrap_or(0);
+    chrono::FixedOffset::east_opt((minutes * 60) as i32).ok_or_else(|| "impossible time zone".to_string())
 }
 
 fn from_field<T: serde::de::DeserializeOwned>(a: &Value, field: &str) -> Result<T, String> {
@@ -170,6 +242,51 @@ mod tests {
         let sealed = dispatch("join_grant", &json!({ "request": req, "key": key, "random": join::hex(&[9u8; 32]), "nonce": join::hex(&[0u8; 32])[..48] })).unwrap();
         let opened = dispatch("join_accept", &json!({ "seed": seed, "bytes": sealed["bytes"] })).unwrap();
         assert_eq!(opened["key"], key);
+    }
+
+    /// The phone arms its alarm from this, so it has to agree with the engine down to the minute.
+    #[test]
+    fn the_phone_is_told_when_the_next_reminder_goes_off() {
+        let settings = json!({
+            "reminders": [{
+                "id": "r1",
+                "title": "Take pills",
+                "times": ["08:00", "14:00", "20:00"],
+                "days": 127,
+                "enabled": true,
+                "updated_at": 1
+            }],
+            "water": { "enabled": false },
+            "dates": { "morning_summary": false }
+        });
+        // 2026-09-21, 09:00 on a phone two hours ahead of UTC: of 08:00/14:00/20:00, 14:00 is next.
+        let args = json!({ "settings": settings, "state": {}, "now": 1_789_974_000, "tz_offset_min": 120 });
+        let at = dispatch("next_reminder", &args).unwrap()["at"].as_i64().unwrap();
+        assert_eq!(at, 1_789_974_000 + 5 * 3600, "14:00 local");
+
+        // At that moment it is due, and it knows what to say.
+        let mut at_due = args.clone();
+        at_due["now"] = json!(at);
+        let items = dispatch("due", &at_due).unwrap();
+        assert_eq!(items["items"][0]["title"], "Take pills");
+        assert_eq!(items["items"][0]["occurrence"], at);
+
+        // Done: it stops being due, and the next one is the evening.
+        let acked = dispatch(
+            "ack",
+            &json!({ "settings": settings, "state": {}, "id": "r1", "occurrence": at, "now": at + 30 }),
+        )
+        .unwrap();
+        let mut after = at_due.clone();
+        after["state"] = acked["state"].clone();
+        after["now"] = json!(at + 60);
+        assert_eq!(dispatch("due", &after).unwrap()["items"].as_array().unwrap().len(), 0);
+        assert_eq!(dispatch("next_reminder", &after).unwrap()["at"], at + 6 * 3600, "20:00 local");
+
+        // Nothing to ring for: the phone arms no alarm at all rather than one for a quiet-hours
+        // boundary it can do nothing about.
+        let none = json!({ "settings": { "reminders": [] }, "state": {}, "now": 1_789_974_000, "tz_offset_min": 120 });
+        assert!(dispatch("next_reminder", &none).unwrap()["at"].is_null());
     }
 
     #[test]

@@ -1,10 +1,16 @@
 package com.pip.companion
 
+import android.Manifest
+import android.app.AlarmManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -38,18 +44,62 @@ class MainActivity : ComponentActivity() {
         val note: String? = null,
         val reminders: List<Reminder> = emptyList(),
         val asking: List<JSONObject> = emptyList(),
+        /// Pip can't actually alert anyone — notifications are off, or alarms can't be exact.
+        val silenced: String? = null,
     )
 
-    data class Reminder(val id: String, val title: String, val time: String, val enabled: Boolean)
+    data class Reminder(val id: String, val title: String, val times: String, val enabled: Boolean)
+
+    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
         sync = Sync(store, deviceName())
+        Alarms.channel(this)
         refresh()
-        setContent { PipTheme { Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle) } }
+        setContent { PipTheme { Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts) } }
         if (store.refreshToken != null) syncNow()
+        // Whatever happens, make sure the next reminder is armed — a reminder that doesn't go off
+        // is the whole app failing.
+        Alarms.arm(this, store)
         handle(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refresh() // permissions may have been changed while Pip was in the background
+        Alarms.arm(this, store)
+    }
+
+    /// Takes the user to whichever switch is stopping reminders from arriving.
+    private fun fixAlerts() {
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName),
+                )
+            }
+            return
+        }
+        startActivity(exactAlarmSettings(this))
+    }
+
+    /// What, if anything, is stopping a reminder from reaching you.
+    private fun silencedReason(): String? {
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            return "Pip can't show reminders until notifications are allowed."
+        }
+        val am = getSystemService(AlarmManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
+            return "Reminders may arrive late until Pip is allowed to set alarms."
+        }
+        return null
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -112,6 +162,7 @@ class MainActivity : ComponentActivity() {
         }
         store.putReminders(next, now)
         refresh()
+        Alarms.arm(this, store) // the next thing due may have just changed
         syncNow()
     }
 
@@ -121,6 +172,8 @@ class MainActivity : ComponentActivity() {
             val outcome = withContext(Dispatchers.IO) { block() }
             if (outcome.signedOut) store.forgetSync()
             refresh(outcome)
+            // A sync can bring in new reminders or new times from the PC.
+            Alarms.arm(this@MainActivity, store)
         }
     }
 
@@ -128,13 +181,17 @@ class MainActivity : ComponentActivity() {
         val list = store.reminders()
         val reminders = (0 until list.length()).map { list.getJSONObject(it) }
             .sortedBy { it.optInt("time") }
-            .map {
-                val minutes = it.optInt("time")
+            .map { r ->
+                val list = r.optJSONArray("times")
+                val times = when {
+                    list != null && list.length() > 0 -> (0 until list.length()).map { list.getString(it) }
+                    else -> listOf(r.optString("time", "09:00"))
+                }
                 Reminder(
-                    id = it.optString("id"),
-                    title = it.optString("title").ifEmpty { "Reminder" },
-                    time = "%02d:%02d".format(minutes / 60, minutes % 60),
-                    enabled = it.optBoolean("enabled", true),
+                    id = r.optString("id"),
+                    title = r.optString("title").ifEmpty { "Reminder" },
+                    times = times.joinToString(", "),
+                    enabled = r.optBoolean("enabled", true),
                 )
             }
         ui.value = Screen(
@@ -145,6 +202,7 @@ class MainActivity : ComponentActivity() {
             note = outcome?.error ?: noteFor(outcome),
             reminders = reminders,
             asking = outcome?.asking ?: emptyList(),
+            silenced = silencedReason(),
         )
     }
 
@@ -172,6 +230,7 @@ private fun Home(
     deny: (JSONObject) -> Unit,
     askAgain: () -> Unit,
     toggle: (String) -> Unit,
+    fixAlerts: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
@@ -227,6 +286,18 @@ private fun Home(
                 }
             }
 
+            // Say it plainly when a reminder wouldn't actually reach them, and offer the fix.
+            s.silenced?.let { why ->
+                Card(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Reminders are muted", fontWeight = FontWeight.SemiBold)
+                        Text(why, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(10.dp))
+                        Button(onClick = fixAlerts) { Text("Fix this") }
+                    }
+                }
+            }
+
             if (s.connected) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Reminders", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -238,7 +309,7 @@ private fun Home(
                 for (r in s.reminders) {
                     ListItem(
                         headlineContent = { Text(r.title) },
-                        supportingContent = { Text(r.time) },
+                        supportingContent = { Text(r.times) },
                         trailingContent = { Switch(checked = r.enabled, onCheckedChange = { toggle(r.id) }, enabled = !s.busy) },
                     )
                     HorizontalDivider()

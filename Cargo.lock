@@ -527,6 +527,7 @@ dependencies = [
 name = "pip-jni"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "jni",
  "pip-core",
  "serde",
