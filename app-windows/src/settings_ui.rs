@@ -136,6 +136,7 @@ pub enum UiAct {
     SyncDeny(String),
     SyncAskAgain,
     MailImportantMarker,
+    MailStarred,
     MailEvery(i32),
 }
 
@@ -1806,6 +1807,10 @@ impl App {
         list_field(c, "Subject words", "Mail whose subject contains any of these", Field::MailKeywords, &e.keywords, "e.g. urgent, invoice");
         let cy = c.row("Gmail\u{2019}s Important marker", Some("Also nudge for mail Gmail itself marks important (can be a lot)"));
         c.toggle(cy, e.gmail_important, UiAct::MailImportantMarker);
+        // Worded carefully: Pip looks at mail as it arrives, so it only ever sees a star that is
+        // already on the message. Starring something later doesn't bring it back.
+        let cy = c.row("Starred in Gmail", Some("Also nudge for mail that is already starred when it arrives"));
+        c.toggle(cy, e.starred, UiAct::MailStarred);
         let cy = c.row("Check every", Some("Only while you\u{2019}re at the PC \u{2014} paused when away or locked"));
         c.stepper(cy, c.x1, 150.0, &fmt_minutes(e.check_minutes), UiAct::MailEvery(-1), UiAct::MailEvery(1));
         c.y += 8.0 * s;
@@ -1869,6 +1874,7 @@ impl App {
                 }
             }
             UiAct::MailImportantMarker => self.settings.email.gmail_important = !self.settings.email.gmail_important,
+            UiAct::MailStarred => self.settings.email.starred = !self.settings.email.starred,
             UiAct::MailEvery(d) => self.settings.email.check_minutes = (self.settings.email.check_minutes as i32 + d).clamp(1, 30) as u32,
             UiAct::Page(_) => {
                 // Leaving the page puts an old "didn't work" message away.

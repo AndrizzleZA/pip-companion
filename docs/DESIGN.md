@@ -604,3 +604,29 @@ return that used to end the Dates page now ends only its section, so the calenda
 draw.
 
 Seven pages: Companion, Reminders, Connections, Calendar, Email, Quiet & alerts, About.
+
+## 22. Marking mail important without typing, 2026-10-05
+
+Two ways in, both using what Pip already has.
+
+**Stars.** Gmail returns the full `labelIds` with every message Pip fetches, so `STARRED` was already
+in hand — no new permission, no extra request. A star is something the user did on purpose, so it
+outranks a guess from a subject word and sits just below the explicit sender rules.
+
+The honest limit, which the toggle's wording reflects: Pip watches the mailbox *history* and only
+examines messages that arrive unread in the inbox. Starring an existing message produces a
+`labelsAdded` record that Pip ignores, so the rule catches a star that is **already on the message
+when it arrives** — a filter, or a star applied before the next check. The toggle says exactly that
+rather than promising more. Watching `labelsAdded` too would close the gap at the cost of more
+traffic; not worth it yet.
+
+**"Always from this sender."** When the nudge is about one email, the bubble offers it; one click
+adds that address to the important senders. Nothing new is stored to make this work — the message is
+already in hand for the bubble, and Pip still keeps no record of who emails you. The button is
+hidden on the grouped "3 important emails" card, where there is no single sender to mean, and hidden
+when a rule already covers them, which is the same `matching_sender` the importance check uses, so
+the two can never disagree. The address is stored lowercase and never duplicated, including when an
+`@domain` rule already covers it.
+
+Proven against the mock Gmail: off then on; starred-but-read ignored; the button present, clicked,
+and then absent for that sender's next email, with one rule added and no second.

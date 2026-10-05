@@ -30,6 +30,11 @@ pub struct EmailSettings {
     pub keywords: Vec<String>,
     /// Also treat mail that Gmail itself marks Important as important.
     pub gmail_important: bool,
+    /// Also treat starred mail as important. Note this can only catch a star that is already on
+    /// the message when Pip first sees it — Pip looks at mail as it arrives, and never goes back
+    /// over what it has already passed over.
+    #[serde(default)]
+    pub starred: bool,
     /// Minutes between checks while you're at the computer.
     pub check_minutes: u32,
 }
@@ -41,6 +46,7 @@ impl Default for EmailSettings {
             senders: Vec::new(),
             keywords: ["urgent", "action required", "interview", "final notice", "overdue"].iter().map(|s| s.to_string()).collect(),
             gmail_important: false,
+            starred: false,
             check_minutes: 3,
         }
     }
@@ -74,6 +80,7 @@ impl EmailMsg {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reason {
     Sender(String),
+    Starred,
     Keyword(String),
     GmailImportant,
 }
@@ -84,8 +91,31 @@ pub fn important(s: &EmailSettings, m: &EmailMsg) -> Option<Reason> {
     if !m.has("INBOX") || !m.has("UNREAD") || m.has("SENT") || m.has("SPAM") || m.has("TRASH") {
         return None;
     }
-    let addr = m.from_addr.to_lowercase();
-    let name = m.from_name.to_lowercase();
+    if let Some(rule) = matching_sender(s, &m.from_addr, &m.from_name) {
+        return Some(Reason::Sender(rule));
+    }
+    // A star is something the user did on purpose, so it outranks a guess from a subject word.
+    if s.starred && m.has("STARRED") {
+        return Some(Reason::Starred);
+    }
+    let subject = m.subject.to_lowercase();
+    for k in &s.keywords {
+        let k = k.trim().to_lowercase();
+        if !k.is_empty() && subject.contains(&k) {
+            return Some(Reason::Keyword(k));
+        }
+    }
+    if s.gmail_important && m.has("IMPORTANT") {
+        return Some(Reason::GmailImportant);
+    }
+    None
+}
+
+/// Which of the user's sender rules covers this sender, if any. Shared by the importance check
+/// and by "do they already always get through?", so the two can never disagree.
+pub fn matching_sender(s: &EmailSettings, from_addr: &str, from_name: &str) -> Option<String> {
+    let addr = from_addr.to_lowercase();
+    let name = from_name.to_lowercase();
     for rule in &s.senders {
         let r = rule.trim().to_lowercase();
         if r.is_empty() {
@@ -99,20 +129,22 @@ pub fn important(s: &EmailSettings, m: &EmailMsg) -> Option<Reason> {
             name.contains(&r) || addr.contains(&r)
         };
         if hit {
-            return Some(Reason::Sender(rule.trim().to_string()));
+            return Some(rule.trim().to_string());
         }
-    }
-    let subject = m.subject.to_lowercase();
-    for k in &s.keywords {
-        let k = k.trim().to_lowercase();
-        if !k.is_empty() && subject.contains(&k) {
-            return Some(Reason::Keyword(k));
-        }
-    }
-    if s.gmail_important && m.has("IMPORTANT") {
-        return Some(Reason::GmailImportant);
     }
     None
+}
+
+/// Adds a sender to the always-important list, as a plain lowercase address. Does nothing if a
+/// rule already covers them — including a whole-domain rule — so the list can't grow duplicates.
+/// Returns true if the list changed.
+pub fn always_from(s: &mut EmailSettings, from_addr: &str) -> bool {
+    let addr = from_addr.trim().to_lowercase();
+    if addr.is_empty() || !addr.contains('@') || matching_sender(s, &addr, "").is_some() {
+        return false;
+    }
+    s.senders.push(addr);
+    true
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -378,6 +410,61 @@ pub mod gmail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_star_counts_as_important_only_when_asked() {
+        let mut s = EmailSettings { senders: Vec::new(), keywords: Vec::new(), ..Default::default() };
+        let starred = msg("Thandi <thandi@example.com>", "Lunch?", &["INBOX", "UNREAD", "STARRED"]);
+
+        assert_eq!(important(&s, &starred), None, "off by default");
+        s.starred = true;
+        assert_eq!(important(&s, &starred), Some(Reason::Starred));
+
+        // The rest of the rules still apply: starring something already read changes nothing.
+        let read = msg("Thandi <thandi@example.com>", "Lunch?", &["INBOX", "STARRED"]);
+        assert_eq!(important(&s, &read), None, "already read");
+        let archived = msg("Thandi <thandi@example.com>", "Lunch?", &["UNREAD", "STARRED"]);
+        assert_eq!(important(&s, &archived), None, "not in the inbox");
+        let unstarred = msg("Thandi <thandi@example.com>", "Lunch?", &["INBOX", "UNREAD"]);
+        assert_eq!(important(&s, &unstarred), None, "nothing to go on");
+    }
+
+    #[test]
+    fn always_from_this_sender_adds_the_address_once() {
+        let mut s = EmailSettings { senders: Vec::new(), keywords: Vec::new(), ..Default::default() };
+
+        assert!(always_from(&mut s, "Accounts@Example.com"));
+        assert_eq!(s.senders, vec!["accounts@example.com"], "stored lowercase");
+
+        // Asking again, in any casing, changes nothing.
+        assert!(!always_from(&mut s, "accounts@example.com"));
+        assert!(!always_from(&mut s, "ACCOUNTS@EXAMPLE.COM"));
+        assert_eq!(s.senders.len(), 1);
+
+        // Nor does it pile on top of a rule that already covers them.
+        s.senders = vec!["@work.co.za".into()];
+        assert!(!always_from(&mut s, "boss@work.co.za"));
+        assert_eq!(s.senders.len(), 1);
+
+        // And it refuses anything that isn't an address.
+        assert!(!always_from(&mut s, "Thandi"));
+        assert!(!always_from(&mut s, "  "));
+        assert_eq!(s.senders.len(), 1);
+
+        // Once added, that sender is important whatever else is off.
+        s.senders = Vec::new();
+        always_from(&mut s, "mom@example.com");
+        let m = msg("Mom <mom@example.com>", "nothing in particular", &["INBOX", "UNREAD"]);
+        assert_eq!(important(&s, &m), Some(Reason::Sender("mom@example.com".into())));
+    }
+
+    #[test]
+    fn the_button_knows_when_a_sender_is_already_covered() {
+        let s = EmailSettings { senders: vec!["@work.co.za".into(), "mom@example.com".into()], ..Default::default() };
+        assert!(matching_sender(&s, "boss@work.co.za", "The Boss").is_some());
+        assert!(matching_sender(&s, "MOM@example.com", "Mom").is_some(), "casing doesn't matter");
+        assert!(matching_sender(&s, "stranger@elsewhere.com", "Someone").is_none());
+    }
 
     fn msg(from: &str, subject: &str, labels: &[&str]) -> EmailMsg {
         let (from_name, from_addr) = parse_from(from);

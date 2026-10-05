@@ -35,7 +35,9 @@ with Google*, choose your account, Allow, and you’re back in Pip, connected. *
 sender, subject and labels of new mail — never the contents — and it can’t send or delete. **Google
 Calendar** is read-only. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
 ever signs Pip out, the entry shows **Reconnect**. Important senders and subject words live in
-Settings › Email.
+Settings › Email, along with two one-tap rules: mail Gmail marks Important, and mail that is already
+starred when it arrives. When Pip nudges you about a single email, the bubble offers **Always from
+this sender** — one click and that address always gets through.
 
 **Reminders.** A reminder has a name, one or more times of day, and the days it repeats — so
 "take pills" at 08:00, 14:00 and 20:00 is one reminder, not three. On the phone they behave like the

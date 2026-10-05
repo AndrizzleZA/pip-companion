@@ -31,6 +31,8 @@ pub enum Action {
     Close,
     /// Open the thing in its app (Gmail).
     Open,
+    /// "Always from this sender": adds the one email's sender to the important list.
+    AlwaysFrom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

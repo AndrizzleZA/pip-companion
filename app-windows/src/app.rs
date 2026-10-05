@@ -701,6 +701,15 @@ impl App {
         self.update_tray();
     }
 
+    /// The email being nudged about, when there is exactly one. Nothing new is stored for this —
+    /// it is the message already in hand for the bubble.
+    fn one_pending_mail(&self) -> Option<&pip_core::email::EmailMsg> {
+        match self.state.mail_pending.as_slice() {
+            [m] => Some(m),
+            _ => None,
+        }
+    }
+
     fn notify_card(&self, p: &Pending) -> Card {
         let mut card = Card::new(BubbleKind::Notify);
         for line in p.body.split('\n') {
@@ -728,6 +737,13 @@ impl App {
             ItemKey::Brief => card.buttons.push(("Thanks!".into(), Action::Done, BtnStyle::Primary)),
             ItemKey::Mail => {
                 card.buttons.push(("Open Gmail".into(), Action::Open, BtnStyle::Primary));
+                // Only for a single email — the grouped card has no one sender to mean — and only
+                // when that sender doesn't already always get through.
+                if let Some(m) = self.one_pending_mail() {
+                    if pip_core::email::matching_sender(&self.settings.email, &m.from_addr, &m.from_name).is_none() {
+                        card.buttons.push(("Always from this sender".into(), Action::AlwaysFrom, BtnStyle::Secondary));
+                    }
+                }
                 card.buttons.push(("Got it".into(), Action::Done, BtnStyle::Secondary));
                 card.buttons.push((snooze, Action::Snooze, BtnStyle::Ghost));
             }
@@ -792,7 +808,7 @@ impl App {
                 self.effects.push(Effect::OpenSettings);
             }
             Action::Drink => self.drink(),
-            Action::Done | Action::Snooze | Action::Dismiss | Action::Open => {
+            Action::Done | Action::Snooze | Action::Dismiss | Action::Open | Action::AlwaysFrom => {
                 if action == Action::Open {
                     self.open_mail();
                 }
@@ -827,6 +843,17 @@ impl App {
                     }
                     (ItemKey::Event(key), _) => schedule::ack_event(&mut self.state, key, now),
                     (ItemKey::Brief, _) => schedule::ack_brief(&mut self.state, local(&Local, now).date()),
+                    (ItemKey::Mail, Action::AlwaysFrom) => {
+                        if let Some(addr) = self.one_pending_mail().map(|m| m.from_addr.clone()) {
+                            let prev = self.settings.clone();
+                            if pip_core::email::always_from(&mut self.settings.email, &addr) {
+                                self.settings_changed(&prev);
+                                self.message(format!("Got it — mail from {addr} will always get through."), 5);
+                                self.anim(AnimKind::Nod);
+                            }
+                        }
+                        schedule::ack_mail(&mut self.state);
+                    }
                     (ItemKey::Mail, Action::Snooze) => {
                         schedule::snooze_key(&mut self.state, schedule::MAIL_STATE_KEY.to_string(), now + self.settings.notify.snooze_min as i64 * 60);
                     }
@@ -1468,6 +1495,7 @@ impl App {
                     "snooze" => Action::Snooze,
                     "dismiss" => Action::Dismiss,
                     "drink" => Action::Drink,
+                    "always-from" => Action::AlwaysFrom,
                     _ => Action::Close,
                 };
                 self.act(a);
@@ -1691,6 +1719,13 @@ impl App {
                 self.check_mail(true);
                 "started".into()
             }
+            "mail-starred" => {
+                let prev = self.settings.clone();
+                self.settings.email.starred = arg == "on";
+                self.settings_changed(&prev);
+                format!("starred={}", self.settings.email.starred)
+            }
+            "senders" => format!("{:?}", self.settings.email.senders),
             "mail" => {
                 let st: Vec<String> = self.mail_status.iter().map(|(k, v)| format!("{k}: checked={} err={:?} signed_out={}", v.checked_at, v.error, v.signed_out)).collect();
                 format!(
