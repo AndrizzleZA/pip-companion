@@ -151,13 +151,26 @@ fn occurs_on(r: &CustomReminder, date: NaiveDate) -> bool {
     }
 }
 
+/// The times this reminder goes off on a day it is due, earliest first. Older records carry a
+/// single `time` and no list, so fall back to that rather than going silent.
+fn times_of(r: &CustomReminder) -> Vec<TimeOfDay> {
+    if r.times.is_empty() {
+        vec![r.first_time()]
+    } else {
+        let mut t = r.times.clone();
+        t.sort_by_key(|x| x.0);
+        t
+    }
+}
+
 /// Latest occurrence at or before `t` (looks back one week).
 pub fn occurrence_at_or_before(r: &CustomReminder, t: NaiveDateTime) -> Option<NaiveDateTime> {
+    let times = times_of(r);
     let mut date = t.date();
     for _ in 0..8 {
         if occurs_on(r, date) {
-            let occ = r.time.on(date);
-            if occ <= t {
+            // Latest of the day's times that has already passed.
+            if let Some(occ) = times.iter().rev().map(|x| x.on(date)).find(|&occ| occ <= t) {
                 return Some(occ);
             }
         }
@@ -168,15 +181,15 @@ pub fn occurrence_at_or_before(r: &CustomReminder, t: NaiveDateTime) -> Option<N
 
 /// First occurrence strictly after `t` (looks ahead one week; one-offs use their date).
 pub fn occurrence_after(r: &CustomReminder, t: NaiveDateTime) -> Option<NaiveDateTime> {
+    let times = times_of(r);
     if r.days.is_empty() {
-        let occ = r.time.on(r.date?);
-        return (occ > t).then_some(occ);
+        let date = r.date?;
+        return times.iter().map(|x| x.on(date)).find(|&occ| occ > t);
     }
     let mut date = t.date();
     for _ in 0..8 {
         if occurs_on(r, date) {
-            let occ = r.time.on(date);
-            if occ > t {
+            if let Some(occ) = times.iter().map(|x| x.on(date)).find(|&occ| occ > t) {
                 return Some(occ);
             }
         }
@@ -539,7 +552,18 @@ mod tests {
         CustomReminder {
             id: "r1".into(),
             title: "Stand-up".into(),
-            time: TimeOfDay::hm(h, m),
+            times: vec![TimeOfDay::hm(h, m)],
+            days,
+            ..Default::default()
+        }
+    }
+
+    /// One reminder, several times a day — pills morning, noon and night.
+    fn reminder_at(days: DaySet, times: &[(u16, u16)]) -> CustomReminder {
+        CustomReminder {
+            id: "r1".into(),
+            title: "Take pills".into(),
+            times: times.iter().map(|&(h, m)| TimeOfDay::hm(h, m)).collect(),
             days,
             ..Default::default()
         }
@@ -558,6 +582,76 @@ mod tests {
         assert!(due_items(&s, &st, at(9, 45), &tz()).is_empty());
         // Tomorrow again.
         assert_eq!(due_items(&s, &st, on(22, 9, 30), &tz()).len(), 1);
+    }
+
+    #[test]
+    fn a_reminder_can_go_off_several_times_a_day() {
+        let (mut s, mut st) = setup();
+        s.water.enabled = false;
+        s.reminders.push(reminder_at(DaySet::ALL, &[(8, 0), (14, 0), (20, 0)]));
+
+        // Each time of day is its own occurrence, and acknowledging one doesn't silence the rest.
+        let pills = s.reminders[0].clone();
+        let next_of = |st: &State, now: i64| reminder_next(&pills, st, now, &tz());
+        assert_eq!(next_of(&st, at(7, 0)), Some(at(8, 0)));
+        let morning = due_items(&s, &st, at(8, 0), &tz());
+        assert_eq!(morning.len(), 1);
+        ack_custom(&mut s, &mut st, "r1", morning[0].occurrence, at(8, 1));
+        assert!(due_items(&s, &st, at(8, 30), &tz()).is_empty());
+
+        assert_eq!(next_of(&st, at(8, 30)), Some(at(14, 0)));
+        let afternoon = due_items(&s, &st, at(14, 0), &tz());
+        assert_eq!(afternoon.len(), 1);
+        assert_ne!(afternoon[0].occurrence, morning[0].occurrence);
+
+        // And the last one rolls over to the first time tomorrow.
+        ack_custom(&mut s, &mut st, "r1", afternoon[0].occurrence, at(14, 1));
+        assert_eq!(next_of(&st, at(14, 2)), Some(at(20, 0)));
+        // …and after the last one, the first time tomorrow.
+        assert_eq!(next_of(&st, at(20, 1)), Some(on(22, 8, 0)));
+    }
+
+    #[test]
+    fn times_stay_in_order_and_a_reminder_always_keeps_one() {
+        let mut r = reminder_at(DaySet::ALL, &[(20, 0), (8, 0), (8, 0)]);
+        r.tidy_times();
+        assert_eq!(r.times_label(), "08:00, 20:00", "sorted, and the duplicate dropped");
+        assert_eq!(r.first_time(), TimeOfDay::hm(8, 0));
+
+        r.remove_time(0);
+        assert_eq!(r.times_label(), "20:00");
+        r.remove_time(0);
+        assert_eq!(r.times_label(), "20:00", "the last time can't be removed");
+
+        r.add_time();
+        assert_eq!(r.times_label(), "20:00, 21:00", "a new time lands an hour later");
+
+        r.shift_time(0, -90);
+        assert_eq!(r.times_label(), "18:30, 21:00");
+    }
+
+    /// Reminders written by an older Pip carry a single `time` and no list; they must keep working,
+    /// on this device and in anything it syncs.
+    #[test]
+    fn a_reminder_from_an_older_pip_still_goes_off() {
+        let old: CustomReminder = serde_json::from_str(
+            r#"{"id":"r1","title":"Stand-up","time":"09:30","days":31,"enabled":true,"updated_at":5}"#,
+        )
+        .unwrap();
+        assert_eq!(old.times, Vec::new(), "no list in the old format");
+        assert_eq!(old.first_time(), TimeOfDay::hm(9, 30));
+
+        let (mut s, st) = setup();
+        s.water.enabled = false;
+        s.reminders.push(old);
+        assert_eq!(next_event(&s, &st, at(9, 0), &tz()), at(9, 30), "and it still fires");
+
+        // Loading settings migrates it into the list, and keeps writing the old field for devices
+        // that haven't been updated yet.
+        s.sanitize();
+        assert_eq!(s.reminders[0].times, vec![TimeOfDay::hm(9, 30)]);
+        let json = serde_json::to_string(&s.reminders[0]).unwrap();
+        assert!(json.contains("\"time\":\"09:30\""), "older Pip still reads a single time: {json}");
     }
 
     #[test]

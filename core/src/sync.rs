@@ -212,7 +212,7 @@ impl SyncDoc {
         let cutoff = self.updated_at - 90 * 86_400;
         state.sync_deleted.retain(|_, when| *when >= cutoff);
         settings.reminders = self.reminders.clone();
-        settings.reminders.sort_by_key(|r| r.time);
+        settings.reminders.sort_by_key(|r| r.first_time());
         settings.dates.items = self.dates.clone();
         state.streak = state.streak.max(self.progress.streak);
         state.best_streak = state.best_streak.max(self.progress.best_streak);
@@ -343,13 +343,13 @@ mod tests {
     #[test]
     fn a_reminder_time_edit_on_the_phone_reaches_the_pc() {
         let mut here = Settings::default();
-        here.reminders = vec![CustomReminder { id: "r1".into(), title: "Stretch".into(), time: TimeOfDay::hm(9, 0), updated_at: 10, ..Default::default() }];
+        here.reminders = vec![CustomReminder { id: "r1".into(), title: "Stretch".into(), times: vec![TimeOfDay::hm(9, 0)], updated_at: 10, ..Default::default() }];
         let state = State::default();
         let mine = SyncDoc::from_local(&here, &state, "pc", 20);
 
         let mut theirs = mine.clone();
         theirs.device = "phone".into();
-        theirs.reminders[0].time = TimeOfDay::hm(17, 30);
+        theirs.reminders[0].set_times(vec![TimeOfDay::hm(17, 30)]);
         theirs.reminders[0].updated_at = 30;
         theirs.updated_at = 30;
 
@@ -357,7 +357,7 @@ mod tests {
         let mut applied = here.clone();
         let mut st = state.clone();
         merged.apply(&mut applied, &mut st);
-        assert_eq!(applied.reminders[0].time, TimeOfDay::hm(17, 30));
+        assert_eq!(applied.reminders[0].first_time(), TimeOfDay::hm(17, 30));
     }
 }
 

@@ -288,7 +288,19 @@ pub struct CustomReminder {
     /// Stable id (sync-ready).
     pub id: String,
     pub title: String,
-    pub time: TimeOfDay,
+    /// Every time of day this goes off. One is the ordinary case; several for the things people
+    /// actually repeat — pills morning and night, stretches through the day.
+    ///
+    /// Defaults to empty rather than to the struct default, so a record written by an older Pip
+    /// (which has only `time`) is recognised as needing migration instead of quietly inheriting
+    /// 09:00 and firing at the wrong hour.
+    #[serde(default)]
+    pub times: Vec<TimeOfDay>,
+    /// The first of `times`, kept in step so a device still running an older Pip reads something
+    /// sensible out of the synced document instead of nothing. Private: `times` is the truth, and
+    /// a caller that set this one alone would silently change nothing. Crate-private so only the
+    /// engine can touch it; the shells use `times` and the helpers below.
+    pub(crate) time: TimeOfDay,
     /// Repeat days. Empty = one-off on `date`.
     pub days: DaySet,
     pub date: Option<NaiveDate>,
@@ -303,6 +315,7 @@ impl Default for CustomReminder {
         CustomReminder {
             id: String::new(),
             title: "Reminder".into(),
+            times: vec![TimeOfDay::hm(9, 0)],
             time: TimeOfDay::hm(9, 0),
             days: DaySet::WEEKDAYS,
             date: None,
@@ -310,6 +323,75 @@ impl Default for CustomReminder {
             enabled: true,
             updated_at: 0,
         }
+    }
+}
+
+impl CustomReminder {
+    /// A new reminder. Going through here (rather than filling the struct in) is what keeps the
+    /// list of times and the legacy single time in step.
+    pub fn new(id: impl Into<String>, title: impl Into<String>, times: Vec<TimeOfDay>, days: DaySet, now: i64) -> Self {
+        let mut r = CustomReminder {
+            id: id.into(),
+            title: title.into(),
+            times,
+            days,
+            updated_at: now,
+            ..Default::default()
+        };
+        r.tidy_times();
+        r
+    }
+
+    /// Keeps the list of times in order, without duplicates, and never empty — and keeps the
+    /// legacy single `time` pointing at the first one. A reminder written by an older Pip arrives
+    /// with only `time`, so that becomes its single time.
+    pub fn tidy_times(&mut self) {
+        if self.times.is_empty() {
+            self.times = vec![self.time];
+        }
+        self.times.sort_by_key(|t| t.0);
+        self.times.dedup_by_key(|t| t.0);
+        self.times.truncate(12);
+        self.time = self.times[0];
+    }
+
+    /// When it first goes off on a day it is due.
+    pub fn first_time(&self) -> TimeOfDay {
+        self.times.first().copied().unwrap_or(self.time)
+    }
+
+    /// Replaces the times, keeping them ordered and unique.
+    pub fn set_times(&mut self, times: Vec<TimeOfDay>) {
+        self.times = times;
+        self.tidy_times();
+    }
+
+    /// Adds another time of day, an hour after the last one by default.
+    pub fn add_time(&mut self) {
+        let next = self.times.last().map(|t| t.add_minutes(60)).unwrap_or(TimeOfDay::hm(9, 0));
+        self.times.push(next);
+        self.tidy_times();
+    }
+
+    /// Removes one time; a reminder always keeps at least one.
+    pub fn remove_time(&mut self, at: usize) {
+        if self.times.len() > 1 && at < self.times.len() {
+            self.times.remove(at);
+            self.tidy_times();
+        }
+    }
+
+    /// Nudges one time by `minutes`, then re-sorts (so times can cross over each other freely).
+    pub fn shift_time(&mut self, at: usize, minutes: i32) {
+        if let Some(t) = self.times.get_mut(at) {
+            *t = t.add_minutes(minutes);
+            self.tidy_times();
+        }
+    }
+
+    /// "08:00" or "08:00, 14:00, 20:00" — what the row says under the title.
+    pub fn times_label(&self) -> String {
+        self.times.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
     }
 }
 
@@ -340,6 +422,7 @@ impl Settings {
             if r.title.trim().is_empty() {
                 r.title = "Reminder".into();
             }
+            r.tidy_times();
         }
     }
 

@@ -93,7 +93,10 @@ pub enum UiAct {
     Fullscreen,
     AddReminder,
     RemOn(String),
-    RemTime(String, i32),
+    /// Nudge one of a reminder's times: id, which time, minutes.
+    RemTime(String, usize, i32),
+    RemTimeAdd(String),
+    RemTimeRemove(String, usize),
     RemDay(String, u32),
     RemImportant(String),
     RemDelete(String),
@@ -508,7 +511,13 @@ impl App {
         }
         let now = platform::now_unix();
         for r in &self.settings.reminders {
-            let card_h = 136.0 * s;
+            // Times wrap onto as many rows as they need, so "morning, noon and night" is one card
+            // rather than three reminders.
+            let cell_w = 122.0 * s + if r.times.len() > 1 { 24.0 * s } else { 0.0 };
+            let per_row = (((c.x1 - c.x0) / cell_w).floor() as usize).max(1);
+            let cells = r.times.len() + usize::from(r.times.len() < 12); // + the "add" button
+            let time_rows = cells.div_ceil(per_row).max(1);
+            let card_h = (52.0 + time_rows as f32 * 34.0 + 34.0 + 34.0 + 12.0) * s;
             let (x, y, w) = (c.x0 - 14.0 * s, c.y + 6.0 * s, c.x1 - c.x0 + 28.0 * s);
             fill_rrect(c.pm, x, y, w, card_h - 12.0 * s, 14.0 * s, color(c.pal.surface, 1.0));
             if r.important {
@@ -520,17 +529,44 @@ impl App {
             c.hits.push((tr, UiAct::Focus(Field::Title(r.id.clone()))));
             let tg = ui::toggle(c.pm, c.x1 - ui::TOGGLE_W * s, y + 17.0 * s, r.enabled, &c.pal, s);
             c.hits.push((tg, UiAct::RemOn(r.id.clone())));
-            // Row 2: time + days
-            let row2 = y + 52.0 * s;
-            let (m, p) = ui::stepper(c.pm, c.x0, row2, 118.0 * s, &r.time.to_string(), &c.pal, s);
-            c.hits.push((m, UiAct::RemTime(r.id.clone(), -15)));
-            c.hits.push((p, UiAct::RemTime(r.id.clone(), 15)));
-            let chips = ui::day_chips(c.pm, c.x0 + 132.0 * s, row2 + 2.0 * s, r.days.0, &c.pal, s);
+            // Row 2: every time of day it goes off, then the days it repeats on
+            let mut tx = c.x0;
+            let mut ty = y + 52.0 * s;
+            for (i, t) in r.times.iter().enumerate() {
+                if tx + 118.0 * s > c.x1 {
+                    tx = c.x0;
+                    ty += 34.0 * s;
+                }
+                let (m, p) = ui::stepper(c.pm, tx, ty, 118.0 * s, &t.to_string(), &c.pal, s);
+                c.hits.push((m, UiAct::RemTime(r.id.clone(), i, -15)));
+                c.hits.push((p, UiAct::RemTime(r.id.clone(), i, 15)));
+                tx += 122.0 * s;
+                // A reminder always keeps one time, so the last one has nothing to remove.
+                if r.times.len() > 1 {
+                    let rm = R::new(tx - 4.0 * s, ty, 22.0 * s, 30.0 * s);
+                    let rgb = if c.hover == Some(rm) { c.pal.text } else { c.pal.muted };
+                    text::draw_centered(c.pm, &f.semibold, 15.0 * s, rm.x + 11.0 * s, ty + 20.0 * s, rgb, 1.0, "×");
+                    c.hits.push((rm, UiAct::RemTimeRemove(r.id.clone(), i)));
+                    tx += 24.0 * s;
+                }
+            }
+            if r.times.len() < 12 {
+                let bw = ui::button_width("+ time", s);
+                if tx + bw > c.x1 {
+                    tx = c.x0;
+                    ty += 34.0 * s;
+                }
+                let br = R::new(tx, ty + 1.0 * s, bw, 28.0 * s);
+                ui::button(c.pm, br, "+ time", BtnStyle::Ghost, &c.pal, s, c.hover == Some(br));
+                c.hits.push((br, UiAct::RemTimeAdd(r.id.clone())));
+            }
+            let days_y = ty + 36.0 * s;
+            let chips = ui::day_chips(c.pm, c.x0, days_y, r.days.0, &c.pal, s);
             for (i, cr) in chips.into_iter().enumerate() {
                 c.hits.push((cr, UiAct::RemDay(r.id.clone(), i as u32)));
             }
             // Row 3: next occurrence + actions
-            let row3 = y + 86.0 * s;
+            let row3 = days_y + 32.0 * s;
             let next = if !r.enabled {
                 "Off".to_string()
             } else {
@@ -884,14 +920,9 @@ impl App {
             UiAct::AddReminder => {
                 let next_hour = TimeOfDay::of(pip_core::time::local(&chrono::Local, now + 3600)).0 / 60 * 60;
                 let id = format!("r{:x}{:04x}", now, (platform::tick_ms() & 0xffff));
-                st.reminders.push(CustomReminder {
-                    id: id.clone(),
-                    title: String::new(), // placeholder shows; empty becomes "Reminder" on commit
-                    time: TimeOfDay(next_hour),
-                    days: DaySet::WEEKDAYS,
-                    updated_at: now,
-                    ..Default::default()
-                });
+                // Empty title: the placeholder shows until the user types, and it becomes
+                // "Reminder" when the field is committed.
+                st.reminders.push(CustomReminder::new(id.clone(), "", vec![TimeOfDay(next_hour)], DaySet::WEEKDAYS, now));
                 if let Some(ui) = &mut self.ui {
                     ui.focus = Some(Field::Title(id));
                     ui.scroll = f32::MAX; // clamped on next paint → shows the new card
@@ -902,16 +933,31 @@ impl App {
                     r.enabled = !r.enabled;
                     r.updated_at = now;
                     if r.enabled && r.days.is_empty() {
-                        r.date = Some(schedule::next_date_for(r.time, now, &chrono::Local));
+                        r.date = Some(schedule::next_date_for(r.first_time(), now, &chrono::Local));
                     }
                 }
             }
-            UiAct::RemTime(id, d) => {
+            UiAct::RemTime(id, at, d) => {
                 if let Some(r) = st.reminder_mut(&id) {
-                    r.time = r.time.add_minutes(d);
+                    r.shift_time(at, d);
                     r.updated_at = now;
                     if r.days.is_empty() {
-                        r.date = Some(schedule::next_date_for(r.time, now, &chrono::Local));
+                        r.date = Some(schedule::next_date_for(r.first_time(), now, &chrono::Local));
+                    }
+                }
+            }
+            UiAct::RemTimeAdd(id) => {
+                if let Some(r) = st.reminder_mut(&id) {
+                    r.add_time();
+                    r.updated_at = now;
+                }
+            }
+            UiAct::RemTimeRemove(id, at) => {
+                if let Some(r) = st.reminder_mut(&id) {
+                    r.remove_time(at);
+                    r.updated_at = now;
+                    if r.days.is_empty() {
+                        r.date = Some(schedule::next_date_for(r.first_time(), now, &chrono::Local));
                     }
                 }
             }
@@ -919,8 +965,8 @@ impl App {
                 if let Some(r) = st.reminder_mut(&id) {
                     r.days.toggle(i);
                     r.updated_at = now;
-                    // No days = a one-off at the next occurrence of its time.
-                    r.date = r.days.is_empty().then(|| schedule::next_date_for(r.time, now, &chrono::Local));
+                    // No days = a one-off at the next occurrence of its first time.
+                    r.date = r.days.is_empty().then(|| schedule::next_date_for(r.first_time(), now, &chrono::Local));
                 }
             }
             UiAct::RemImportant(id) => {

@@ -1316,7 +1316,7 @@ impl App {
         // Newly created/edited reminders don't fire for times that already passed today.
         for r in &self.settings.reminders {
             let old = prev.reminders.iter().find(|o| o.id == r.id);
-            let timing_changed = old.map_or(true, |o| o.time != r.time || o.days != r.days || o.date != r.date || (!o.enabled && r.enabled));
+            let timing_changed = old.map_or(true, |o| o.times != r.times || o.days != r.days || o.date != r.date || (!o.enabled && r.enabled));
             if timing_changed {
                 schedule::reminder_edited(&mut self.state, &r.id, now);
             }
@@ -1417,12 +1417,17 @@ impl App {
                 // Distinct id + real timestamp, so sync tests behave like the real UI.
                 let prev = self.settings.clone();
                 let id = format!("r{:x}{:04x}", now_unix(), tick_ms() & 0xffff);
-                self.settings.reminders.push(pip_core::settings::CustomReminder {
-                    id: id.clone(),
-                    title: if arg.is_empty() { "Reminder".into() } else { arg.into() },
-                    updated_at: now_unix(),
-                    ..Default::default()
-                });
+                // "Title" or "Title@08:00,14:00,20:00" so tests can set several times at once.
+                let (title, times) = match arg.split_once('@') {
+                    Some((t, list)) => {
+                        let times = list.split(',').filter_map(|t| pip_core::time::TimeOfDay::try_from(t.trim().to_string()).ok()).collect();
+                        (t, times)
+                    }
+                    None => (arg, Vec::new()),
+                };
+                let title = if title.is_empty() { "Reminder" } else { title };
+                let r = pip_core::settings::CustomReminder::new(id.clone(), title, times, pip_core::time::DaySet::WEEKDAYS, now_unix());
+                self.settings.reminders.push(r);
                 self.settings_changed(&prev);
                 id
             }
@@ -1435,13 +1440,11 @@ impl App {
             "remind" => {
                 let id = "dev-reminder".to_string();
                 if !self.settings.reminders.iter().any(|r| r.id == id) {
-                    self.settings.reminders.push(pip_core::settings::CustomReminder {
-                        id: id.clone(),
-                        title: if arg.is_empty() { "Stand-up meeting".into() } else { arg.into() },
-                        important: true,
-                        enabled: false,
-                        ..Default::default()
-                    });
+                    let title = if arg.is_empty() { "Stand-up meeting" } else { arg };
+                    let mut r = pip_core::settings::CustomReminder::new(id.clone(), title, Vec::new(), pip_core::time::DaySet::WEEKDAYS, now_unix());
+                    r.important = true;
+                    r.enabled = false;
+                    self.settings.reminders.push(r);
                 }
                 self.pending.retain(|p| p.key != ItemKey::Custom(id.clone()));
                 self.pet.bubble = None;
@@ -1636,7 +1639,7 @@ impl App {
                 self.sync_status.last_device,
                 self.sync_status.error,
                 self.sync_status.signed_out,
-                self.settings.reminders.iter().map(|r| format!("{}@{}", r.title, r.time)).collect::<Vec<_>>(),
+                self.settings.reminders.iter().map(|r| format!("{}@{}", r.title, r.times_label())).collect::<Vec<_>>(),
                 self.settings.dates.items.iter().map(|d| d.title.clone()).collect::<Vec<_>>()
             ),
             "gcal-signin" => {
