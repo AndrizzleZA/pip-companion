@@ -109,8 +109,8 @@ pub struct Pet {
 pub struct View<'a> {
     pub pal: &'a Palette,
     pub who: Character,
-    /// 0 newly arrived, 1 fully grown.
-    pub grow: f32,
+    /// 0 newly arrived, 1 growing up, 2 fully grown.
+    pub stage: u8,
     pub expr: Expr,
     pub attention: Acc,
     pub size: f32,
@@ -197,9 +197,9 @@ impl Pet {
         }
     }
 
-    pub fn pose(&self, expr: Expr, attention: Acc, grow: f32) -> Pose {
+    pub fn pose(&self, expr: Expr, attention: Acc, stage: u8) -> Pose {
         let mut pose = Pose::base(expr);
-        pose.grow = grow;
+        pose.stage = stage;
         if self.eyes_shut {
             pose.blink = 1.0;
         }
@@ -296,7 +296,7 @@ impl Pet {
         }
         let (ox, oy) = (win.l as f32, win.t as f32);
         let bubble_pop = self.bubble.as_ref().map(|b| ((tick_ms().saturating_sub(b.born_ms)) as f32 / 160.0).min(1.0)).unwrap_or(1.0);
-        let pose = self.pose(v.expr, v.attention, v.grow);
+        let pose = self.pose(v.expr, v.attention, v.stage);
         let hover = self.hover_btn;
         let mut hits = Vec::new();
         let mut bubble_rect = None;

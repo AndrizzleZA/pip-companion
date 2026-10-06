@@ -237,9 +237,11 @@ impl App {
     pub fn start(&mut self) {
         let now = now_unix();
         let today = local(&Local, now).date();
+        let grown_before = self.state.stage();
         if self.state.roll_day(&self.settings, today) {
             self.state.water.seen_since = Some(now);
         }
+        self.celebrate_growth(grown_before);
         self.pet.anchor = match self.state.desktop_pos {
             Some([x, y]) if platform::monitor_at(x + 20, y + 20, true).is_some() => (x, y),
             _ => Pet::default_anchor(self.size()),
@@ -401,7 +403,7 @@ impl App {
             View {
                 pal: &pal,
                 who: self.settings.pet.character,
-                grow: self.state.grown(now_unix()),
+                stage: self.state.stage(),
                 expr: self.expr(),
                 attention: self.attention(),
                 size: self.size(),
@@ -614,6 +616,7 @@ impl App {
         let now = now_unix();
         let tz = Local;
         let today = local(&tz, now).date();
+        let grown_before = self.state.stage();
         if self.state.roll_day(&self.settings, today) {
             self.state.water.seen_since = Some(now);
             self.state.prune_events(now);
@@ -621,6 +624,7 @@ impl App {
             self.schedule_save();
             self.start_sync(false); // slide the two-week window
         }
+        self.celebrate_growth(grown_before);
         if self.state.dnd_until.is_some_and(|t| t <= now) {
             self.state.dnd_until = None;
             self.state_dirty = true;
@@ -949,10 +953,26 @@ impl App {
         self.arm_clock();
     }
 
+    /// Reaching a stage is said once, wherever the day happened to turn over. There is no matching
+    /// notice for a day that earned nothing — growing up is only ever good news here.
+    fn celebrate_growth(&mut self, before: u8) {
+        let now = self.state.stage();
+        if now <= before {
+            return;
+        }
+        let name = self.settings.pet.name.clone();
+        self.message(messages::grew_up(now, &name), 7);
+        self.anim(AnimKind::Celebrate);
+        self.state_dirty = true;
+        self.schedule_save();
+    }
+
     pub fn drink(&mut self) {
         let now = now_unix();
         let today = local(&Local, now).date();
+        let grown_before = self.state.stage();
         let count = self.state.log_drink(&self.settings, now, today);
+        self.celebrate_growth(grown_before);
         self.pending.retain(|p| p.key != ItemKey::Water);
         self.state_dirty = true;
         self.schedule_save();

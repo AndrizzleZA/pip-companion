@@ -927,3 +927,45 @@ portrait in the sidebar is as grown as the companion actually is, rather than an
 
 Measured, same method: private memory 1.82 MB and working set 1.68 MB both unchanged, threads 1,
 handles 170, executable 2065 to 2066 KB.
+
+## 31. Growing up is earned, not waited for, 2026-10-06
+
+§30 grew a companion by age, which was wrong in a way that only becomes obvious once it is running:
+a computer left switched off for a fortnight produced a fully grown companion that had never been
+looked at. Age measures the calendar, not the relationship. It is gone — no hybrid.
+
+What counts now is **good days**: at most one per calendar day, earned by meeting the water goal or
+by any moment together — a pat, a reminder finished, a glass logged. Either is enough, so someone
+with water switched off still grows. The count never decreases, and a day that earned nothing is
+never mentioned. There is no streak to break here.
+
+Counting happens in `roll_day`, where the streak is already decided, so the day boundary stays the
+only place that knows about calendars. Interaction is recorded as a flag set by `bump_affection`
+and read once when the day turns over, rather than by comparing the last interaction's date —
+which would have meant threading a timezone through `roll_day`, `log_drink` and the phone bridge to
+answer a question the flag answers exactly.
+
+It merges like `best_streak`: by taking the higher. Growing up on one device is growing up on both,
+and nothing can take it away.
+
+**Three stages, at 0, 15 and 45 good days, and the change at each has to be legible.** The old
+0.84–1.00 size range was too subtle — a creature a hundred pixels tall losing a sixth of its height
+reads as "drawn slightly smaller", not as "younger". So four things move together:
+
+| | scale | eyes | crown | squat |
+|---|---|---|---|---|
+| just arrived | 0.78 | ×1.22 | 0.40 | 1.08 |
+| growing up | 0.90 | ×1.10 | 0.72 | 1.03 |
+| fully grown | 1.00 | ×1.00 | 1.00 | 1.00 |
+
+The crown carries most of it, because it is each character's silhouette: a sprout reduced to a stub,
+bunny ears shrunk to nubs. The eyes carry the rest — big eyes in a small face is what everyone reads
+as young without being told. The squat makes a youngster wider and shorter, which is the difference
+between a small adult and a baby. Reaching a stage is said once and celebrated; falling short of one
+is never mentioned.
+
+An honest reservation about the thresholds rather than the count: three stages is right — two gives
+one moment and then nothing, four would make each step too small to see — but 45 good days is at
+minimum 45 calendar days, and realistically two or three months. Many companions will never be seen
+fully grown. 0/10/30 would put the last stage inside a month for someone using it daily, and is a
+one-line change if that reads better in practice.

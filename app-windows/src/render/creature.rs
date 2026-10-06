@@ -17,10 +17,29 @@ const CX: f32 = 50.0;
 /// rather than by restating five sets of curves.
 const MOUTH_BASE: f32 = 71.0;
 
-/// How big a companion is for its age. A young one is smaller, and — with the eyes below —
-/// rounder-faced, which is the difference between small and young.
-fn grow_scale(grow: f32) -> f32 {
-    0.84 + 0.16 * grow.clamp(0.0, 1.0)
+/// How a companion looks at each stage of growing up.
+///
+/// Four things move together on purpose. Size alone was too easy to miss: a creature a hundred
+/// pixels tall losing a sixth of its height reads as "drawn slightly smaller", not as "younger".
+/// The crown carries most of the legibility, because it is each character's silhouette — a stub of
+/// a sprout, half-grown ears — and the eyes carry the rest, because big eyes in a small face is
+/// the thing everyone reads as young without being told.
+struct Growth {
+    scale: f32,
+    /// Eye size relative to the body.
+    eye: f32,
+    /// Sprout, ears or tuft, as a fraction of their grown size.
+    crown: f32,
+    /// Wider and shorter when young.
+    squat: f32,
+}
+
+fn growth(stage: u8) -> Growth {
+    match stage {
+        0 => Growth { scale: 0.78, eye: 1.22, crown: 0.40, squat: 1.08 },
+        1 => Growth { scale: 0.90, eye: 1.10, crown: 0.72, squat: 1.03 },
+        _ => Growth { scale: 1.0, eye: 1.0, crown: 1.0, squat: 1.0 },
+    }
 }
 
 /// What sits on a head. Separate from the body so the two multiply: a future creature is any
@@ -241,9 +260,9 @@ pub struct Pose {
     pub feet_drop: f32,
     pub acc: Acc,
     pub acc_t: f32,
-    /// 0 newly arrived, 1 fully grown. Defaults to grown, so anything drawing a portrait — the
-    /// tray icon, the settings preview — shows the companion as it will be.
-    pub grow: f32,
+    /// 0 newly arrived, 1 growing up, 2 fully grown. Defaults to grown, so anything drawing a
+    /// portrait — the tray icon — shows the companion as it will be.
+    pub stage: u8,
 }
 
 impl Pose {
@@ -265,7 +284,7 @@ impl Pose {
             feet_drop: 0.0,
             acc: Acc::None,
             acc_t: 0.0,
-            grow: 1.0,
+            stage: 2,
         };
         match expr {
             Expr::Content => {}
@@ -484,16 +503,25 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     // Ground shadow: stays on the ground, shrinks while airborne.
     let lift = (-pose.dy).max(0.0);
     let sh = (1.0 - lift / 55.0).clamp(0.4, 1.0);
-    let g = grow_scale(pose.grow);
-    fill_path(pm, ellipse_path(CX, GROUND_Y + 0.5, s.shadow_rx * sh * pose.sx * g, 3.6 * sh), color(0, 0.16 * sh), base);
+    let g = growth(pose.stage);
+    fill_path(
+        pm,
+        ellipse_path(CX, GROUND_Y + 0.5, s.shadow_rx * sh * pose.sx * g.scale * g.squat, 3.6 * sh),
+        color(0, 0.16 * sh),
+        base,
+    );
 
-    // Body transform: squash/stretch, tilt and growth, all around the feet.
-    let g = grow_scale(pose.grow);
+    // Body transform: squash/stretch, tilt and growing up, all around the feet.
     let t = base
         .pre_translate(CX, GROUND_Y + pose.dy)
         .pre_concat(Transform::from_rotate(pose.tilt))
-        .pre_scale(pose.sx * g, pose.sy * g)
+        .pre_scale(pose.sx * g.scale * g.squat, pose.sy * g.scale / g.squat)
         .pre_translate(-CX, -GROUND_Y);
+    // Crowns grow on their own curve, about the top of the head.
+    let ct = t
+        .pre_translate(CX, s.crown_y)
+        .pre_scale(g.crown, g.crown)
+        .pre_translate(-CX, -s.crown_y);
 
     // Feet
     for side in [-1.0f32, 1.0] {
@@ -501,7 +529,7 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     }
 
     // Ears belong behind the body, like the arms, so the head overlaps them cleanly.
-    draw_ears_behind(pm, t, &s, body, pose.leaf);
+    draw_ears_behind(pm, ct, &s, body, pose.leaf);
 
     // Arms (behind the body so they peek out as little nubs)
     draw_arm(pm, t, CX - s.arm.0, s.arm.1, -1.0, pose.arm_l, body_dark);
@@ -529,7 +557,7 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     fill_path(pm, ellipse_path(0.0, 0.0, 7.5, 4.0), color(0xFFFFFF, 0.6), t.pre_translate(s.shine.0, s.shine.1).pre_concat(Transform::from_rotate(-38.0)));
     fill_path(pm, PathBuilder::from_circle(s.shine2.0, s.shine2.1, 1.8), color(0xFFFFFF, 0.5), t);
 
-    draw_crown(pm, t, &s, pose.leaf);
+    draw_crown(pm, ct, &s, pose.leaf);
     draw_eyes(pm, t, &s, pose);
 
     // Blush
@@ -638,7 +666,7 @@ fn draw_eyes(pm: &mut PixmapMut, t: Transform, s: &Shape, p: &Pose) {
     let ox = 2.2 * p.look_x;
     let oy = 1.6 * p.look_y;
     // Big eyes in a small face: the cue that says young rather than merely small.
-    let eye = 1.0 + 0.17 * (1.0 - p.grow.clamp(0.0, 1.0));
+    let eye = growth(p.stage).eye;
     for side in [-1.0f32, 1.0] {
         let (x, y) = (CX + side * s.eye_dx + ox, s.eye_y + oy);
         let closed = p.blink > 0.85;

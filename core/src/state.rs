@@ -6,8 +6,9 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// A companion is fully grown after a fortnight.
-const GROWN_AFTER_DAYS: f32 = 14.0;
+/// Good days needed to reach the second and third stages of growing up.
+pub const GROWING: u32 = 15;
+pub const GROWN: u32 = 45;
 
 pub const HISTORY_DAYS: usize = 30;
 
@@ -27,6 +28,12 @@ pub struct State {
     /// 0..=100; grows with pets and completed reminders, decays slowly.
     pub affection: u32,
     pub last_interaction: i64,
+    /// Days that went well, one at most per day. Never goes down, and a missed day is never
+    /// mentioned — this is something earned, not a streak to break.
+    pub experience: u32,
+    /// Set by any interaction and read once when the day turns over. A flag rather than a date
+    /// comparison, so the day boundary stays the only place that needs to know about calendars.
+    pub touched: bool,
     /// Rotates message variants so the same line doesn't repeat back to back.
     pub msg_seq: u32,
     pub streak: u32,
@@ -85,18 +92,15 @@ pub struct ReminderState {
 }
 
 impl State {
-    /// Days since this companion first appeared.
-    pub fn age_days(&self, now: i64) -> f32 {
-        (now - self.created_at).max(0) as f32 / 86_400.0
-    }
-
-    /// How grown it is: 0 the day it arrives, 1 once it is itself.
+    /// How grown the companion is: 0 newly arrived, 1 growing up, 2 fully grown.
     ///
-    /// Quick at first and settling after a fortnight, so a new companion visibly changes in its
-    /// first few days rather than imperceptibly over months. Anyone whose companion is already
-    /// older than that is unaffected — nothing about it changes under them.
-    pub fn grown(&self, now: i64) -> f32 {
-        (self.age_days(now) / GROWN_AFTER_DAYS).clamp(0.0, 1.0).sqrt()
+    /// Earned rather than waited for. A companion left alone for a month is exactly where it was.
+    pub fn stage(&self) -> u8 {
+        match self.experience {
+            e if e >= GROWN => 2,
+            e if e >= GROWING => 1,
+            _ => 0,
+        }
     }
 
     pub fn new(now: i64) -> Self {
@@ -126,6 +130,13 @@ impl State {
                         self.streak = 0;
                     }
                 }
+                // A good day: the goal was met, or they spent a moment with it. Either is enough,
+                // so someone with water switched off still grows.
+                let met_goal = settings.water.enabled && goal > 0 && self.water.count >= goal;
+                if met_goal || self.touched {
+                    self.experience = self.experience.saturating_add(1);
+                }
+                self.touched = false;
                 self.water.day = Some(today);
                 self.water.count = 0;
                 self.water.snooze_until = None;
@@ -158,6 +169,7 @@ impl State {
     pub fn bump_affection(&mut self, by: u32, now: i64) {
         self.affection = (self.affection + by).min(100);
         self.last_interaction = now;
+        self.touched = true;
     }
 
     pub fn next_msg(&mut self) -> u32 {
@@ -249,53 +261,83 @@ impl State {
 }
 
 #[cfg(test)]
-mod growing_up {
+mod earning_good_days {
     use super::*;
+    use crate::settings::Settings;
 
-    const DAY: i64 = 86_400;
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
 
-    fn born(days: f32) -> (State, i64) {
-        let now = 1_800_000_000;
-        let mut st = State::new(now);
-        st.created_at = now - (days * DAY as f32) as i64;
-        (st, now)
+    fn setup() -> (State, Settings) {
+        let mut s = Settings::default();
+        s.water.enabled = true;
+        s.water.daily_goal = 4;
+        let mut st = State::new(1_800_000_000);
+        st.roll_day(&s, d(2026, 9, 1)); // first sight of a day sets the clock, earns nothing
+        assert_eq!(st.experience, 0);
+        (st, s)
     }
 
     #[test]
-    fn a_new_companion_starts_small_and_is_grown_in_a_fortnight() {
-        let (st, now) = born(0.0);
-        assert_eq!(st.grown(now), 0.0, "the day it arrives");
-
-        let (st, now) = born(14.0);
-        assert_eq!(st.grown(now), 1.0, "a fortnight later");
-
-        let (st, now) = born(365.0);
-        assert_eq!(st.grown(now), 1.0, "and it stays itself after that");
+    fn meeting_the_goal_earns_a_day() {
+        let (mut st, s) = setup();
+        st.water.count = 4;
+        st.roll_day(&s, d(2026, 9, 2));
+        assert_eq!(st.experience, 1);
     }
 
     #[test]
-    fn it_changes_most_in_its_first_days() {
-        // Growth people can notice early beats a change too slow to see.
-        let (st, now) = born(3.0);
-        let early = st.grown(now);
-        let (st, now) = born(10.0);
-        let late = st.grown(now) - early;
-        assert!(early > late, "three days should show more than the week after: {early} vs {late}");
+    fn so_does_a_moment_together_when_water_is_off() {
+        let (mut st, mut s) = setup();
+        s.water.enabled = false;
+        st.bump_affection(1, 1_800_000_000); // a pat on the head
+        st.roll_day(&s, d(2026, 9, 2));
+        assert_eq!(st.experience, 1, "someone with water switched off still grows");
     }
 
     #[test]
-    fn a_clock_set_backwards_doesnt_make_it_unborn() {
-        let now = 1_800_000_000;
-        let mut st = State::new(now);
-        st.created_at = now + 5 * DAY; // created "in the future"
-        assert_eq!(st.age_days(now), 0.0);
-        assert_eq!(st.grown(now), 0.0);
+    fn a_quiet_day_simply_earns_nothing() {
+        let (mut st, s) = setup();
+        st.experience = 7;
+        st.roll_day(&s, d(2026, 9, 2)); // no water, no interaction
+        assert_eq!(st.experience, 7, "it never goes down, and nothing is said");
     }
 
     #[test]
-    fn an_existing_companion_is_unaffected() {
-        // The one on this machine was a fortnight old when growing up was added.
-        let (st, now) = born(15.1);
-        assert_eq!(st.grown(now), 1.0, "already an adult, so nothing changes under them");
+    fn a_day_counts_once_however_much_happens() {
+        let (mut st, s) = setup();
+        st.water.count = 99;
+        st.bump_affection(1, 1_800_000_000);
+        st.bump_affection(1, 1_800_000_000);
+        st.roll_day(&s, d(2026, 9, 2));
+        assert_eq!(st.experience, 1, "one per calendar day, at most");
+    }
+
+    #[test]
+    fn yesterdays_attention_doesnt_pay_for_today() {
+        let (mut st, s) = setup();
+        st.bump_affection(1, 1_800_000_000);
+        st.roll_day(&s, d(2026, 9, 2));
+        assert_eq!(st.experience, 1);
+        st.roll_day(&s, d(2026, 9, 3)); // a day with nothing in it
+        assert_eq!(st.experience, 1, "the flag was spent");
+    }
+
+    #[test]
+    fn a_week_away_costs_nothing_and_earns_the_last_good_day() {
+        let (mut st, s) = setup();
+        st.bump_affection(1, 1_800_000_000);
+        st.roll_day(&s, d(2026, 9, 9)); // computer off for a week
+        assert_eq!(st.experience, 1, "the day they were there still counts");
+    }
+
+    #[test]
+    fn the_stages_land_where_they_should() {
+        let mut st = State::new(0);
+        for (exp, stage) in [(0, 0), (14, 0), (15, 1), (44, 1), (45, 2), (10_000, 2)] {
+            st.experience = exp;
+            assert_eq!(st.stage(), stage, "{exp} good days");
+        }
     }
 }

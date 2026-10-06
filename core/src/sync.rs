@@ -81,6 +81,9 @@ pub struct Progress {
     pub water: BTreeMap<NaiveDate, u32>,
     pub streak: u32,
     pub best_streak: u32,
+    /// Good days earned. Merged by taking the higher, like the best streak: growing up on one
+    /// device is growing up on both, and nothing can take it away.
+    pub experience: u32,
     /// Reminder/date/event keys already dealt with → when, so nothing is announced twice.
     pub acked: BTreeMap<String, i64>,
 }
@@ -126,7 +129,7 @@ impl SyncDoc {
             reminders: settings.reminders.clone(),
             dates: settings.dates.items.clone(),
             deleted: state.sync_deleted.clone(),
-            progress: Progress { water, streak: state.streak, best_streak: state.best_streak, acked },
+            progress: Progress { water, streak: state.streak, best_streak: state.best_streak, experience: state.experience, acked },
         }
     }
 
@@ -190,6 +193,7 @@ impl SyncDoc {
         }
         out.progress.streak = self.progress.streak.max(other.progress.streak);
         out.progress.best_streak = self.progress.best_streak.max(other.progress.best_streak);
+        out.progress.experience = self.progress.experience.max(other.progress.experience);
         out.progress.acked = self.progress.acked.clone();
         for (k, when) in &other.progress.acked {
             let e = out.progress.acked.entry(k.clone()).or_insert(*when);
@@ -228,6 +232,7 @@ impl SyncDoc {
         settings.dates.items = self.dates.clone();
         state.streak = state.streak.max(self.progress.streak);
         state.best_streak = state.best_streak.max(self.progress.best_streak);
+        state.experience = state.experience.max(self.progress.experience);
         for (day, count) in &self.progress.water {
             if state.water.day == Some(*day) {
                 state.water.count = state.water.count.max(*count);
