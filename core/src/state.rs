@@ -6,6 +6,9 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The state-file format. Bumped when an old file needs a one-time fix on load.
+pub const VERSION: u32 = 2;
+
 /// Good days needed to reach the second and third stages of growing up.
 pub const GROWING: u32 = 15;
 pub const GROWN: u32 = 45;
@@ -104,7 +107,23 @@ impl State {
     }
 
     pub fn new(now: i64) -> Self {
-        State { version: 1, created_at: now, affection: 50, ..Default::default() }
+        State { version: VERSION, created_at: now, affection: 50, ..Default::default() }
+    }
+
+    /// Brings a state file written by an older version up to date. Called once, on load.
+    ///
+    /// Version 2 introduced earned growth. A file written before it has no experience, so a
+    /// companion that had been around for weeks would have reappeared as a newborn and visibly
+    /// shrunk. Its water history is the evidence of that: an entry exists only for a day the
+    /// app actually ran and rolled over, which is presence rather than calendar time, so those
+    /// days are credited. `max` means a file that already has experience never loses it, and
+    /// history is capped at HISTORY_DAYS (below GROWN), so this credits a past but never
+    /// hands out a fully grown companion nobody earned.
+    pub fn migrate(&mut self) {
+        if self.version < VERSION {
+            self.experience = self.experience.max(self.water.history.len() as u32);
+            self.version = VERSION;
+        }
     }
 
     /// Moves the water counter onto `today`, archiving the previous day and updating the streak.
@@ -340,4 +359,58 @@ mod earning_good_days {
             assert_eq!(st.stage(), stage, "{exp} good days");
         }
     }
+    // --- growing up survives the upgrade ---
+
+    /// Builds a state as version 1 left it: days of history behind it, no experience.
+    fn old_state(days: usize) -> State {
+        let mut st = State { version: 1, created_at: 0, affection: 75, ..Default::default() };
+        for i in 0..days {
+            let date = d(2026, 9, 1) + chrono::Duration::days(i as i64);
+            st.water.history.push(DayCount { date, count: 8, goal: 8 });
+        }
+        st
+    }
+
+    #[test]
+    fn a_companion_that_was_already_here_does_not_shrink() {
+        let mut st = old_state(15);
+        assert_eq!(st.stage(), 0, "before migrating it reads as newborn");
+        st.migrate();
+        assert_eq!(st.experience, 15, "every day it was present is credited");
+        assert_eq!(st.stage(), 1, "and it is where it was, not back at the start");
+    }
+
+    #[test]
+    fn a_brand_new_companion_still_starts_at_the_beginning() {
+        let mut st = State::new(0);
+        st.migrate();
+        assert_eq!(st.experience, 0);
+        assert_eq!(st.stage(), 0);
+    }
+
+    #[test]
+    fn migrating_twice_changes_nothing() {
+        let mut st = old_state(15);
+        st.migrate();
+        let once = st.clone();
+        st.migrate();
+        assert_eq!(st, once, "a second load must not credit the same days again");
+    }
+
+    #[test]
+    fn migrating_never_takes_away_days_already_earned() {
+        let mut st = old_state(3);
+        st.experience = 20;
+        st.migrate();
+        assert_eq!(st.experience, 20, "a short history cannot undo what was earned");
+    }
+
+    #[test]
+    fn the_backfill_cannot_hand_out_a_fully_grown_companion() {
+        let mut st = old_state(HISTORY_DAYS);
+        st.migrate();
+        assert!(st.experience < GROWN, "history is capped below the last stage");
+        assert_eq!(st.stage(), 1, "a long past earns the middle stage, never the last");
+    }
+
 }

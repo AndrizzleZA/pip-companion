@@ -969,3 +969,30 @@ one moment and then nothing, four would make each step too small to see — but 
 minimum 45 calendar days, and realistically two or three months. Many companions will never be seen
 fully grown. 0/10/30 would put the last stage inside a month for someone using it daily, and is a
 one-line change if that reads better in practice.
+
+## 32. The upgrade must not make anyone's companion younger, 2026-10-06
+
+§31 was correct and still shipped a regression: a state file written before it has no experience, so
+on first launch a companion that had been around for weeks reappeared as a newborn and visibly
+shrank. Measured on a real file — fifteen days of history, affection 75 — it dropped from roughly
+0.93 scale to 0.78, with a stub where its tuft had been. Correct by the new rule, and obviously
+wrong to the person looking at it.
+
+State files now carry `VERSION`, and `migrate` runs once on load, crediting
+`water.history.len()` good days. The history is the evidence: an entry exists only for a day the app
+actually ran and rolled the day over, so it measures presence rather than calendar time, which is
+the distinction §31 was built on. Three properties make it safe to run on every load: it takes the
+`max`, so a file that already has experience never loses any; `HISTORY_DAYS` is 30, below `GROWN`,
+so no one is handed a fully grown companion they did not earn; and the version check makes a second
+run a no-op.
+
+Migration happens in `load_state`, which then writes the file back — once, guarded by the version
+check. This is not where saving normally belongs: `flush_save` only writes when `state_dirty` is
+set, and loading deliberately does not set it. But nothing about an upgrade marks the state dirty,
+so the migrated file would have sat unwritten until some unrelated change happened to save it, and
+the migration would have silently re-run on every launch in the meantime. It is harmless when it
+does — it is idempotent — but a migration that never lands is not a migration.
+
+Backfilling from the days that *met the water goal* was the obvious alternative and is wrong: two of
+those fifteen days met it, which would still have shown a newborn. Grandfathering from `created_at`
+is worse — it is the age rule §31 deleted, let back in through the migration.

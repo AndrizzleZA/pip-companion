@@ -34,8 +34,18 @@ impl Storage {
     }
 
     pub fn load_state(&self, now: i64) -> State {
-        let (st, existed): (State, bool) = self.load("state.json");
-        if existed { st } else { State::new(now) }
+        let (mut st, existed): (State, bool) = self.load("state.json");
+        if !existed {
+            return State::new(now);
+        }
+        // Loading does not mark the state dirty, so an upgraded file would otherwise sit
+        // unwritten until something else happened to save. Write it back here, once.
+        let upgraded = st.version < pip_core::state::VERSION;
+        st.migrate();
+        if upgraded {
+            self.save_state(&st);
+        }
+        st
     }
 
     fn load<T: serde::de::DeserializeOwned + Default>(&self, name: &str) -> (T, bool) {
