@@ -398,7 +398,15 @@ impl App {
         let pal = self.palette();
         let clock = self.settings.pet.show_clock.then(|| hm(now_unix()));
         let view =
-            View { pal: &pal, who: self.settings.pet.character, expr: self.expr(), attention: self.attention(), size: self.size(), clock };
+            View {
+                pal: &pal,
+                who: self.settings.pet.character,
+                grow: self.state.grown(now_unix()),
+                expr: self.expr(),
+                attention: self.attention(),
+                size: self.size(),
+                clock,
+            };
         self.pet.render(&view);
         let want = self.pet.visible && self.pet.animating();
         if want && !self.anim_timer {

@@ -885,3 +885,45 @@ in milliseconds, and fails loudly if anyone nudges a control point.
 
 Measured, same method as Stage 1: private memory 1.81 MB unchanged, threads 1, handles 170, CPU
 2.10 to 1.99 s/h, executable 2061 to 2065 KB. Four kilobytes for three new creatures.
+
+## 30. Stage 2 — growing up, 2026-10-06
+
+A companion that arrives small and fills out over a fortnight, for one kilobyte.
+
+Age needs no new state: `created_at` has been in `State` since the first version, so age is
+arithmetic on a number already saved. No timer, no counter, nothing to keep in step — the drawing
+simply asks how old it is each time it runs.
+
+**Growth happens inside a fixed window, about the feet.** The tempting implementation is to scale
+the window, since the pet is already drawn at a size factor — but the saved anchor is the box's
+*top-left*, so a growing box would drag the companion downward a little every day and re-clamp it
+against the taskbar. Instead the growth multiplies the pose's own squash/stretch, which is already
+pinned to the feet. The window never changes size, a saved desktop position never drifts, and the
+companion grows out of the same patch of ground it has always stood on.
+
+Two cues, because size alone reads as *small* rather than *young*:
+
+- Overall scale from 0.84 to 1.0.
+- Eyes proportionally larger when young, so a small face is a young face.
+
+**Fully grown after a fortnight**, and the curve is quick at first — three days shows more change
+than the week that follows. That is deliberate: growth too slow to notice is growth nobody sees. It
+also means every companion older than two weeks is already an adult, so nothing changes under anyone
+who has had one a while. The one on this machine was 15 days old when this was written, and is
+unaffected; that case is a test.
+
+Deliberately not done:
+
+- **Behaviour doesn't change with age.** Liveliness is the owner's setting, and quietly overriding
+  it because the companion is young would be the app arguing with them.
+- **The tray icon stays an adult.** At sixteen pixels the difference is two, and it would mean
+  threading age through four more functions for nothing.
+- **Age doesn't sync.** `created_at` isn't in the sync document, so age is per-device. The phone
+  doesn't draw the companion, so there is nothing for it to be wrong about yet; worth revisiting if
+  that changes.
+
+The age is shown as a read-only row on the Companion page — "3 days old, still growing" — and the
+portrait in the sidebar is as grown as the companion actually is, rather than an idealised one.
+
+Measured, same method: private memory 1.82 MB and working set 1.68 MB both unchanged, threads 1,
+handles 170, executable 2065 to 2066 KB.

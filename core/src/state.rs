@@ -6,6 +6,9 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// A companion is fully grown after a fortnight.
+const GROWN_AFTER_DAYS: f32 = 14.0;
+
 pub const HISTORY_DAYS: usize = 30;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -82,6 +85,20 @@ pub struct ReminderState {
 }
 
 impl State {
+    /// Days since this companion first appeared.
+    pub fn age_days(&self, now: i64) -> f32 {
+        (now - self.created_at).max(0) as f32 / 86_400.0
+    }
+
+    /// How grown it is: 0 the day it arrives, 1 once it is itself.
+    ///
+    /// Quick at first and settling after a fortnight, so a new companion visibly changes in its
+    /// first few days rather than imperceptibly over months. Anyone whose companion is already
+    /// older than that is unaffected — nothing about it changes under them.
+    pub fn grown(&self, now: i64) -> f32 {
+        (self.age_days(now) / GROWN_AFTER_DAYS).clamp(0.0, 1.0).sqrt()
+    }
+
     pub fn new(now: i64) -> Self {
         State { version: 1, created_at: now, affection: 50, ..Default::default() }
     }
@@ -228,5 +245,57 @@ impl State {
         let excess = self.mail_pending.len().saturating_sub(20);
         self.mail_pending.drain(..excess);
         added
+    }
+}
+
+#[cfg(test)]
+mod growing_up {
+    use super::*;
+
+    const DAY: i64 = 86_400;
+
+    fn born(days: f32) -> (State, i64) {
+        let now = 1_800_000_000;
+        let mut st = State::new(now);
+        st.created_at = now - (days * DAY as f32) as i64;
+        (st, now)
+    }
+
+    #[test]
+    fn a_new_companion_starts_small_and_is_grown_in_a_fortnight() {
+        let (st, now) = born(0.0);
+        assert_eq!(st.grown(now), 0.0, "the day it arrives");
+
+        let (st, now) = born(14.0);
+        assert_eq!(st.grown(now), 1.0, "a fortnight later");
+
+        let (st, now) = born(365.0);
+        assert_eq!(st.grown(now), 1.0, "and it stays itself after that");
+    }
+
+    #[test]
+    fn it_changes_most_in_its_first_days() {
+        // Growth people can notice early beats a change too slow to see.
+        let (st, now) = born(3.0);
+        let early = st.grown(now);
+        let (st, now) = born(10.0);
+        let late = st.grown(now) - early;
+        assert!(early > late, "three days should show more than the week after: {early} vs {late}");
+    }
+
+    #[test]
+    fn a_clock_set_backwards_doesnt_make_it_unborn() {
+        let now = 1_800_000_000;
+        let mut st = State::new(now);
+        st.created_at = now + 5 * DAY; // created "in the future"
+        assert_eq!(st.age_days(now), 0.0);
+        assert_eq!(st.grown(now), 0.0);
+    }
+
+    #[test]
+    fn an_existing_companion_is_unaffected() {
+        // The one on this machine was a fortnight old when growing up was added.
+        let (st, now) = born(15.1);
+        assert_eq!(st.grown(now), 1.0, "already an adult, so nothing changes under them");
     }
 }

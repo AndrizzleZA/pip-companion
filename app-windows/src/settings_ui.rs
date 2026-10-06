@@ -406,6 +406,8 @@ impl App {
         let base = Transform::from_translate((SIDEBAR_W * s - 100.0 * cs) / 2.0, 14.0 * s).pre_scale(cs, cs);
         let mut pose = Pose::base(Expr::Happy);
         pose.blush = 0.6;
+        // The portrait is this companion, so it is as grown as it actually is.
+        pose.grow = self.state.grown(platform::now_unix());
         creature::draw(&mut pm, &pose, pal.body, self.settings.pet.character, base);
         let name = &self.settings.pet.name;
         text::draw_centered(&mut pm, &f.semibold, 16.0 * s, SIDEBAR_W * s / 2.0, 100.0 * s, pal.text, 1.0, name);
@@ -439,6 +441,10 @@ impl App {
         let r = R::new(c.x1 - 220.0 * s, cy - 16.0 * s, 220.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &p.name, *focus == Some(Field::Name), &c.pal, s, "Pip");
         c.hits.push((r, UiAct::Focus(Field::Name)));
+
+        // Read-only: it is a fact about the companion, not a setting.
+        let age = pip_core::messages::age_label(self.state.age_days(platform::now_unix()));
+        c.row("Age", Some(&age));
 
         let cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
         let sel = Character::ALL.iter().position(|x| *x == p.character).unwrap_or(0);
