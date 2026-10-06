@@ -44,6 +44,56 @@ impl Default for Settings {
     }
 }
 
+/// Which little creature this is. Only the crown differs — the body, the animations and the
+/// expressions are shared, so a character costs a few lines of drawing and nothing at runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Character {
+    /// The original: a stem with two leaves.
+    Sprout,
+    Bunny,
+    Kit,
+    Tuft,
+}
+
+impl Character {
+    pub const ALL: [Character; 4] = [Character::Sprout, Character::Bunny, Character::Kit, Character::Tuft];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Character::Sprout => "Sprout",
+            Character::Bunny => "Bunny",
+            Character::Kit => "Kit",
+            Character::Tuft => "Tuft",
+        }
+    }
+}
+
+/// How your companion sounds. Each is a handful of notes synthesised into memory when first
+/// played — no files to ship, lose or load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Voice {
+    /// The original two-note chime.
+    Chime,
+    Bell,
+    Blip,
+    Coo,
+}
+
+impl Voice {
+    pub const ALL: [Voice; 4] = [Voice::Chime, Voice::Bell, Voice::Blip, Voice::Coo];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Voice::Chime => "Chime",
+            Voice::Bell => "Bell",
+            Voice::Blip => "Blip",
+            Voice::Coo => "Coo",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PetSize {
@@ -144,6 +194,8 @@ impl PetColor {
 #[serde(default)]
 pub struct PetSettings {
     pub name: String,
+    pub character: Character,
+    pub voice: Voice,
     pub color: PetColor,
     pub size: PetSize,
     pub always_on_top: bool,
@@ -158,6 +210,8 @@ impl Default for PetSettings {
     fn default() -> Self {
         PetSettings {
             name: "Pip".into(),
+            character: Character::Sprout,
+            voice: Voice::Chime,
             color: PetColor::Mint,
             size: PetSize::Medium,
             always_on_top: true,

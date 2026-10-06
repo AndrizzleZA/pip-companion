@@ -126,7 +126,11 @@ fn open_settings() {
         }
         return;
     }
-    let Some((anchor, name, body)) = with_app(|a| (a.pet.anchor, a.settings.pet.name.clone(), a.settings.pet.color.rgb())) else { return };
+    let Some((anchor, name, body, who)) =
+        with_app(|a| (a.pet.anchor, a.settings.pet.name.clone(), a.settings.pet.color.rgb(), a.settings.pet.character))
+    else {
+        return;
+    };
     let mon = platform::monitor_at(anchor.0 + 20, anchor.1 + 20, false).unwrap_or_else(platform::primary_monitor);
     let s = mon.dpi as f32 / 96.0;
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
@@ -142,7 +146,7 @@ fn open_settings() {
     if hwnd.is_null() {
         return;
     }
-    settings_ui::set_window_icon(hwnd, body);
+    settings_ui::set_window_icon(hwnd, body, who);
     with_app(|a| {
         a.ui_opened(hwnd);
         a.ui_apply_chrome();

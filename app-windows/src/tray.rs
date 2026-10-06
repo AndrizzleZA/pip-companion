@@ -3,6 +3,7 @@
 use crate::render::creature::{self, Expr, Pose};
 use crate::render::{color, fill_circle};
 use tiny_skia::{PixmapMut, Transform};
+use pip_core::settings::Character;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi;
@@ -40,8 +41,8 @@ impl Tray {
     }
 
     /// Adds (or re-adds after Explorer restarts) the icon.
-    pub fn add(&mut self, body: u32, attention: bool, tip: &str) {
-        self.ensure_icon(body, attention);
+    pub fn add(&mut self, body: u32, who: Character, attention: bool, tip: &str) {
+        self.ensure_icon(body, who, attention);
         let mut nid = self.data();
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         nid.uCallbackMessage = self.callback;
@@ -57,11 +58,11 @@ impl Tray {
     }
 
     /// Updates icon/tooltip only when they actually changed.
-    pub fn update(&mut self, body: u32, attention: bool, tip: &str) {
+    pub fn update(&mut self, body: u32, who: Character, attention: bool, tip: &str) {
         if !self.added {
             return;
         }
-        let icon_changed = self.ensure_icon(body, attention);
+        let icon_changed = self.ensure_icon(body, who, attention);
         if !icon_changed && tip == self.tip {
             return;
         }
@@ -94,13 +95,13 @@ impl Tray {
         self.added = false;
     }
 
-    fn ensure_icon(&mut self, body: u32, attention: bool) -> bool {
+    fn ensure_icon(&mut self, body: u32, who: Character, attention: bool) -> bool {
         if !self.icon.is_null() && self.icon_key == (body, attention) {
             return false;
         }
         let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) }.max(96);
         let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) }.max(16);
-        let new_icon = make_icon(body, attention, size);
+        let new_icon = make_icon(body, who, attention, size);
         if !new_icon.is_null() {
             if !self.icon.is_null() {
                 unsafe { DestroyIcon(self.icon) };
@@ -121,7 +122,7 @@ impl Drop for Tray {
 }
 
 /// Renders the creature's face-on silhouette into an HICON.
-pub fn make_icon(body: u32, attention: bool, size: i32) -> HICON {
+pub fn make_icon(body: u32, who: Character, attention: bool, size: i32) -> HICON {
     let n = size as u32;
     let mut buf = vec![0u8; (n * n * 4) as usize];
     {
@@ -131,7 +132,7 @@ pub fn make_icon(body: u32, attention: bool, size: i32) -> HICON {
         let base = Transform::from_scale(s, s).pre_translate(-9.0, -13.0);
         let mut pose = Pose::base(Expr::Content);
         pose.blush = 0.6;
-        creature::draw(&mut pm, &pose, body, base);
+        creature::draw(&mut pm, &pose, body, who, base);
         if attention {
             let r = size as f32 * 0.2;
             fill_circle(&mut pm, size as f32 - r - 0.5, r + 0.5, r + 1.0, color(0xFFFFFF, 1.0));

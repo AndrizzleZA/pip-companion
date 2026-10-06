@@ -9,6 +9,7 @@ use crate::render::text::{self, fonts};
 use crate::render::ui::{self, BtnStyle, R};
 use crate::render::{color, fill_path, fill_rrect, soft_shadow, stroke_rrect, Palette};
 use crate::surface::Surface;
+use pip_core::settings::Character;
 use tiny_skia::{PathBuilder, PixmapMut, Transform};
 use windows_sys::Win32::Foundation::HWND;
 
@@ -107,6 +108,7 @@ pub struct Pet {
 
 pub struct View<'a> {
     pub pal: &'a Palette,
+    pub who: Character,
     pub expr: Expr,
     pub attention: Acc,
     pub size: f32,
@@ -301,7 +303,7 @@ impl Pet {
             // Creature
             let base = Transform::from_translate(boxr.l as f32 - ox + ORIGIN_X * s, boxr.t as f32 - oy + ORIGIN_Y * s)
                 .pre_scale(UNIT * s, UNIT * s);
-            creature::draw(&mut pm, &pose, v.pal.body, base);
+            creature::draw(&mut pm, &pose, v.pal.body, v.who, base);
 
             // Clock pill
             if let (Some(r), Some(c)) = (clock_screen, v.clock.as_ref()) {

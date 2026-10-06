@@ -802,3 +802,46 @@ the ack lands in the document, and the document round-trips. What no test covere
 device reading it back, because both halves were checked against the same assumption. Cross-device
 behaviour needs a test that applies one device's document to a second device's state — which is what
 the new ones do.
+
+## 28. Stage 1 — choosing your companion, 2026-10-06
+
+Characters and voices, done without adding anything the app has to carry.
+
+A character changes only the crown: a sprout, bunny ears, cat ears or a tuft. Body, animations,
+expressions, blinking and every pose are shared, so a new character is a few paths in
+`draw_crown`/`draw_ears_behind` and nothing at runtime. Ears are drawn before the body, like the
+arms, so the head overlaps their base. The default is Sprout, which is the original drawing
+unchanged — nobody's Pip changes under them.
+
+Because the creature is procedural, the choice reaches everywhere for free: the pet, the settings
+preview and the tray icon all call the same `draw`, so all three change together. No sprites, no
+asset loading, no memory held per character.
+
+A voice is a recipe — a few notes, a decay and how much of the octave above to mix in — fed to the
+synthesiser that already made the chime. It is built into memory the first time it plays and kept
+until the voice changes, so the cost is one small buffer for the voice in use and nothing on disk.
+Picking a voice plays it immediately, whether or not reminder sounds are on: the tap is the request,
+and a silent answer would look broken.
+
+Deliberately not done:
+
+- **No custom sound files.** Asked for and declined for this stage: files mean loading, validating
+  and failing, for a feature four built-in voices already cover.
+- **Characters don't sync to the phone.** The phone doesn't draw Pip, so putting them in the sync
+  document would add a field nothing reads.
+- **No guilt-tripping.** It belongs with hunger in a later stage, and the guiding rules already say
+  the pet never guilt-trips — worth deciding deliberately rather than by accident here.
+
+Measured before and after, same method, single runs so small deltas are noise:
+
+| | before | after |
+|---|---|---|
+| private memory | 1.85 MB | 1.83 MB |
+| threads / handles | 1 / 171 | 1 / 170 |
+| CPU | 1.80 s/h | 1.56 s/h |
+| startup | 20 ms | 23 ms |
+| executable | 2046 KB | 2061 KB |
+
+The whole stage costs about fifteen kilobytes of binary and nothing that can be measured at runtime,
+which is the point: the architecture already had a procedural creature and an in-memory
+synthesiser, so customisation was a matter of parameterising what was there rather than adding to it.

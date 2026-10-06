@@ -17,7 +17,7 @@ use pip_core::health;
 use std::collections::HashMap;
 use chrono::{Local, Timelike};
 use pip_core::schedule::{self, Delivery, Due, ItemKey, Priority};
-use pip_core::settings::Liveliness;
+use pip_core::settings::{Liveliness, Voice};
 use pip_core::time::{local, long_date, TimeOfDay};
 use pip_core::{messages, mood, Mood, Settings, State};
 use windows_sys::Win32::Foundation::*;
@@ -101,7 +101,7 @@ pub struct App {
     last_mood: Option<Mood>,
     settings_dirty: bool,
     state_dirty: bool,
-    chime: Option<platform::Chime>,
+    chime: Option<(Voice, platform::Chime)>,
     rng: u64,
     anim_timer: bool,
     first_run: bool,
@@ -257,7 +257,7 @@ impl App {
         self.startup_ms = platform::ms_since_process_start();
         self.up_since = now_unix();
         let tip = self.tray_tip();
-        self.tray.add(self.settings.pet.color.rgb(), false, &tip);
+        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character, false, &tip);
         platform::register_appbar(self.hwnd, WM_APPBAR);
         // Calendars: secret links from the encrypted store, cached events right away (offline),
         // then a network refresh once the desktop has settled.
@@ -397,7 +397,8 @@ impl App {
     pub fn render(&mut self) {
         let pal = self.palette();
         let clock = self.settings.pet.show_clock.then(|| hm(now_unix()));
-        let view = View { pal: &pal, expr: self.expr(), attention: self.attention(), size: self.size(), clock };
+        let view =
+            View { pal: &pal, who: self.settings.pet.character, expr: self.expr(), attention: self.attention(), size: self.size(), clock };
         self.pet.render(&view);
         let want = self.pet.visible && self.pet.animating();
         if want && !self.anim_timer {
@@ -676,7 +677,7 @@ impl App {
     fn update_tray(&mut self) {
         let tip = self.tray_tip();
         let attention = !self.pending.is_empty();
-        self.tray.update(self.settings.pet.color.rgb(), attention, &tip);
+        self.tray.update(self.settings.pet.color.rgb(), self.settings.pet.character, attention, &tip);
     }
 
     fn present(&mut self, d: Due, sound: bool) {
@@ -811,7 +812,14 @@ impl App {
         if !self.settings.notify.sound {
             return;
         }
-        self.chime.get_or_insert_with(platform::Chime::new).play();
+        let voice = self.settings.pet.voice;
+        // Built once per voice and kept; changing voice throws the old one away.
+        if self.chime.as_ref().is_none_or(|(v, _)| *v != voice) {
+            self.chime = Some((voice, platform::Chime::new(voice)));
+        }
+        if let Some((_, c)) = &self.chime {
+            c.play();
+        }
     }
 
     fn message(&mut self, text: String, secs: u32) {
@@ -1343,7 +1351,7 @@ impl App {
 
     pub fn on_taskbar_created(&mut self) {
         let tip = self.tray_tip();
-        self.tray.add(self.settings.pet.color.rgb(), !self.pending.is_empty(), &tip);
+        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character, !self.pending.is_empty(), &tip);
     }
 
     // -----------------------------------------------------------------------------------------

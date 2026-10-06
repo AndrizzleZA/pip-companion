@@ -5,6 +5,7 @@
 //! `Pose`; the window only renders frames while an animation is actually playing.
 
 use super::{color, ellipse_path, fill_path, mix, stroke_path};
+use pip_core::settings::Character;
 use std::f32::consts::PI;
 use tiny_skia::*;
 
@@ -301,7 +302,7 @@ const LEAF: u32 = 0x4FA86A;
 const WATER: u32 = 0x4DB3F2;
 
 /// Draws the creature. `base` maps design space (0..100) into the target pixmap.
-pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, base: Transform) {
+pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Transform) {
     let body_light = mix(body, 0xFFFFFF, 0.38);
     let body_dark = mix(body, 0x000000, 0.18);
 
@@ -321,6 +322,9 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, base: Transform) {
     for fx in [38.0, 62.0] {
         fill_path(pm, ellipse_path(fx, 91.0 + pose.feet_drop, 8.0, 4.6), color(body_dark, 1.0), t);
     }
+
+    // Ears belong behind the body, like the arms, so the head overlaps them cleanly.
+    draw_ears_behind(pm, t, who, body, pose.leaf);
 
     // Arms (behind the body so they peek out as little nubs)
     draw_arm(pm, t, 21.0, 63.0, -1.0, pose.arm_l, body_dark);
@@ -355,7 +359,7 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, base: Transform) {
     fill_path(pm, ellipse_path(0.0, 0.0, 7.5, 4.0), color(0xFFFFFF, 0.6), t.pre_translate(34.0, 42.0).pre_concat(Transform::from_rotate(-38.0)));
     fill_path(pm, PathBuilder::from_circle(44.0, 35.5, 1.8), color(0xFFFFFF, 0.5), t);
 
-    draw_sprout(pm, t, pose.leaf);
+    draw_crown(pm, t, who, pose.leaf);
     draw_eyes(pm, t, pose);
 
     // Blush
@@ -374,6 +378,61 @@ fn draw_arm(pm: &mut PixmapMut, t: Transform, sx: f32, sy: f32, side: f32, raise
     let angle = -side * (10.0 + 125.0 * raise.clamp(0.0, 1.2));
     let at = t.pre_translate(sx, sy).pre_concat(Transform::from_rotate(angle));
     fill_path(pm, ellipse_path(0.0, 7.0, 5.2, 8.5), color(c, 1.0), at);
+}
+
+/// What sits on top: the one thing that differs between characters. `sway` is the same gentle
+/// value the sprout already used, so every crown moves with the same breathing.
+fn draw_crown(pm: &mut PixmapMut, t: Transform, who: Character, sway: f32) {
+    match who {
+        Character::Sprout => draw_sprout(pm, t, sway),
+        // Ears are drawn behind the body; a tuft is the only other thing in front.
+        Character::Bunny | Character::Kit => {}
+        Character::Tuft => draw_tuft(pm, t, sway),
+    }
+}
+
+/// Bunny and Kit ears, drawn before the body so the head overlaps their base.
+fn draw_ears_behind(pm: &mut PixmapMut, t: Transform, who: Character, body: u32, sway: f32) {
+    let shell = mix(body, 0xFFFFFF, 0.1);
+    let inner = mix(body, 0xFF8FA3, 0.45);
+    match who {
+        Character::Bunny => {
+            for (x, dir) in [(40.0f32, -1.0f32), (60.0, 1.0)] {
+                let et = t.pre_translate(x, 32.0).pre_concat(Transform::from_rotate(dir * (9.0 + sway * 0.5)));
+                fill_path(pm, ellipse_path(0.0, -13.0, 5.4, 15.0), color(shell, 1.0), et);
+                fill_path(pm, ellipse_path(0.0, -13.0, 2.6, 10.5), color(inner, 0.8), et);
+            }
+        }
+        Character::Kit => {
+            for (x, dir) in [(36.0f32, -1.0f32), (64.0, 1.0)] {
+                let et = t.pre_translate(x, 33.0).pre_concat(Transform::from_rotate(dir * (8.0 + sway * 0.4)));
+                let mut pb = PathBuilder::new();
+                pb.move_to(-7.0, 2.0);
+                pb.line_to(0.0, -14.0);
+                pb.line_to(7.0, 2.0);
+                pb.close();
+                fill_path(pm, pb.finish(), color(shell, 1.0), et);
+                let mut ib = PathBuilder::new();
+                ib.move_to(-3.4, 0.5);
+                ib.line_to(0.0, -8.5);
+                ib.line_to(3.4, 0.5);
+                ib.close();
+                fill_path(pm, ib.finish(), color(inner, 0.75), et);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Three short strands, leaning with the same sway as the sprout.
+fn draw_tuft(pm: &mut PixmapMut, t: Transform, sway: f32) {
+    let top = t.pre_translate(50.0, 28.0);
+    for (dx, len, lean) in [(-4.5f32, 9.0f32, -24.0f32), (0.0, 12.0, -4.0), (4.5, 9.0, 16.0)] {
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        pb.quad_to(dx * 0.4, -len * 0.6, dx * 0.9, -len);
+        stroke_path(pm, pb.finish(), color(INK, 0.85), 2.0, top.pre_concat(Transform::from_rotate(lean + sway * 0.6)));
+    }
 }
 
 fn draw_sprout(pm: &mut PixmapMut, t: Transform, leaf: f32) {

@@ -1,6 +1,7 @@
 //! Thin wrappers over the Win32 calls the shell needs. Nothing in here keeps state.
 
 use std::ffi::c_void;
+use pip_core::settings::Voice;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Media::Audio::*;
@@ -250,24 +251,50 @@ pub fn set_autostart_to(exe: &std::path::Path, enable: bool) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Sound: a soft two-note chime synthesised once into memory (no files, no audio engine).
+// Sound: a few notes synthesised into memory when first played (no files, no audio engine).
 // ---------------------------------------------------------------------------------------------
 
 pub struct Chime(Vec<u8>);
 
+/// A voice is just a few notes and how quickly they fade. Keeping it to this means another one
+/// costs a line, not a sound file.
+struct Recipe {
+    /// Seconds of audio.
+    len: f32,
+    /// How fast each note dies away; bigger is shorter.
+    decay: f32,
+    /// How much of the octave above is mixed in — the difference between woody and bell-like.
+    harmonic: f32,
+    /// (hertz, seconds from the start).
+    notes: &'static [(f32, f32)],
+}
+
+fn recipe(voice: Voice) -> Recipe {
+    match voice {
+        // The original: A5 then E6.
+        Voice::Chime => Recipe { len: 0.55, decay: 7.0, harmonic: 0.12, notes: &[(880.0, 0.0), (1318.5, 0.11)] },
+        // One note, left to ring.
+        Voice::Bell => Recipe { len: 0.95, decay: 3.2, harmonic: 0.3, notes: &[(1046.5, 0.0)] },
+        // Two quick blips, almost spoken.
+        Voice::Blip => Recipe { len: 0.26, decay: 20.0, harmonic: 0.05, notes: &[(659.3, 0.0), (880.0, 0.07)] },
+        // Soft and falling, more of a hum than a ring.
+        Voice::Coo => Recipe { len: 0.7, decay: 5.5, harmonic: 0.04, notes: &[(659.3, 0.0), (523.3, 0.13)] },
+    }
+}
+
 impl Chime {
-    pub fn new() -> Self {
+    pub fn new(voice: Voice) -> Self {
         const RATE: u32 = 22_050;
-        let notes = [(880.0f32, 0.0f32), (1318.5, 0.11)]; // A5 then E6
-        let len = (RATE as f32 * 0.55) as usize;
+        let r = recipe(voice);
+        let len = (RATE as f32 * r.len) as usize;
         let mut samples = vec![0i16; len];
-        for (freq, start) in notes {
+        for &(freq, start) in r.notes {
             let s0 = (start * RATE as f32) as usize;
             for (i, s) in samples.iter_mut().enumerate().skip(s0) {
                 let t = (i - s0) as f32 / RATE as f32;
-                let env = (1.0 - (-t * 60.0).exp()) * (-t * 7.0).exp();
+                let env = (1.0 - (-t * 60.0).exp()) * (-t * r.decay).exp();
                 let v = (t * freq * std::f32::consts::TAU).sin() * 0.6
-                    + (t * freq * 2.0 * std::f32::consts::TAU).sin() * 0.12;
+                    + (t * freq * 2.0 * std::f32::consts::TAU).sin() * r.harmonic;
                 *s = s.saturating_add((v * env * 5200.0) as i16);
             }
         }

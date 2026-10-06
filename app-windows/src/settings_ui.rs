@@ -12,7 +12,7 @@ use pip_core::schedule;
 use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
 use crate::app::SignIn;
 use pip_core::connectors::{self, Connector, ConnectorId};
-use pip_core::settings::{CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme};
+use pip_core::settings::{Character, CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme, Voice};
 use pip_core::time::{DaySet, TimeOfDay};
 use tiny_skia::{PixmapMut, Transform};
 use windows_sys::Win32::Foundation::*;
@@ -137,6 +137,8 @@ pub enum UiAct {
     SyncAskAgain,
     MailImportantMarker,
     MailStarred,
+    Who(Character),
+    Say(Voice),
     MailEvery(i32),
 }
 
@@ -404,7 +406,7 @@ impl App {
         let base = Transform::from_translate((SIDEBAR_W * s - 100.0 * cs) / 2.0, 14.0 * s).pre_scale(cs, cs);
         let mut pose = Pose::base(Expr::Happy);
         pose.blush = 0.6;
-        creature::draw(&mut pm, &pose, pal.body, base);
+        creature::draw(&mut pm, &pose, pal.body, self.settings.pet.character, base);
         let name = &self.settings.pet.name;
         text::draw_centered(&mut pm, &f.semibold, 16.0 * s, SIDEBAR_W * s / 2.0, 100.0 * s, pal.text, 1.0, name);
         text::draw_centered(&mut pm, &f.regular, 11.5 * s, SIDEBAR_W * s / 2.0, 118.0 * s, pal.muted, 1.0, "your tiny friend");
@@ -437,6 +439,16 @@ impl App {
         let r = R::new(c.x1 - 220.0 * s, cy - 16.0 * s, 220.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &p.name, *focus == Some(Field::Name), &c.pal, s, "Pip");
         c.hits.push((r, UiAct::Focus(Field::Name)));
+
+        let cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
+        let sel = Character::ALL.iter().position(|x| *x == p.character).unwrap_or(0);
+        let labels: Vec<&str> = Character::ALL.iter().map(|x| x.label()).collect();
+        c.segmented(cy, &labels, sel, Character::ALL.iter().map(|x| UiAct::Who(*x)).collect());
+
+        let cy = c.row("Voice", Some("Played with reminders; tap one to hear it"));
+        let sel = Voice::ALL.iter().position(|x| *x == p.voice).unwrap_or(0);
+        let labels: Vec<&str> = Voice::ALL.iter().map(|x| x.label()).collect();
+        c.segmented(cy, &labels, sel, Voice::ALL.iter().map(|x| UiAct::Say(*x)).collect());
 
         let cy = c.row("Colour", None);
         let n = PetColor::ALL.len() as f32;
@@ -899,6 +911,13 @@ impl App {
                 return;
             }
             UiAct::Focus(_) => return,
+            UiAct::Who(w) => st.pet.character = w,
+            UiAct::Say(v) => {
+                st.pet.voice = v;
+                // Choosing a voice plays it, whether or not reminder sounds are on: the tap is
+                // the request, and a silent answer would look broken.
+                platform::Chime::new(v).play();
+            }
             UiAct::Color(c) => st.pet.color = c,
             UiAct::Size(z) => st.pet.size = z,
             UiAct::Live(l) => st.pet.liveliness = l,
@@ -1013,7 +1032,7 @@ impl App {
                 self.set_timer(crate::app::T_BUBBLE, 15_000);
                 self.anim(crate::render::creature::AnimKind::Wave);
                 if self.settings.notify.sound {
-                    platform::Chime::new().play();
+                    platform::Chime::new(self.settings.pet.voice).play();
                 }
                 return;
             }
@@ -1021,9 +1040,9 @@ impl App {
         }
         if prev != self.settings {
             self.settings_changed(&prev);
-            if prev.pet.color != self.settings.pet.color {
+            if prev.pet.color != self.settings.pet.color || prev.pet.character != self.settings.pet.character {
                 if let Some(ui) = &self.ui {
-                    set_window_icon(ui.hwnd, self.settings.pet.color.rgb());
+                    set_window_icon(ui.hwnd, self.settings.pet.color.rgb(), self.settings.pet.character);
                 }
             }
             self.ui_apply_chrome();
@@ -1058,10 +1077,10 @@ fn local_count(app: &App) -> u32 {
     if app.state.water.day == Some(today) { app.state.water.count } else { 0 }
 }
 
-pub fn set_window_icon(hwnd: HWND, body: u32) {
+pub fn set_window_icon(hwnd: HWND, body: u32, who: Character) {
     unsafe {
         for (which, size) in [(ICON_SMALL, 16 * 2), (ICON_BIG, 32 * 2)] {
-            let icon = crate::tray::make_icon(body, false, size);
+            let icon = crate::tray::make_icon(body, who, false, size);
             let old = SendMessageW(hwnd, WM_SETICON, which as usize, icon as isize);
             if old != 0 {
                 DestroyIcon(old as HICON);
