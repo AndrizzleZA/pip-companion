@@ -260,6 +260,10 @@ impl App {
         if !self.settings.email.accounts.is_empty() {
             self.set_timer(T_MAIL, 25_000); // first email check once the desktop has settled
         }
+        // And the phone. Without this the first round only happened when something else asked for
+        // one — opening Connections, or an edit — so a PC left alone never picked up what the
+        // phone had done. schedule_sync itself does nothing when sync isn't set up.
+        self.schedule_sync(30_000);
         unsafe {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(self.hwnd, 0 /* NOTIFY_FOR_THIS_SESSION */);
         }

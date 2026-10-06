@@ -668,3 +668,33 @@ The rule now is that **a background round always leaves its successor armed**, w
 
 The general rule: anything that repeats must be impossible to stop by accident. Prefer a wasted cycle
 over a subsystem that goes quiet without saying so.
+
+## 24. The round that never started, 2026-10-06
+
+The same family as §23, from the other end. Water logged on the phone never reached the PC — not
+slowly, never. Two PC processes ran for forty minutes between them without a single sync round.
+
+Nothing was broken. Startup armed the calendar (20s) and email (25s) but never the phone sync, so
+the first round only happened when something else asked for one: opening Connections, or an edit.
+A PC left alone therefore never picked up anything the phone had done. It had gone unnoticed
+because testing sync means opening Connections and editing reminders constantly — the two things
+that happen to arm it.
+
+```rust
+self.set_timer(T_CALSYNC, 20_000);
+if !self.settings.email.accounts.is_empty() {
+    self.set_timer(T_MAIL, 25_000);
+}
+self.schedule_sync(30_000); // ← the phone had no equivalent
+```
+
+With it, the PC pulled the phone's glasses about forty seconds after launch.
+
+§23 said anything that repeats must be impossible to stop by accident. The other half: **it has to
+start on its own too.** A recurring job that only runs because something unrelated kicks it off
+looks fine for as long as you keep kicking it, which is exactly what testing does.
+
+It also leaves a lesson about diagnosis. The visible symptom was a count on screen that the file
+did not have, which read like data being lost. Quitting — which flushes — wrote nothing, proving
+the opposite: there was nothing in memory to save, so the PC had never received anything. The test
+that looked like it would confirm the theory is what killed it.
