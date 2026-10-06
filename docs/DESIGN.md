@@ -845,3 +845,43 @@ Measured before and after, same method, single runs so small deltas are noise:
 The whole stage costs about fifteen kilobytes of binary and nothing that can be measured at runtime,
 which is the point: the architecture already had a procedural creature and an in-memory
 synthesiser, so customisation was a matter of parameterising what was there rather than adding to it.
+
+## 29. Stage 1b — different creatures, one drawing, 2026-10-06
+
+Stage 1 gave four crowns on one body. This gives four bodies, without a second copy of `draw`.
+
+A body is eight numbers — top, bottom, half-width, where it is widest, and how far the four
+controls reach — and those numbers reproduce the original outline exactly. That is the whole trick:
+the hand-drawn shape was already a symmetric blob, so it could become data without being redrawn.
+Everything that hangs off it (eyes, mouth, belly, shine, blush, shoulders, feet, shadow, crown,
+accessory anchor) is a field in the same plan, and `draw` reads the plan.
+
+The crown is a field too, so bodies and crowns multiply rather than add: a future creature is one
+more entry in `shape_of`, any body with any crown, and no new drawing code at all.
+
+Sprout is the original to the point, and the default — nobody's companion changes under them.
+
+**The customisation stays one list, not two.** Bodies and crowns are independent inside, but the
+settings page offers four named creatures rather than a Shape row and a Crown row. Two rows would
+double the decisions, allow combinations nobody curated, and turn "choose your companion" into a
+character creator. Simplicity is the higher priority, and the internal split means a curated fifth
+creature costs nothing.
+
+Honest notes on the fiddly parts:
+
+- The mouth was the worst of it, as expected: five variants, all absolute, around (45–55, 69–78).
+  Rather than restate five sets of curves per creature, the art stays authored once against
+  `MOUTH_BASE` and a body moves it by shifting the transform. Sprout's offset is exactly zero.
+- `draw_accessory` did have its own assumptions. `Acc::Sip` interpolates into the mouth, so it now
+  reads the face anchor; badges hover beside the head, so they move with it; sparkles ring the body,
+  so they spread with its width.
+- Eye *size* is still shared. On Kit's wide face slightly larger eyes would read better, but
+  keeping one size keeps the family resemblance, and it is one field away if that changes.
+
+A method note worth keeping: comparing screenshots by hash was useless here. Three captures of one
+unchanged build gave two different hashes, because the pet blinks. The real check is a test that
+compares the generated path to the hand-written one segment by segment, which is deterministic, runs
+in milliseconds, and fails loudly if anyone nudges a control point.
+
+Measured, same method as Stage 1: private memory 1.81 MB unchanged, threads 1, handles 170, CPU
+2.10 to 1.99 s/h, executable 2061 to 2065 KB. Four kilobytes for three new creatures.

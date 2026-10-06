@@ -11,6 +11,170 @@ use tiny_skia::*;
 
 /// Where the feet touch the ground in design space.
 pub const GROUND_Y: f32 = 94.0;
+/// Everything is drawn symmetrically about this line.
+const CX: f32 = 50.0;
+/// The mouth shapes are authored around this height; a body moves them by shifting the transform
+/// rather than by restating five sets of curves.
+const MOUTH_BASE: f32 = 71.0;
+
+/// What sits on a head. Separate from the body so the two multiply: a future creature is any
+/// body with any crown, which is one more line in [`shape_of`] rather than more drawing code.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Crown {
+    Leaf,
+    /// Tall, soft ears — drawn behind the body so the head overlaps their base.
+    LongEars,
+    /// Pointed ears, also behind.
+    CatEars,
+    Tuft,
+}
+
+impl Crown {
+    /// Ears sit behind the body; everything else goes on top of it.
+    fn behind(self) -> bool {
+        matches!(self, Crown::LongEars | Crown::CatEars)
+    }
+}
+
+/// A body outline: a symmetric blob, described by where it is widest and how far its controls
+/// reach. These eight numbers reproduce the original drawing exactly, which is what makes it safe
+/// to turn a hand-drawn shape into data.
+#[derive(Clone, Copy)]
+pub struct Body {
+    pub top: f32,
+    pub bottom: f32,
+    /// Half-width at the widest point.
+    pub half: f32,
+    /// Height of the widest point.
+    pub widest: f32,
+    /// How far the top and bottom controls reach sideways.
+    pub shoulder: f32,
+    pub hip: f32,
+    /// Where the side controls sit, above and below the widest point.
+    pub flank_hi: f32,
+    pub flank_lo: f32,
+}
+
+impl Body {
+    fn path(&self) -> Option<Path> {
+        let (t, b, h, w) = (self.top, self.bottom, self.half, self.widest);
+        let mut pb = PathBuilder::new();
+        pb.move_to(CX, t);
+        pb.cubic_to(CX + self.shoulder, t, CX + h, self.flank_hi, CX + h, w);
+        pb.cubic_to(CX + h, self.flank_lo, CX + self.hip, b, CX, b);
+        pb.cubic_to(CX - self.hip, b, CX - h, self.flank_lo, CX - h, w);
+        pb.cubic_to(CX - h, self.flank_hi, CX - self.shoulder, t, CX, t);
+        pb.close();
+        pb.finish()
+    }
+}
+
+/// Where everything hangs off a body. The poses, expressions and animations are shared, so a new
+/// creature is this many numbers rather than another copy of [`draw`].
+#[derive(Clone, Copy)]
+pub struct Shape {
+    pub body: Body,
+    pub crown: Crown,
+    pub eye_y: f32,
+    /// Half the distance between the eyes.
+    pub eye_dx: f32,
+    /// Where the authored mouth lands on this face.
+    pub mouth_y: f32,
+    /// Belly patch: (centre y, rx, ry).
+    pub belly: (f32, f32, f32),
+    pub shine: (f32, f32),
+    pub shine2: (f32, f32),
+    /// Blush: (offset from centre, y).
+    pub blush: (f32, f32),
+    /// Shoulders: (offset from centre, y).
+    pub arm: (f32, f32),
+    /// Feet: (offset from centre, y).
+    pub foot: (f32, f32),
+    pub shadow_rx: f32,
+    /// Where a crown sits on the head.
+    pub crown_y: f32,
+    /// Where ears attach: (offset from centre, y).
+    pub ear: (f32, f32),
+    /// Where a floating accessory hovers.
+    pub acc: (f32, f32),
+}
+
+/// The four creatures. Sprout's numbers are the original drawing, unchanged to the decimal.
+pub fn shape_of(who: Character) -> Shape {
+    match who {
+        Character::Sprout => Shape {
+            crown: Crown::Leaf,
+            body: Body { top: 27.0, bottom: 93.0, half: 35.0, widest: 66.0, shoulder: 22.0, hip: 21.0, flank_hi: 47.0, flank_lo: 85.0 },
+            eye_y: 61.0,
+            eye_dx: 11.0,
+            mouth_y: 71.0,
+            belly: (77.0, 19.0, 12.5),
+            shine: (34.0, 42.0),
+            shine2: (44.0, 35.5),
+            blush: (20.5, 71.5),
+            arm: (29.0, 63.0),
+            foot: (12.0, 91.0),
+            shadow_rx: 25.0,
+            crown_y: 28.5,
+            ear: (10.0, 32.0),
+            acc: (82.0, 27.0),
+        },
+        // Tall and slim: a taller head means the face rides higher and the feet sit closer in.
+        Character::Bunny => Shape {
+            crown: Crown::LongEars,
+            body: Body { top: 19.0, bottom: 93.0, half: 28.0, widest: 65.0, shoulder: 17.0, hip: 17.0, flank_hi: 40.0, flank_lo: 84.0 },
+            eye_y: 56.0,
+            eye_dx: 9.5,
+            mouth_y: 66.0,
+            belly: (79.0, 15.5, 11.0),
+            shine: (37.0, 36.0),
+            shine2: (45.0, 30.0),
+            blush: (17.0, 66.5),
+            arm: (23.0, 61.0),
+            foot: (10.0, 91.0),
+            shadow_rx: 21.0,
+            crown_y: 20.5,
+            ear: (9.0, 25.0),
+            acc: (76.0, 20.0),
+        },
+        // Wide and low: a broad face with the eyes set further apart.
+        Character::Kit => Shape {
+            crown: Crown::CatEars,
+            body: Body { top: 38.0, bottom: 93.0, half: 43.0, widest: 74.0, shoulder: 27.0, hip: 26.0, flank_hi: 54.0, flank_lo: 86.0 },
+            eye_y: 66.0,
+            eye_dx: 13.0,
+            mouth_y: 76.0,
+            belly: (83.0, 23.0, 10.5),
+            shine: (30.0, 51.0),
+            shine2: (42.0, 46.0),
+            blush: (25.5, 76.0),
+            arm: (36.0, 71.0),
+            foot: (15.0, 91.0),
+            shadow_rx: 30.0,
+            crown_y: 39.0,
+            ear: (16.0, 45.0),
+            acc: (90.0, 36.0),
+        },
+        // Round: as tall as it is wide.
+        Character::Tuft => Shape {
+            crown: Crown::Tuft,
+            body: Body { top: 32.0, bottom: 93.0, half: 31.0, widest: 62.0, shoulder: 20.0, hip: 19.0, flank_hi: 44.0, flank_lo: 83.0 },
+            eye_y: 60.0,
+            eye_dx: 10.5,
+            mouth_y: 70.0,
+            belly: (79.0, 17.0, 11.5),
+            shine: (35.0, 45.0),
+            shine2: (44.0, 39.0),
+            blush: (19.0, 70.5),
+            arm: (26.0, 64.0),
+            foot: (11.0, 91.0),
+            shadow_rx: 23.0,
+            crown_y: 33.0,
+            ear: (11.0, 36.0),
+            acc: (80.0, 31.0),
+        },
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Eyes {
@@ -305,11 +469,12 @@ const WATER: u32 = 0x4DB3F2;
 pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Transform) {
     let body_light = mix(body, 0xFFFFFF, 0.38);
     let body_dark = mix(body, 0x000000, 0.18);
+    let s = shape_of(who);
 
     // Ground shadow: stays on the ground, shrinks while airborne.
     let lift = (-pose.dy).max(0.0);
     let sh = (1.0 - lift / 55.0).clamp(0.4, 1.0);
-    fill_path(pm, ellipse_path(50.0, GROUND_Y + 0.5, 25.0 * sh * pose.sx, 3.6 * sh), color(0, 0.16 * sh), base);
+    fill_path(pm, ellipse_path(CX, GROUND_Y + 0.5, s.shadow_rx * sh * pose.sx, 3.6 * sh), color(0, 0.16 * sh), base);
 
     // Body transform: squash/stretch and tilt around the feet.
     let t = base
@@ -319,29 +484,22 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
         .pre_translate(-50.0, -GROUND_Y);
 
     // Feet
-    for fx in [38.0, 62.0] {
-        fill_path(pm, ellipse_path(fx, 91.0 + pose.feet_drop, 8.0, 4.6), color(body_dark, 1.0), t);
+    for side in [-1.0f32, 1.0] {
+        fill_path(pm, ellipse_path(CX + side * s.foot.0, s.foot.1 + pose.feet_drop, 8.0, 4.6), color(body_dark, 1.0), t);
     }
 
     // Ears belong behind the body, like the arms, so the head overlaps them cleanly.
-    draw_ears_behind(pm, t, who, body, pose.leaf);
+    draw_ears_behind(pm, t, &s, body, pose.leaf);
 
     // Arms (behind the body so they peek out as little nubs)
-    draw_arm(pm, t, 21.0, 63.0, -1.0, pose.arm_l, body_dark);
-    draw_arm(pm, t, 79.0, 63.0, 1.0, pose.arm_r, body_dark);
+    draw_arm(pm, t, CX - s.arm.0, s.arm.1, -1.0, pose.arm_l, body_dark);
+    draw_arm(pm, t, CX + s.arm.0, s.arm.1, 1.0, pose.arm_r, body_dark);
 
-    // Body: a soft mochi/egg shape with a vertical gradient.
-    let mut pb = PathBuilder::new();
-    pb.move_to(50.0, 27.0);
-    pb.cubic_to(72.0, 27.0, 85.0, 47.0, 85.0, 66.0);
-    pb.cubic_to(85.0, 85.0, 71.0, 93.0, 50.0, 93.0);
-    pb.cubic_to(29.0, 93.0, 15.0, 85.0, 15.0, 66.0);
-    pb.cubic_to(15.0, 47.0, 28.0, 27.0, 50.0, 27.0);
-    pb.close();
-    if let Some(path) = pb.finish() {
+    // Body: a soft mochi shape with a vertical gradient.
+    if let Some(path) = s.body.path() {
         let shader = LinearGradient::new(
-            Point::from_xy(50.0, 27.0),
-            Point::from_xy(50.0, 93.0),
+            Point::from_xy(CX, s.body.top),
+            Point::from_xy(CX, s.body.bottom),
             vec![GradientStop::new(0.0, color(body_light, 1.0)), GradientStop::new(1.0, color(body, 1.0))],
             SpreadMode::Pad,
             Transform::identity(),
@@ -355,21 +513,22 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     }
 
     // Belly and shine
-    fill_path(pm, ellipse_path(50.0, 77.0, 19.0, 12.5), color(mix(body, 0xFFFFFF, 0.5), 0.5), t);
-    fill_path(pm, ellipse_path(0.0, 0.0, 7.5, 4.0), color(0xFFFFFF, 0.6), t.pre_translate(34.0, 42.0).pre_concat(Transform::from_rotate(-38.0)));
-    fill_path(pm, PathBuilder::from_circle(44.0, 35.5, 1.8), color(0xFFFFFF, 0.5), t);
+    fill_path(pm, ellipse_path(CX, s.belly.0, s.belly.1, s.belly.2), color(mix(body, 0xFFFFFF, 0.5), 0.5), t);
+    fill_path(pm, ellipse_path(0.0, 0.0, 7.5, 4.0), color(0xFFFFFF, 0.6), t.pre_translate(s.shine.0, s.shine.1).pre_concat(Transform::from_rotate(-38.0)));
+    fill_path(pm, PathBuilder::from_circle(s.shine2.0, s.shine2.1, 1.8), color(0xFFFFFF, 0.5), t);
 
-    draw_crown(pm, t, who, pose.leaf);
-    draw_eyes(pm, t, pose);
+    draw_crown(pm, t, &s, pose.leaf);
+    draw_eyes(pm, t, &s, pose);
 
     // Blush
     if pose.blush > 0.01 {
-        for cx in [29.5, 70.5] {
-            fill_path(pm, ellipse_path(cx, 71.5, 5.6, 3.3), color(0xFF8FA3, 0.55 * pose.blush), t);
+        for side in [-1.0f32, 1.0] {
+            fill_path(pm, ellipse_path(CX + side * s.blush.0, s.blush.1, 5.6, 3.3), color(0xFF8FA3, 0.55 * pose.blush), t);
         }
     }
-    draw_mouth(pm, t, pose.mouth);
-    draw_accessory(pm, base, t, pose);
+    // The mouth art is authored once and moved to this face, rather than redrawn per creature.
+    draw_mouth(pm, t.pre_translate(0.0, s.mouth_y - MOUTH_BASE), pose.mouth);
+    draw_accessory(pm, base, t, &s, pose);
 }
 
 fn draw_arm(pm: &mut PixmapMut, t: Transform, sx: f32, sy: f32, side: f32, raise: f32, c: u32) {
@@ -382,30 +541,38 @@ fn draw_arm(pm: &mut PixmapMut, t: Transform, sx: f32, sy: f32, side: f32, raise
 
 /// What sits on top: the one thing that differs between characters. `sway` is the same gentle
 /// value the sprout already used, so every crown moves with the same breathing.
-fn draw_crown(pm: &mut PixmapMut, t: Transform, who: Character, sway: f32) {
-    match who {
-        Character::Sprout => draw_sprout(pm, t, sway),
-        // Ears are drawn behind the body; a tuft is the only other thing in front.
-        Character::Bunny | Character::Kit => {}
-        Character::Tuft => draw_tuft(pm, t, sway),
+fn draw_crown(pm: &mut PixmapMut, t: Transform, s: &Shape, sway: f32) {
+    match s.crown {
+        Crown::Leaf => draw_sprout(pm, t, s.crown_y, sway),
+        Crown::Tuft => draw_tuft(pm, t, s.crown_y, sway),
+        // Ears were already drawn, behind the body.
+        c if c.behind() => {}
+        _ => {}
     }
 }
 
 /// Bunny and Kit ears, drawn before the body so the head overlaps their base.
-fn draw_ears_behind(pm: &mut PixmapMut, t: Transform, who: Character, body: u32, sway: f32) {
+fn draw_ears_behind(pm: &mut PixmapMut, t: Transform, s: &Shape, body: u32, sway: f32) {
+    if !s.crown.behind() {
+        return;
+    }
     let shell = mix(body, 0xFFFFFF, 0.1);
     let inner = mix(body, 0xFF8FA3, 0.45);
-    match who {
-        Character::Bunny => {
-            for (x, dir) in [(40.0f32, -1.0f32), (60.0, 1.0)] {
-                let et = t.pre_translate(x, 32.0).pre_concat(Transform::from_rotate(dir * (9.0 + sway * 0.5)));
+    match s.crown {
+        Crown::LongEars => {
+            for dir in [-1.0f32, 1.0] {
+                let et = t
+                    .pre_translate(CX + dir * s.ear.0, s.ear.1)
+                    .pre_concat(Transform::from_rotate(dir * (9.0 + sway * 0.5)));
                 fill_path(pm, ellipse_path(0.0, -13.0, 5.4, 15.0), color(shell, 1.0), et);
                 fill_path(pm, ellipse_path(0.0, -13.0, 2.6, 10.5), color(inner, 0.8), et);
             }
         }
-        Character::Kit => {
-            for (x, dir) in [(36.0f32, -1.0f32), (64.0, 1.0)] {
-                let et = t.pre_translate(x, 33.0).pre_concat(Transform::from_rotate(dir * (8.0 + sway * 0.4)));
+        Crown::CatEars => {
+            for dir in [-1.0f32, 1.0] {
+                let et = t
+                    .pre_translate(CX + dir * s.ear.0, s.ear.1)
+                    .pre_concat(Transform::from_rotate(dir * (8.0 + sway * 0.4)));
                 let mut pb = PathBuilder::new();
                 pb.move_to(-7.0, 2.0);
                 pb.line_to(0.0, -14.0);
@@ -425,8 +592,8 @@ fn draw_ears_behind(pm: &mut PixmapMut, t: Transform, who: Character, body: u32,
 }
 
 /// Three short strands, leaning with the same sway as the sprout.
-fn draw_tuft(pm: &mut PixmapMut, t: Transform, sway: f32) {
-    let top = t.pre_translate(50.0, 28.0);
+fn draw_tuft(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
+    let top = t.pre_translate(CX, crown_y - 0.5);
     for (dx, len, lean) in [(-4.5f32, 9.0f32, -24.0f32), (0.0, 12.0, -4.0), (4.5, 9.0, 16.0)] {
         let mut pb = PathBuilder::new();
         pb.move_to(0.0, 0.0);
@@ -435,7 +602,9 @@ fn draw_tuft(pm: &mut PixmapMut, t: Transform, sway: f32) {
     }
 }
 
-fn draw_sprout(pm: &mut PixmapMut, t: Transform, leaf: f32) {
+fn draw_sprout(pm: &mut PixmapMut, t: Transform, crown_y: f32, leaf: f32) {
+    // Authored against Sprout's own head; another head just moves the whole stem.
+    let t = t.pre_translate(0.0, crown_y - 28.5);
     let mut pb = PathBuilder::new();
     pb.move_to(50.0, 28.5);
     pb.quad_to(49.0, 22.0, 51.0, 17.5);
@@ -453,11 +622,11 @@ fn draw_sprout(pm: &mut PixmapMut, t: Transform, leaf: f32) {
     fill_path(pm, leaf_path(), color(mix(LEAF, 0xFFFFFF, 0.15), 1.0), top.pre_scale(-1.0, 1.0).pre_concat(Transform::from_rotate(-28.0 + leaf)));
 }
 
-fn draw_eyes(pm: &mut PixmapMut, t: Transform, p: &Pose) {
+fn draw_eyes(pm: &mut PixmapMut, t: Transform, s: &Shape, p: &Pose) {
     let ox = 2.2 * p.look_x;
     let oy = 1.6 * p.look_y;
-    for cx in [39.0, 61.0] {
-        let (x, y) = (cx + ox, 61.0 + oy);
+    for side in [-1.0f32, 1.0] {
+        let (x, y) = (CX + side * s.eye_dx + ox, s.eye_y + oy);
         let closed = p.blink > 0.85;
         match p.eyes {
             Eyes::Open | Eyes::Wide if !closed => {
@@ -562,8 +731,13 @@ fn star_path(r: f32) -> Option<Path> {
     pb.finish()
 }
 
-fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, p: &Pose) {
+fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, s: &Shape, p: &Pose) {
     let at = p.acc_t;
+    // Badges hover beside the head, so they move with it; Sprout's numbers are the baseline.
+    let (adx, ady) = (s.acc.0 - 82.0, s.acc.1 - 27.0);
+    let base = base.pre_translate(adx, ady);
+    // Sparkles ring the body, so they move out with a wider one.
+    let spread = s.body.half - 35.0;
     match p.acc {
         Acc::None => {}
         Acc::Zzz => {
@@ -598,14 +772,16 @@ fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, p: &Po
             for (i, (x, y, r)) in [(20.0, 30.0, 4.5), (82.0, 24.0, 5.5), (88.0, 52.0, 3.5), (12.0, 55.0, 3.2)].iter().enumerate() {
                 let tw = ((at * 3.0 + i as f32 * 0.37) * 2.0 * PI).sin() * 0.5 + 0.5;
                 let c = if i % 2 == 0 { 0xFFC53D } else { 0xFFFFFF };
-                fill_path(pm, star_path(r * (0.5 + 0.6 * tw)), color(c, 0.35 + 0.65 * tw), base.pre_translate(*x, *y));
+                let x = if *x < CX { x - spread } else { x + spread };
+                fill_path(pm, star_path(r * (0.5 + 0.6 * tw)), color(c, 0.35 + 0.65 * tw), base.pre_translate(x, *y));
             }
         }
         Acc::Sip => {
             // From above-right down into the mouth, shrinking as it goes.
             let k = at;
-            let x = 82.0 + (50.0 - 82.0) * k;
-            let y = 22.0 + (71.0 - 22.0) * (k * k);
+            let (mx, my) = (CX, s.mouth_y);
+            let x = 82.0 + (mx - 82.0) * k;
+            let y = 22.0 + (my - 22.0) * (k * k);
             let s = 1.0 - 0.6 * k;
             draw_drop(pm, body_t.pre_translate(x, y).pre_scale(s, s), WATER, 1.0);
         }
@@ -614,4 +790,63 @@ fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, p: &Po
 
 pub fn draw_drop_outline(pm: &mut PixmapMut, ts: Transform, stroke: u32) {
     stroke_path(pm, drop_path(), color(stroke, 1.0), 1.6, ts);
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    /// Turning a hand-drawn body into eight numbers is only safe if the numbers give back exactly
+    /// the same curve. A screenshot can't prove this — the pet blinks, so two captures of one
+    /// build differ — but the path can be compared point by point.
+    #[test]
+    fn sprouts_body_is_the_original_drawing_to_the_point() {
+        let mut pb = PathBuilder::new();
+        pb.move_to(50.0, 27.0);
+        pb.cubic_to(72.0, 27.0, 85.0, 47.0, 85.0, 66.0);
+        pb.cubic_to(85.0, 85.0, 71.0, 93.0, 50.0, 93.0);
+        pb.cubic_to(29.0, 93.0, 15.0, 85.0, 15.0, 66.0);
+        pb.cubic_to(15.0, 47.0, 28.0, 27.0, 50.0, 27.0);
+        pb.close();
+        let original = pb.finish().expect("the drawing as it was written by hand");
+        let from_plan = shape_of(Character::Sprout).body.path().expect("the same body, as data");
+
+        let a: Vec<String> = original.segments().map(|s| format!("{s:?}")).collect();
+        let b: Vec<String> = from_plan.segments().map(|s| format!("{s:?}")).collect();
+        assert_eq!(a, b, "Sprout's outline changed");
+    }
+
+    /// The face and limbs were absolute numbers before; the plan has to put them back where they
+    /// were, or Sprout's expression shifts under everyone who never asked for a new creature.
+    #[test]
+    fn sprouts_anchors_are_where_they_always_were() {
+        let s = shape_of(Character::Sprout);
+        assert_eq!((CX - s.eye_dx, CX + s.eye_dx, s.eye_y), (39.0, 61.0, 61.0), "eyes");
+        assert_eq!(s.mouth_y, MOUTH_BASE, "the mouth is not moved at all");
+        assert_eq!((CX - s.arm.0, CX + s.arm.0, s.arm.1), (21.0, 79.0, 63.0), "shoulders");
+        assert_eq!((CX - s.foot.0, CX + s.foot.0, s.foot.1), (38.0, 62.0, 91.0), "feet");
+        assert_eq!((CX - s.blush.0, CX + s.blush.0, s.blush.1), (29.5, 70.5, 71.5), "blush");
+        assert_eq!((s.belly.0, s.belly.1, s.belly.2), (77.0, 19.0, 12.5), "belly");
+        assert_eq!(s.shine, (34.0, 42.0));
+        assert_eq!(s.shine2, (44.0, 35.5));
+        assert_eq!(s.shadow_rx, 25.0);
+        assert_eq!(s.acc, (82.0, 27.0), "accessories hover where they did");
+        assert_eq!(s.body.half, 35.0, "so sparkles spread by zero");
+    }
+
+    /// Every creature has to fit the window, which also fixes hit-testing and the saved position.
+    /// Usable design space is x -10.9..110.9 and y -14.7..98.3 (BOX 112x104, UNIT 0.92).
+    #[test]
+    fn every_creature_fits_the_window() {
+        for who in Character::ALL {
+            let s = shape_of(who);
+            let b = s.body.path().expect("a body").bounds();
+            let reach = |v: f32| assert!((-10.9..=110.9).contains(&v), "{:?} is off the side at {v}", who);
+            reach(b.left() - 12.0); // feet and ears sit outside the outline
+            reach(b.right() + 12.0);
+            assert!(b.top() > -14.7, "{who:?} is clipped at the top");
+            assert!(b.bottom() <= 98.3, "{who:?} is clipped at the bottom");
+            assert!(s.body.bottom == 93.0, "{who:?} must stand on the same ground");
+        }
+    }
 }
