@@ -104,6 +104,13 @@ impl ImportantDate {
 
     /// One-line description for a given occurrence, e.g. "Mom's birthday (turns 60)".
     pub fn describe(&self, on: NaiveDate) -> String {
+        // Saved without a name — "Birthday" reads better than "'s birthday".
+        if self.title.trim().is_empty() {
+            return match self.count_on(on) {
+                Some(n) if self.kind == DateKind::Birthday => format!("{} (turns {n})", self.kind.label()),
+                _ => self.kind.label().to_string(),
+            };
+        }
         let lower = self.title.to_lowercase();
         // "Mom" reads as "Mom's birthday"; "Mom's birthday" is left alone.
         let name = match self.kind {
@@ -266,5 +273,29 @@ mod tests {
         let dl = ImportantDate { kind: DateKind::Deadline, month: 10, day: 31, year: Some(2026), ..Default::default() };
         assert_eq!(dl.next_on_or_after(d(2026, 9, 21)), Some(d(2026, 10, 31)));
         assert_eq!(dl.next_on_or_after(d(2026, 11, 1)), None);
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+
+    fn on(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn a_date_saved_without_a_name_still_reads_properly() {
+        let d = ImportantDate { kind: DateKind::Birthday, month: 9, day: 22, ..Default::default() };
+        assert_eq!(d.describe(on(2027, 9, 22)), "Birthday", "not \"'s birthday\"");
+
+        let known = ImportantDate { kind: DateKind::Anniversary, title: "  ".into(), ..Default::default() };
+        assert_eq!(known.describe(on(2027, 9, 22)), "Anniversary", "whitespace is no name either");
+    }
+
+    #[test]
+    fn a_named_date_is_unchanged() {
+        let d = ImportantDate { kind: DateKind::Birthday, title: "Mum".into(), year: Some(1960), month: 5, day: 21, ..Default::default() };
+        assert_eq!(d.describe(on(2026, 5, 21)), "Mum's birthday (turns 66)");
     }
 }

@@ -28,10 +28,14 @@ import java.util.TimeZone
  */
 object Alarms {
     const val CHANNEL = "reminders"
+    /// Birthdays and anniversaries. Deliberately a separate channel: a birthday is worth knowing
+    /// about, not worth an alarm clock, and keeping them apart lets either be silenced alone.
+    const val CHANNEL_DATES = "dates"
     private const val RING = 1001          // the one pending alarm
     const val ACTION_RING = "com.pip.companion.RING"
     const val ACTION_SNOOZE = "com.pip.companion.SNOOZE"
     const val ACTION_DONE = "com.pip.companion.DONE"
+    const val ACTION_DATE_DONE = "com.pip.companion.DATE_DONE"
     const val EXTRA_ID = "id"
     const val EXTRA_TITLE = "title"
     const val EXTRA_OCCURRENCE = "occurrence"
@@ -54,6 +58,61 @@ object Alarms {
         nm.createNotificationChannel(c)
     }
 
+    /// The quieter channel, for dates.
+    fun datesChannel(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL_DATES) != null) return
+        val c = NotificationChannel(CHANNEL_DATES, "Birthdays and dates", NotificationManager.IMPORTANCE_DEFAULT)
+        c.description = "A note on the morning of someone's birthday"
+        nm.createNotificationChannel(c)
+    }
+
+    /**
+     * A date, as a note rather than an alarm.
+     *
+     * No full-screen takeover and no alarm sound: a birthday arriving at 09:00 should not behave
+     * like the thing that gets you out of bed. Tapping it opens Pip; "Got it" settles it here and,
+     * through the ordinary sync, on the PC as well.
+     */
+    fun note(context: Context, id: String, title: String, body: String, occurrence: Long) {
+        datesChannel(context)
+        val nm = context.getSystemService(NotificationManager::class.java)
+        val open = PendingIntent.getActivity(
+            context,
+            occurrence.toInt(),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_DATES)
+            .setSmallIcon(R.drawable.ic_pip_notification)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .addAction(0, "Got it", action(context, ACTION_DATE_DONE, id, title, occurrence))
+        if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            nm.notify(noteId(occurrence), notification.build())
+        }
+    }
+
+    /// "Got it" on a date. Same store, same sync, so the PC stops asking about it too.
+    fun dateDone(context: Context, store: Store, id: String, occurrence: Long) {
+        try {
+            val state = Native.ask(
+                "ack_date",
+                JSONObject().put("state", store.state).put("id", id).put("occurrence", occurrence),
+            )
+            store.saveState(state)
+        } catch (e: Exception) {
+            return
+        }
+        clear(context, occurrence)
+        arm(context, store)
+    }
+
     private fun args(store: Store, now: Long): JSONObject = JSONObject()
         .put("settings", store.settings)
         .put("state", store.state)
@@ -66,7 +125,7 @@ object Alarms {
         val now = Auth.now()
         val am = context.getSystemService(AlarmManager::class.java)
         val at = try {
-            val answer = Native.ask("next_reminder", args(store, now))
+            val answer = Native.ask("next_alert", args(store, now))
             if (answer.isNull("at")) {
                 cancel(context, am) // no reminders: no alarm icon, no wake-ups
                 return
@@ -218,18 +277,19 @@ class AlarmReceiver : BroadcastReceiver() {
         when (intent.action) {
             Alarms.ACTION_SNOOZE -> Alarms.snooze(context, store, id, occurrence)
             Alarms.ACTION_DONE -> Alarms.done(context, store, id, occurrence)
+            Alarms.ACTION_DATE_DONE -> Alarms.dateDone(context, store, id, occurrence)
             else -> {
                 // Ring whatever is due, then arm the next one — the alarm we just used is spent.
-                // Only things with a title to show: an item the engine knows about but this
-                // screen can't render would otherwise ring as a blank alarm.
-                for (item in Alarms.due(store).filter { it.optString("title").isNotEmpty() }) {
-                    Alarms.ring(
-                        context,
-                        item.optString("id"),
-                        item.optString("title"),
-                        item.optLong("occurrence"),
-                        item.optBoolean("late"),
-                    )
+                // Each kind is shown the way it deserves, and anything this screen doesn't know
+                // how to show is skipped rather than rung as a blank alarm.
+                for (item in Alarms.due(store)) {
+                    val id = item.optString("id")
+                    val title = item.optString("title")
+                    if (title.isEmpty()) continue
+                    when (item.optString("kind")) {
+                        "reminder" -> Alarms.ring(context, id, title, item.optLong("occurrence"), item.optBoolean("late"))
+                        "date" -> Alarms.note(context, id, title, item.optString("body"), item.optLong("occurrence"))
+                    }
                 }
                 Alarms.arm(context, store)
             }

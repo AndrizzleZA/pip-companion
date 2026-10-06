@@ -368,7 +368,7 @@ pub fn event_state_key(key: &str) -> String {
 }
 
 /// Reminder moments for the next occurrence of each important date: (moment, id).
-fn date_moments<Tz: TimeZone>(s: &Settings, now: i64, tz: &Tz) -> Vec<(i64, String)> {
+pub fn date_moments<Tz: TimeZone>(s: &Settings, now: i64, tz: &Tz) -> Vec<(i64, String)> {
     let today = local(tz, now).date();
     let mut out = Vec::new();
     for d in &s.dates.items {

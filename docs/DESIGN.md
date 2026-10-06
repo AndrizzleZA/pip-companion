@@ -736,3 +736,33 @@ Five minutes after launch, to the second:
 
 Worth saying plainly: recovering costs one needless round at worst. Going quiet for a day costs
 trust, and trust is the whole product.
+
+## 26. Birthdays on the phone, 2026-10-06
+
+The dates were already on the phone — `SyncDoc` has carried them all along — so this was about
+showing them and announcing them, not moving data.
+
+The announcement is deliberately not an alarm. A reminder you set for 08:00 is a thing you asked to
+be made to do; a birthday is a thing worth knowing. So dates go to their own notification channel at
+`IMPORTANCE_DEFAULT`, with no full-screen takeover and no alarm sound, and can be silenced without
+silencing the reminders that get you out of bed. The phone still wakes for them, because
+`next_alert` now considers date moments alongside reminders — one alarm for the next thing due,
+whatever kind it is, and `due` says what it turned out to be.
+
+Acking needed no new plumbing, which is the nicest part. Dates are acked into `state.reminders`
+under `date_state_key`, and `progress.acked` already carries that map with a max-merge. "Got it" on
+the phone therefore reaches the PC through the ordinary sync, and the same birthday is not waiting
+on the other device.
+
+The wording comes from `messages::date_reminder` and `ImportantDate::describe` — the PC's own — so
+the two can never disagree about whose birthday it is or how old they are turning.
+
+Calendar events are still left out, and that is a decision rather than a gap. Pip syncs what only
+Pip knows. Birthdays are Pip's own records, held nowhere else; calendar events belong to Google
+Calendar, which is already on the phone, already notifies, and does it better. Putting them here
+would mean a second ICS fetcher and a second OAuth flow in Kotlin, free to drift from the PC's,
+polling on battery so Pip can buzz about a meeting that was just buzzed about.
+
+One wart fixed on the way: a date saved without a name described itself as "'s birthday" on both
+devices. It now falls back to the kind — "Birthday" — which is what the one real date on these two
+devices needed.

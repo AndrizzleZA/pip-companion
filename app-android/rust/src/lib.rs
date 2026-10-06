@@ -136,15 +136,24 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
         // `next_event` also reports quiet-hours boundaries and the day rolling over, and waking a
         // phone — and lighting the status-bar alarm icon — for those would be a lie and a tax on
         // the battery.
-        "next_reminder" => {
+        "next_alert" => {
             let settings: Settings = from_field(a, "settings")?;
             let state: State = from_field(a, "state")?;
             let now = int_field(a, "now")?;
             let zone = zone(a)?;
+            let dates = schedule::date_moments(&settings, now, &zone)
+                .into_iter()
+                .filter(|(m, id)| {
+                    // Already dealt with, here or on the PC — the ack travels with the sync.
+                    let key = schedule::date_state_key(id);
+                    *m > now && state.reminders.get(&key).map_or(0, |r| r.acked) < *m
+                })
+                .map(|(m, _)| m);
             let at = settings
                 .reminders
                 .iter()
                 .filter_map(|r| schedule::reminder_next(r, &state, now, &zone))
+                .chain(dates)
                 .min();
             Ok(json!({ "at": at }))
         }
@@ -189,12 +198,36 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let items: Vec<Value> = schedule::due_items(&settings, &state, now, &zone(a)?)
                 .into_iter()
                 .filter_map(|d| match &d.key {
-                    // Reminders only. The phone shows water on its card but never rings for it —
-                    // the PC already nudges hourly, and two devices buzzing about the same glass
-                    // is the thing Pip is meant to avoid. Dates and events have nowhere to open.
+                    // Reminders ring; dates are a quiet note. Water is left out — the phone shows
+                    // it on a card but never rings for it, because the PC already nudges hourly
+                    // and two devices buzzing about the same glass is what Pip exists to avoid.
+                    // Calendar events have nowhere on the phone to open.
+                    ItemKey::Date(id) => {
+                        let item = settings.dates.items.iter().find(|x| &x.id == id)?;
+                        let today = pip_core::time::local(&zone(a).ok()?, now).date();
+                        let on = item.next_on_or_after(today)?;
+                        let weekday = pip_core::time::weekday_name(chrono::Datelike::weekday(&on));
+                        let name = settings.pet.name.clone();
+                        let (title, body) = pip_core::messages::date_reminder(
+                            item.kind,
+                            &item.describe(on),
+                            (on - today).num_days(),
+                            weekday,
+                            &name,
+                        );
+                        Some(json!({
+                            "kind": "date",
+                            "id": id,
+                            "title": title,
+                            "body": body,
+                            "occurrence": d.occurrence,
+                            "late": d.late,
+                        }))
+                    }
                     ItemKey::Custom(id) => {
                         let r = settings.reminders.iter().find(|r| &r.id == id)?;
                         Some(json!({
+                            "kind": "reminder",
                             "id": id,
                             "title": r.title,
                             "occurrence": d.occurrence,
@@ -213,6 +246,40 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let mut state: State = from_field(a, "state")?;
             schedule::ack_custom(&mut settings, &mut state, str_field(a, "id")?, int_field(a, "occurrence")?, int_field(a, "now")?);
             Ok(json!({ "settings": to_value(&settings)?, "state": to_value(&state)? }))
+        }
+        // "Got it" on a date. Stored the same way the PC stores it, and carried by progress.acked,
+        // so dismissing a birthday here doesn't leave it waiting on the PC.
+        "ack_date" => {
+            let mut state: State = from_field(a, "state")?;
+            schedule::ack_date(&mut state, str_field(a, "id")?, int_field(a, "occurrence")?);
+            to_value(&state)
+        }
+        // What's coming up, for the screen. Same wording the PC uses, so the two never disagree
+        // about whose birthday it is or how old they are turning.
+        "dates" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let now = int_field(a, "now")?;
+            let today = pip_core::time::local(&zone(a)?, now).date();
+            let mut out: Vec<(i64, Value)> = settings
+                .dates
+                .items
+                .iter()
+                .filter_map(|d| {
+                    let on = d.next_on_or_after(today)?;
+                    let days = (on - today).num_days();
+                    Some((
+                        days,
+                        json!({
+                            "id": d.id,
+                            "what": d.describe(on),
+                            "days": days,
+                            "when": pip_core::time::long_date(on),
+                        }),
+                    ))
+                })
+                .collect();
+            out.sort_by_key(|(days, _)| *days);
+            Ok(json!({ "items": out.into_iter().map(|(_, v)| v).collect::<Vec<_>>() }))
         }
         // "Snooze": ask again at `until`.
         "snooze" => {
@@ -298,7 +365,7 @@ mod tests {
 
     /// The phone arms its alarm from this, so it has to agree with the engine down to the minute.
     #[test]
-    fn the_phone_is_told_when_the_next_reminder_goes_off() {
+    fn the_phone_is_told_when_the_next_alert_goes_off() {
         let settings = json!({
             "reminders": [{
                 "id": "r1",
@@ -313,7 +380,7 @@ mod tests {
         });
         // 2026-09-21, 09:00 on a phone two hours ahead of UTC: of 08:00/14:00/20:00, 14:00 is next.
         let args = json!({ "settings": settings, "state": {}, "now": 1_789_974_000, "tz_offset_min": 120 });
-        let at = dispatch("next_reminder", &args).unwrap()["at"].as_i64().unwrap();
+        let at = dispatch("next_alert", &args).unwrap()["at"].as_i64().unwrap();
         assert_eq!(at, 1_789_974_000 + 5 * 3600, "14:00 local");
 
         // At that moment it is due, and it knows what to say.
@@ -333,12 +400,57 @@ mod tests {
         after["state"] = acked["state"].clone();
         after["now"] = json!(at + 60);
         assert_eq!(dispatch("due", &after).unwrap()["items"].as_array().unwrap().len(), 0);
-        assert_eq!(dispatch("next_reminder", &after).unwrap()["at"], at + 6 * 3600, "20:00 local");
+        assert_eq!(dispatch("next_alert", &after).unwrap()["at"], at + 6 * 3600, "20:00 local");
 
         // Nothing to ring for: the phone arms no alarm at all rather than one for a quiet-hours
         // boundary it can do nothing about.
         let none = json!({ "settings": { "reminders": [] }, "state": {}, "now": 1_789_974_000, "tz_offset_min": 120 });
-        assert!(dispatch("next_reminder", &none).unwrap()["at"].is_null());
+        assert!(dispatch("next_alert", &none).unwrap()["at"].is_null());
+    }
+
+    #[test]
+    fn a_birthday_wakes_the_phone_and_says_the_same_thing_the_pc_would() {
+        // 2026-05-20 08:00 local (two hours east); Mum's birthday is the 21st, warned a day ahead.
+        let now = 1_779_256_800;
+        let settings = json!({
+            "pet": { "name": "Pip" },
+            "dates": {
+                "notify_at": "09:00",
+                "items": [{ "id": "mum", "title": "Mum", "kind": "birthday", "month": 5, "day": 21, "year": 1960, "lead_days": 1 }],
+            },
+        });
+        let args = json!({ "settings": settings, "state": {}, "now": now, "tz_offset_min": 120 });
+
+        // The screen knows what is coming and how it is worded.
+        let list = dispatch("dates", &args).unwrap();
+        assert_eq!(list["items"][0]["what"], "Mum's birthday (turns 66)");
+        assert_eq!(list["items"][0]["days"], 1, "tomorrow");
+
+        // An alarm is armed for the lead day's 09:00, not only the day itself.
+        let at = dispatch("next_alert", &args).unwrap()["at"].as_i64().unwrap();
+        assert_eq!(at, now + 3600, "09:00 local today, the lead day");
+
+        // At that moment it is due, with the PC's own wording.
+        let mut at_due = args.clone();
+        at_due["now"] = json!(at);
+        let due = dispatch("due", &at_due).unwrap();
+        assert_eq!(due["items"][0]["kind"], "date");
+        assert_eq!(due["items"][0]["id"], "mum");
+        assert!(
+            due["items"][0]["title"].as_str().unwrap().contains("Mum"),
+            "got {:?}",
+            due["items"][0]["title"]
+        );
+
+        // "Got it" settles it here, and nothing is armed for it again.
+        let state = dispatch("ack_date", &json!({ "state": {}, "id": "mum", "occurrence": at })).unwrap();
+        let after = json!({ "settings": settings, "state": state, "now": at, "tz_offset_min": 120 });
+        assert!(dispatch("due", &after).unwrap()["items"].as_array().unwrap().is_empty(), "dealt with");
+
+        // And the PC hears about it, because acks travel with the ordinary sync.
+        let doc = dispatch("local_doc", &json!({ "settings": settings, "state": state, "device": "phone", "now": at })).unwrap();
+        let acked = doc["progress"]["acked"].as_object().unwrap();
+        assert!(acked.values().any(|v| v == at), "the ack is in the document: {acked:?}");
     }
 
     /// Editing on the phone has to leave the document in the shape the PC expects.
@@ -432,5 +544,32 @@ mod tests {
         assert!(dispatch("nonsense", &json!({})).unwrap_err().contains("nonsense"));
         assert!(dispatch("open", &json!({ "key": "short", "bytes": "00" })).is_err());
         assert!(dispatch("local_doc", &json!({})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod real_data {
+    use super::*;
+
+    /// The date actually on Andre's two devices: 22 September, saved without a name, warned a day
+    /// ahead. Checks the phone shows something sensible rather than "'s birthday".
+    #[test]
+    fn the_untitled_birthday_on_the_real_devices_reads_properly() {
+        let settings = json!({
+            "pet": { "name": "Pip" },
+            "dates": {
+                "notify_at": "09:00",
+                "items": [{
+                    "id": "d6ab2b53da05a", "title": "", "kind": "birthday",
+                    "month": 9, "day": 22, "year": null, "lead_days": 1, "updated_at": 1_790_096_701,
+                }],
+            },
+        });
+        // 2026-10-06, the day this was written: the 22nd has passed, so the next one is 2027's.
+        let now = 1_791_273_943;
+        let list = dispatch("dates", &json!({ "settings": settings, "now": now, "tz_offset_min": 120 })).unwrap();
+        assert_eq!(list["items"][0]["what"], "Birthday");
+        assert_eq!(list["items"][0]["days"], 351);
+        assert_eq!(list["items"][0]["when"], "Wednesday 22 September", "the PC's own wording");
     }
 }

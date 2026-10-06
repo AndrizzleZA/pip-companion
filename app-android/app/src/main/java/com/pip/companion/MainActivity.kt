@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
         val reminders: List<Reminder> = emptyList(),
         /// Today's water, or null when water is switched off on the PC.
         val water: Water? = null,
+        /// The next few birthdays and anniversaries.
+        val dates: List<Upcoming> = emptyList(),
         val asking: List<JSONObject> = emptyList(),
         /// Pip can't actually alert anyone — notifications are off, or alarms can't be exact.
         val silenced: String? = null,
@@ -57,6 +59,8 @@ class MainActivity : ComponentActivity() {
     data class Reminder(val id: String, val title: String, val times: String, val days: String, val enabled: Boolean)
 
     data class Water(val count: Int, val goal: Int)
+
+    data class Upcoming(val what: String, val away: String)
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
 
@@ -278,6 +282,7 @@ class MainActivity : ComponentActivity() {
             note = outcome?.error ?: noteFor(outcome),
             reminders = reminders,
             water = water(),
+            dates = dates(),
             asking = outcome?.asking ?: emptyList(),
             silenced = silencedReason(),
             editing = ui.value.editing,
@@ -311,6 +316,26 @@ class MainActivity : ComponentActivity() {
     private fun withClock(args: JSONObject): JSONObject {
         val now = Auth.now()
         return args.put("now", now).put("tz_offset_min", TimeZone.getDefault().getOffset(now * 1000) / 60000)
+    }
+
+    /// What's coming up. The wording comes from the engine, so the phone and the PC never
+    /// disagree about whose birthday it is or how old they are turning.
+    private fun dates(): List<Upcoming> = try {
+        val items = Native.ask("dates", withClock(JSONObject().put("settings", store.settings))).getJSONArray("items")
+        (0 until items.length()).map { items.getJSONObject(it) }.take(4).map { d ->
+            val days = d.optInt("days")
+            Upcoming(
+                what = d.optString("what"),
+                away = when {
+                    days == 0 -> "Today"
+                    days == 1 -> "Tomorrow"
+                    days < 7 -> "In $days days"
+                    else -> d.optString("when")
+                },
+            )
+        }
+    } catch (e: Exception) {
+        emptyList()
     }
 
     private fun noteFor(outcome: Sync.Outcome?): String? = when {
@@ -451,6 +476,19 @@ private fun Home(
                         supportingContent = { Text(r.times + "  ·  " + r.days) },
                         trailingContent = { Switch(checked = r.enabled, onCheckedChange = { toggle(r.id) }, enabled = !s.busy) },
                         modifier = Modifier.clickable(enabled = !s.busy) { edit(r.id) },
+                    )
+                    HorizontalDivider()
+                }
+            }
+
+            // Below the reminders: worth knowing, not worth doing anything about right now.
+            if (s.connected && s.dates.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text("Coming up", style = MaterialTheme.typography.titleMedium)
+                for (d in s.dates) {
+                    ListItem(
+                        headlineContent = { Text(d.what) },
+                        supportingContent = { Text(d.away) },
                     )
                     HorizontalDivider()
                 }
