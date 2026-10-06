@@ -89,6 +89,11 @@ fn newest(a: i64, b: i64) -> i64 {
     a.max(b)
 }
 
+/// Which record an ack belongs to. Dates are stored under `date:<id>`; everything else is the id.
+fn acked_owner(key: &str) -> &str {
+    key.strip_prefix("date:").unwrap_or(key)
+}
+
 impl SyncDoc {
     /// Snapshot of this device.
     pub fn from_local(settings: &Settings, state: &State, device: &str, now: i64) -> SyncDoc {
@@ -99,6 +104,8 @@ impl SyncDoc {
         }
         let mut acked: BTreeMap<String, i64> = state.reminders.iter().filter(|(_, r)| r.acked > 0).map(|(k, r)| (k.clone(), r.acked)).collect();
         acked.extend(state.events_acked.iter().map(|(k, v)| (k.clone(), *v)));
+        // Don't re-offer an ack for something this device has already been told was deleted.
+        acked.retain(|key, _| !state.sync_deleted.contains_key(acked_owner(key)));
         SyncDoc {
             format: FORMAT,
             device: device.to_string(),
@@ -188,6 +195,11 @@ impl SyncDoc {
             let e = out.progress.acked.entry(k.clone()).or_insert(*when);
             *e = newest(*e, *when);
         }
+        // Acks outlive what they refer to: deleting a reminder or a date used to leave its mark
+        // here, carried in every round for ever. A tombstone means it is gone for good on every
+        // device, so the mark can go with it — and nothing can be resurrected by dropping it,
+        // because the item itself is already refused by the lists above.
+        out.progress.acked.retain(|key, _| !out.deleted.contains_key(acked_owner(key)));
         out
     }
 
@@ -227,13 +239,27 @@ impl SyncDoc {
         }
         state.water.history.sort_by_key(|h| h.date);
         for (key, when) in &self.progress.acked {
-            if let Some(r) = state.reminders.get_mut(key) {
-                r.acked = r.acked.max(*when);
+            // Which map an ack belongs in is decided by what the key *is*, not by whether this
+            // device happens to have seen it already. Routing on "do I have an entry for this"
+            // meant a birthday dismissed on the phone arrived here as an event ack, and the date
+            // rules only read reminder acks — so the PC asked about it all over again.
+            if key.starts_with("date:") || settings.reminders.iter().any(|r| r.id == *key) {
+                let e = state.reminders.entry(key.clone()).or_default();
+                e.acked = e.acked.max(*when);
             } else {
                 let e = state.events_acked.entry(key.clone()).or_insert(*when);
                 *e = newest(*e, *when);
             }
         }
+        // Sweep up what the old routing misfiled: a reminder or date key was never an event
+        // ack, and left there it would be carried in every round from now on.
+        state
+            .events_acked
+            .retain(|key, _| !(key.starts_with("date:") || settings.reminders.iter().any(|r| r.id == *key)));
+        // And forget the marks belonging to records that are gone, here as well as in the
+        // document, so a device that has carried one for a while is tidied on its next round.
+        state.reminders.retain(|key, _| !state.sync_deleted.contains_key(acked_owner(key)));
+        state.events_acked.retain(|key, _| !state.sync_deleted.contains_key(acked_owner(key)));
     }
 
     /// Marks records as deleted so other devices drop them too.
@@ -546,5 +572,134 @@ mod crypto_tests {
         let sealed = join::grant(&req, &[7u8; 32], &[8u8; 32], &[5u8; 24]).unwrap();
         assert!(join::accept(&other_secret, &sealed).is_err());
         assert!(join::accept(&other_secret, &sealed[..10]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ack_tidying {
+    use super::*;
+
+    fn doc(acked: &[(&str, i64)], deleted: &[(&str, i64)]) -> SyncDoc {
+        SyncDoc {
+            format: FORMAT,
+            device: "test".into(),
+            updated_at: 1_000,
+            prefs: None,
+            reminders: Vec::new(),
+            dates: Vec::new(),
+            deleted: deleted.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            progress: Progress {
+                acked: acked.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn an_ack_is_forgotten_when_its_record_is_deleted() {
+        // A date acked on the phone, then the date itself deleted. Without this the mark rode
+        // along in every sync round for ever, for every reminder or date ever removed.
+        let mine = doc(&[("date:gone", 500), ("date:kept", 600), ("r1", 700)], &[]);
+        let theirs = doc(&[], &[("gone", 900)]);
+        let merged = mine.merge(&theirs);
+        let keys: Vec<&str> = merged.progress.acked.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["date:kept", "r1"], "the deleted one's mark went with it");
+    }
+
+    #[test]
+    fn a_reminders_ack_goes_too() {
+        let mine = doc(&[("r1", 700)], &[]);
+        let theirs = doc(&[], &[("r1", 800)]);
+        assert!(mine.merge(&theirs).progress.acked.is_empty());
+    }
+
+    #[test]
+    fn a_live_records_ack_is_untouched() {
+        let mine = doc(&[("date:here", 500)], &[("somethingelse", 900)]);
+        let merged = mine.merge(&doc(&[], &[]));
+        assert_eq!(merged.progress.acked.get("date:here"), Some(&500), "still dealt with");
+    }
+}
+
+#[cfg(test)]
+mod ack_routing {
+    use super::*;
+    use crate::settings::Settings;
+    use crate::state::State;
+
+    /// A birthday dismissed on the phone has to be settled on the PC too — the device applying it
+    /// has never had an entry for that date, which is exactly the case that used to go wrong.
+    #[test]
+    fn a_date_acked_elsewhere_settles_here_too() {
+        let mut settings = Settings::default();
+        settings.dates.items = vec![crate::dates::ImportantDate {
+            id: "mum".into(),
+            title: "Mum".into(),
+            ..Default::default()
+        }];
+        let mut state = State::default();
+        assert!(state.reminders.is_empty(), "this device has never seen it acked");
+
+        let mut doc = SyncDoc::from_local(&settings, &state, "phone", 1_000);
+        doc.progress.acked.insert("date:mum".into(), 5_000);
+        doc.apply(&mut settings, &mut state);
+
+        assert_eq!(
+            state.reminders.get("date:mum").map(|r| r.acked),
+            Some(5_000),
+            "filed where the date rules actually look"
+        );
+        assert!(!state.events_acked.contains_key("date:mum"), "and not as a calendar event");
+    }
+
+    #[test]
+    fn a_reminder_acked_elsewhere_lands_in_the_same_place() {
+        let mut settings = Settings::default();
+        settings.reminders = vec![crate::settings::CustomReminder { id: "r1".into(), ..Default::default() }];
+        let mut state = State::default();
+        let mut doc = SyncDoc::from_local(&settings, &state, "phone", 1_000);
+        doc.progress.acked.insert("r1".into(), 7_000);
+        doc.apply(&mut settings, &mut state);
+        assert_eq!(state.reminders.get("r1").map(|r| r.acked), Some(7_000));
+        assert!(!state.events_acked.contains_key("r1"));
+    }
+
+    /// A calendar occurrence is still an event ack, and still belongs in the other map.
+    #[test]
+    fn a_calendar_event_ack_is_left_where_it_was() {
+        let mut settings = Settings::default();
+        let mut state = State::default();
+        let mut doc = SyncDoc::from_local(&settings, &state, "pc", 1_000);
+        doc.progress.acked.insert("feed1|2026-10-06T09:00".into(), 9_000);
+        doc.apply(&mut settings, &mut state);
+        assert_eq!(state.events_acked.get("feed1|2026-10-06T09:00"), Some(&9_000));
+        assert!(!state.reminders.contains_key("feed1|2026-10-06T09:00"));
+    }
+}
+
+#[cfg(test)]
+mod ack_sweeping {
+    use super::*;
+    use crate::settings::{CustomReminder, Settings};
+    use crate::state::State;
+
+    /// Devices that ran the old routing carry reminder and date keys in events_acked. They would
+    /// ride along in every sync round for ever, so applying a round clears them out.
+    #[test]
+    fn keys_misfiled_by_older_versions_are_swept_up() {
+        let mut settings = Settings::default();
+        settings.reminders = vec![CustomReminder { id: "r1".into(), ..Default::default() }];
+        let mut state = State::default();
+        state.events_acked.insert("date:mum".into(), 5_000);
+        state.events_acked.insert("r1".into(), 6_000);
+        state.events_acked.insert("feed1|2026-10-06T09:00".into(), 7_000);
+
+        let doc = SyncDoc::from_local(&settings, &state, "pc", 1_000);
+        doc.apply(&mut settings, &mut state);
+
+        let left: Vec<&str> = state.events_acked.keys().map(String::as_str).collect();
+        assert_eq!(left, vec!["feed1|2026-10-06T09:00"], "only a real event ack is left");
+        assert_eq!(state.reminders.get("date:mum").map(|r| r.acked), Some(5_000), "kept, where it belongs");
+        assert_eq!(state.reminders.get("r1").map(|r| r.acked), Some(6_000));
     }
 }

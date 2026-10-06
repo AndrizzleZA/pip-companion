@@ -766,3 +766,39 @@ polling on battery so Pip can buzz about a meeting that was just buzzed about.
 One wart fixed on the way: a date saved without a name described itself as "'s birthday" on both
 devices. It now falls back to the kind — "Birthday" — which is what the one real date on these two
 devices needed.
+
+## 27. Where an ack belongs, 2026-10-06
+
+Proving the "Got it" button on a real phone turned up a bug the tests had not: the ack reached the
+PC and was filed in the wrong place.
+
+`apply` decided where an ack went by whether this device already had an entry for that key:
+
+```rust
+if let Some(r) = state.reminders.get_mut(key) { r.acked = ... } else { state.events_acked... }
+```
+
+A birthday dismissed on the phone has no entry on the PC yet — that is the whole point of it
+arriving — so it landed in `events_acked`, while the date rules read acks from `state.reminders`.
+The PC would therefore have asked about the same birthday again. The claim that dismissing on one
+device settles it on the other was written down before it was true.
+
+An ack is now filed by what the key *is*: `date:` prefixed or a known reminder id goes where the
+rules look, and anything else is a calendar occurrence. Devices that ran the old code carry misfiled
+keys, so applying a round sweeps them out of `events_acked` as well — both devices came back with an
+empty map and five correctly filed entries.
+
+Two smaller things fixed alongside, both found by looking at real data rather than by reasoning:
+
+- `progress.acked` was never pruned. Deleting a reminder or a date left its mark in the document for
+  ever, carried in every round. A tombstone means the record is gone everywhere, so the mark goes
+  with it — and nothing can be resurrected by dropping it, because the lists already refuse a
+  tombstoned id.
+- An ack that outlives its record is exactly how the test date's leftover was noticed, which is a
+  fair argument for cleaning up test data properly rather than leaving it and explaining it away.
+
+The lesson is about testing, though. Every part of this was covered: `ack_date` had a test proving
+the ack lands in the document, and the document round-trips. What no test covered was the *other*
+device reading it back, because both halves were checked against the same assumption. Cross-device
+behaviour needs a test that applies one device's document to a second device's state — which is what
+the new ones do.
