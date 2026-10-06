@@ -698,3 +698,41 @@ It also leaves a lesson about diagnosis. The visible symptom was a count on scre
 did not have, which read like data being lost. Quitting — which flushes — wrote nothing, proving
 the opposite: there was nothing in memory to save, so the PC had never received anything. The test
 that looked like it would confirm the theory is what killed it.
+
+## 25. Pip notices when it has gone quiet, 2026-10-06
+
+§23 and §24 were the same bug twice: background work that stopped, or never started, with nothing
+to see. That is the heart of it — for a companion that works out of sight, "nothing needed you" and
+"this stopped working" look identical. You cannot tell a quiet inbox from a dead mail check, which
+is exactly why one went unnoticed for three hours and another for days.
+
+Three point fixes do not prevent a fourth, so Pip now checks on itself. Every job already recorded
+when it last finished: `last_check` per mailbox, `sync_status.last_at`, `FeedMeta.synced_at`. A slow
+timer asks whether any of them has been silent for far longer than its own interval, writes one line
+to the log, and starts it again.
+
+The judgement lives in `core::health` rather than next to the timers, because it is the part worth
+testing and it has no business knowing about windows. A job that has *never* finished is judged from
+when Pip started, which is precisely the shape of the §24 bug — a sync with no `last_ok` to be late
+from. That case is now a test.
+
+Two things keep it from crying wolf, which would be worse than not having it:
+
+- The allowance is three rounds and never under ten minutes, so one slow network round says nothing.
+- Email is not judged while the PC is locked or you are away, because pausing then is deliberate,
+  and at night it is measured against the quiet-hours interval rather than the daytime one.
+  Otherwise every lunch break and every night would have been reported as a stoppage.
+
+A stoppage is logged once and forgotten when the job recovers, so a long outage leaves one line
+rather than one every five minutes.
+
+Proven by running it: a mailbox whose last check was three hours old, against a six-minute interval.
+Five minutes after launch, to the second:
+
+```
+2026-10-06 12:13:53  started in 39 ms (v0.1.0)
+2026-10-06 12:18:53  email had gone quiet; starting it again
+```
+
+Worth saying plainly: recovering costs one needless round at worst. Going quiet for a day costs
+trust, and trust is the whole product.

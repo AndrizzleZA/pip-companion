@@ -13,6 +13,7 @@ use crate::tray::Tray;
 use pip_core::agenda;
 use pip_core::calendar::Event;
 use pip_core::connectors::{ConnectorId, SignInProblem};
+use pip_core::health;
 use std::collections::HashMap;
 use chrono::{Local, Timelike};
 use pip_core::schedule::{self, Delivery, Due, ItemKey, Priority};
@@ -38,6 +39,7 @@ pub const T_TRIM: usize = 10;
 pub const T_CALSYNC: usize = 11;
 pub const T_MAIL: usize = 14;
 pub const T_SYNC: usize = 15;
+pub const T_HEALTH: usize = 16;
 
 const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
@@ -50,6 +52,8 @@ const MAIL_STALL_SECS: i64 = 180;
 const SYNC_STALL_SECS: i64 = 300;
 /// How long before a background round that couldn't run is attempted again.
 const RETRY_MS: u32 = 15 * 60_000;
+/// How often Pip checks that its own background work is still happening.
+const HEALTH_EVERY_MS: u32 = 5 * 60_000;
 
 pub enum Effect {
     Menu(i32, i32),
@@ -83,6 +87,11 @@ pub struct App {
     pub effects: Vec<Effect>,
     pub started_ms: u64,
     pub startup_ms: u64,
+    /// When this run began. A job that has never finished once is judged from here.
+    up_since: i64,
+    /// Jobs already reported quiet, so the log gets one line per stoppage rather than one every
+    /// five minutes.
+    quiet: std::collections::BTreeSet<&'static str>,
     pub locked: bool,
     pub fullscreen: bool,
     pub away: bool,
@@ -181,6 +190,8 @@ impl App {
             effects: Vec::new(),
             started_ms: tick_ms(),
             startup_ms: 0,
+            up_since: 0,
+            quiet: std::collections::BTreeSet::new(),
             locked: false,
             fullscreen: false,
             away: false,
@@ -244,6 +255,7 @@ impl App {
         }
         self.render();
         self.startup_ms = platform::ms_since_process_start();
+        self.up_since = now_unix();
         let tip = self.tray_tip();
         self.tray.add(self.settings.pet.color.rgb(), false, &tip);
         platform::register_appbar(self.hwnd, WM_APPBAR);
@@ -264,6 +276,7 @@ impl App {
         // one — opening Connections, or an edit — so a PC left alone never picked up what the
         // phone had done. schedule_sync itself does nothing when sync isn't set up.
         self.schedule_sync(30_000);
+        self.set_timer(T_HEALTH, HEALTH_EVERY_MS);
         unsafe {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(self.hwnd, 0 /* NOTIFY_FOR_THIS_SESSION */);
         }
@@ -549,6 +562,7 @@ impl App {
                 self.schedule_sync(RETRY_MS);
                 self.sync_now(true);
             }
+            T_HEALTH => self.on_health(),
             T_TRIM => {
                 self.kill_timer(T_TRIM);
                 platform::trim_working_set();
@@ -2139,6 +2153,62 @@ impl App {
         self.state_dirty = true;
         self.settings_changed(&prev);
         self.ui_invalidate();
+    }
+
+    /// Is Pip's background work still happening?
+    ///
+    /// Everything here runs out of sight, so a job that stops looks exactly like a job with
+    /// nothing to do. Each one records when it last finished; anything silent for far longer than
+    /// its own interval is written to the log once and started again. Recovering costs one
+    /// needless round at worst, which is a great deal cheaper than going quiet for a day.
+    fn on_health(&mut self) {
+        let now = now_unix();
+
+        // Email deliberately pauses while nobody is at the PC, so judging it then would call every
+        // lunch break a stoppage. Coming back starts a check within seconds anyway.
+        let mail_on = self.settings.email.accounts.iter().any(|a| a.enabled)
+            && self.google_keys().is_some()
+            && !self.locked
+            && !self.away;
+        let mail_last = self.state.mail.values().map(|m| m.last_check).max().unwrap_or(0);
+        // The same interval schedule_mail uses, or a quiet-hours check looks overdue every night.
+        let mail_every = if self.night { 15 } else { self.settings.email.check_minutes.max(1) as i64 } * 60;
+        if mail_on && self.note_quiet("email", health::gone_quiet(mail_last, self.up_since, mail_every, now)) {
+            self.check_mail(false);
+        }
+
+        let sync_last = self.sync_status.last_at;
+        if self.sync_connected() && self.note_quiet("phone sync", health::gone_quiet(sync_last, self.up_since, 15 * 60, now)) {
+            self.schedule_sync(5_000);
+        }
+
+        let cal_on = self.settings.dates.calendars.iter().any(|c| c.enabled);
+        let cal_last = self
+            .settings
+            .dates
+            .calendars
+            .iter()
+            .filter(|c| c.enabled)
+            .filter_map(|c| self.feed_meta.get(&c.id))
+            .map(|m| m.synced_at)
+            .max()
+            .unwrap_or(0);
+        if cal_on && self.note_quiet("the calendar", health::gone_quiet(cal_last, self.up_since, 60 * 60, now)) {
+            self.schedule_calsync(5_000);
+        }
+    }
+
+    /// Logs a stoppage the first time it is seen, and forgets it once the job is running again, so
+    /// a long outage leaves one line rather than one every five minutes.
+    fn note_quiet(&mut self, what: &'static str, quiet: bool) -> bool {
+        if !quiet {
+            self.quiet.remove(what);
+            return false;
+        }
+        if self.quiet.insert(what) {
+            self.store.log(&format!("{what} had gone quiet; starting it again"));
+        }
+        true
     }
 
     /// Next check: every few minutes while you're around; every 15 minutes during quiet hours.
