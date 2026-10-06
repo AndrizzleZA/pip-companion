@@ -27,6 +27,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.TimeZone
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -44,6 +45,8 @@ class MainActivity : ComponentActivity() {
         val busy: Boolean = false,
         val note: String? = null,
         val reminders: List<Reminder> = emptyList(),
+        /// Today's water, or null when water is switched off on the PC.
+        val water: Water? = null,
         val asking: List<JSONObject> = emptyList(),
         /// Pip can't actually alert anyone — notifications are off, or alarms can't be exact.
         val silenced: String? = null,
@@ -52,6 +55,8 @@ class MainActivity : ComponentActivity() {
     )
 
     data class Reminder(val id: String, val title: String, val times: String, val days: String, val enabled: Boolean)
+
+    data class Water(val count: Int, val goal: Int)
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
 
@@ -63,7 +68,7 @@ class MainActivity : ComponentActivity() {
         refresh()
         setContent {
             PipTheme {
-                Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts, ::edit, ::addReminder)
+                Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts, ::edit, ::addReminder, ::drink)
                 ui.value.editing?.let { draft ->
                     EditReminder(
                         draft = draft,
@@ -272,10 +277,40 @@ class MainActivity : ComponentActivity() {
             busy = false,
             note = outcome?.error ?: noteFor(outcome),
             reminders = reminders,
+            water = water(),
             asking = outcome?.asking ?: emptyList(),
             silenced = silencedReason(),
             editing = ui.value.editing,
         )
+    }
+
+    /// Today's glasses. The day is rolled in Rust, so a phone opened after midnight shows 0 —
+    /// and the rolled state is only written back when that actually happened.
+    private fun water(): Water? = try {
+        val out = Native.ask("water", withClock(JSONObject().put("settings", store.settings).put("state", store.state)))
+        out.optJSONObject("state")?.let { store.saveState(it) }
+        if (out.optBoolean("enabled")) Water(out.optInt("count"), out.optInt("goal", 8)) else null
+    } catch (e: Exception) {
+        null // the card is not worth failing the screen over
+    }
+
+    /// "Had a glass" — the same core call the PC makes, then straight to the other device, because
+    /// the whole point is that it counts wherever you are.
+    private fun drink() {
+        try {
+            val out = Native.ask("drink", withClock(JSONObject().put("settings", store.settings).put("state", store.state)))
+            store.saveState(out.getJSONObject("state"))
+        } catch (e: Exception) {
+            ui.value = ui.value.copy(note = e.message)
+            return
+        }
+        refresh()
+        if (store.refreshToken != null) syncNow()
+    }
+
+    private fun withClock(args: JSONObject): JSONObject {
+        val now = Auth.now()
+        return args.put("now", now).put("tz_offset_min", TimeZone.getDefault().getOffset(now * 1000) / 60000)
     }
 
     private fun noteFor(outcome: Sync.Outcome?): String? = when {
@@ -305,6 +340,7 @@ private fun Home(
     fixAlerts: () -> Unit,
     edit: (String) -> Unit,
     add: () -> Unit,
+    drink: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
@@ -368,6 +404,31 @@ private fun Home(
                         Text(why, style = MaterialTheme.typography.bodySmall)
                         Spacer(Modifier.height(10.dp))
                         Button(onClick = fixAlerts) { Text("Fix this") }
+                    }
+                }
+            }
+
+            // Water sits above the reminders, the same way round as the PC's Reminders page.
+            if (s.connected) s.water?.let { w ->
+                Card(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Water", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (w.count >= w.goal) "✓ ${w.count} of ${w.goal} glasses — that's the day done"
+                                    else "${w.count} of ${w.goal} glasses today",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Button(onClick = drink, enabled = !s.busy) { Text("Had a glass") }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        LinearProgressIndicator(
+                            progress = { if (w.goal > 0) (w.count.toFloat() / w.goal).coerceIn(0f, 1f) else 0f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }

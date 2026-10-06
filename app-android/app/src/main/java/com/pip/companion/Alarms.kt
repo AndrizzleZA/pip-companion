@@ -220,7 +220,9 @@ class AlarmReceiver : BroadcastReceiver() {
             Alarms.ACTION_DONE -> Alarms.done(context, store, id, occurrence)
             else -> {
                 // Ring whatever is due, then arm the next one — the alarm we just used is spent.
-                for (item in Alarms.due(store)) {
+                // Only things with a title to show: an item the engine knows about but this
+                // screen can't render would otherwise ring as a blank alarm.
+                for (item in Alarms.due(store).filter { it.optString("title").isNotEmpty() }) {
                     Alarms.ring(
                         context,
                         item.optString("id"),

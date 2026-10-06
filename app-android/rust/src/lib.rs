@@ -155,6 +155,32 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let now = int_field(a, "now")?;
             Ok(json!({ "at": schedule::next_event(&settings, &state, now, &zone(a)?) }))
         }
+        // What the water card shows: today's count against the goal, and whether water is on at
+        // all. The day is rolled first, so a phone opened after midnight shows 0 and not yesterday.
+        "water" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let mut state: State = from_field(a, "state")?;
+            let now = int_field(a, "now")?;
+            let today = pip_core::time::local(&zone(a)?, now).date();
+            let rolled = state.roll_day(&settings, today);
+            Ok(json!({
+                "enabled": settings.water.enabled,
+                "count": state.water.count,
+                "goal": settings.water.daily_goal,
+                // Only handed back when the roll changed something, so the phone writes as rarely
+                // as the PC does.
+                "state": if rolled { to_value(&state)? } else { Value::Null },
+            }))
+        }
+        // "Had a glass". The same core call the PC makes, so a glass counts the same on both.
+        "drink" => {
+            let settings: Settings = from_field(a, "settings")?;
+            let mut state: State = from_field(a, "state")?;
+            let now = int_field(a, "now")?;
+            let today = pip_core::time::local(&zone(a)?, now).date();
+            let count = state.log_drink(&settings, now, today);
+            Ok(json!({ "count": count, "goal": settings.water.daily_goal, "state": to_value(&state)? }))
+        }
         // Everything due right now, as the phone needs to show it.
         "due" => {
             let settings: Settings = from_field(a, "settings")?;
@@ -163,8 +189,9 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let items: Vec<Value> = schedule::due_items(&settings, &state, now, &zone(a)?)
                 .into_iter()
                 .filter_map(|d| match &d.key {
-                    // Reminders only for now: the phone has no water card or agenda yet, and a
-                    // notification for something it can't show would be a dead end.
+                    // Reminders only. The phone shows water on its card but never rings for it —
+                    // the PC already nudges hourly, and two devices buzzing about the same glass
+                    // is the thing Pip is meant to avoid. Dates and events have nowhere to open.
                     ItemKey::Custom(id) => {
                         let r = settings.reminders.iter().find(|r| &r.id == id)?;
                         Some(json!({
@@ -344,6 +371,60 @@ mod tests {
         let gone = dispatch("delete_reminder", &json!({ "settings": again, "state": {}, "id": "r1", "now": 3_000 })).unwrap();
         assert_eq!(gone["settings"]["reminders"].as_array().unwrap().len(), 0);
         assert_eq!(gone["state"]["sync_deleted"]["r1"], 3_000);
+    }
+
+    #[test]
+    fn a_glass_logged_on_the_phone_counts_like_one_logged_on_the_pc() {
+        let settings = json!({ "water": { "enabled": true, "daily_goal": 8 } });
+        // 2026-10-06 09:00 UTC, two hours east.
+        let now = 1_791_270_000;
+        let args = json!({ "settings": settings, "state": {}, "now": now, "tz_offset_min": 120 });
+
+        let shown = dispatch("water", &args).unwrap();
+        assert_eq!(shown["count"], 0);
+        assert_eq!(shown["goal"], 8);
+        assert_eq!(shown["enabled"], true);
+
+        let after = dispatch("drink", &args).unwrap();
+        assert_eq!(after["count"], 1, "the card counts the glass");
+        let state = after["state"].clone();
+
+        // And again, from the state the first one handed back.
+        let again =
+            dispatch("drink", &json!({ "settings": settings, "state": state, "now": now + 60, "tz_offset_min": 120 })).unwrap();
+        assert_eq!(again["count"], 2);
+
+        // The PC drank three; the merge keeps the higher count, so neither device loses a glass.
+        let mine = dispatch(
+            "local_doc",
+            &json!({ "settings": settings, "state": again["state"], "device": "phone", "now": now + 60 }),
+        )
+        .unwrap();
+        let theirs = dispatch(
+            "local_doc",
+            &json!({
+                "settings": settings,
+                "state": { "water": { "day": "2026-10-06", "count": 3 } },
+                "device": "pc",
+                "now": now,
+            }),
+        )
+        .unwrap();
+        let merged = dispatch("merge", &json!({ "local": mine, "remote": theirs })).unwrap();
+        assert_eq!(merged["progress"]["water"]["2026-10-06"], 3, "a glass drunk is a glass drunk");
+    }
+
+    #[test]
+    fn the_water_card_starts_the_day_at_zero() {
+        let settings = json!({ "water": { "enabled": true, "daily_goal": 8 } });
+        let yesterday = json!({ "water": { "day": "2026-10-05", "count": 7 } });
+        let shown = dispatch(
+            "water",
+            &json!({ "settings": settings, "state": yesterday, "now": 1_791_270_000, "tz_offset_min": 120 }),
+        )
+        .unwrap();
+        assert_eq!(shown["count"], 0, "yesterday's glasses aren't today's");
+        assert!(!shown["state"].is_null(), "and the rolled day is handed back to be saved");
     }
 
     #[test]
