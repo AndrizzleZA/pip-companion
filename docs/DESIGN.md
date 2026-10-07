@@ -106,7 +106,9 @@ Windows shell specifics:
 - **No extra processes**, no services, no updater daemon. Autostart = one `HKCU\...\Run` value.
 - **Storage:** two small JSON files in `%APPDATA%\Pip` (settings, state), atomic, debounced, written
   only on change.
-- **Secrets (Phase 3):** Windows Credential Manager (DPAPI), never in our files.
+- **Secrets (Phase 3):** `secrets.dat` in the same folder, encrypted with DPAPI under this Windows
+  user — refresh tokens, calendar links, the sync key. Never in the readable settings file, and
+  never the Credential Manager, which this once claimed and has never used (§37).
 
 Code layout:
 
@@ -173,9 +175,11 @@ good days, with an upgrade that never makes an existing companion younger.
 
 **Phase 6 — Ready for someone else** ← current
 The gate between "it works on my machine" and "I can hand this to a person who is not me."
-- Local crash log — a stranger's problem cannot be diagnosed without one.
-- Security review — the Google tokens in Credential Manager, the sealed sync key, the encrypted
-  Drive document, and what a stolen state file would reveal.
+- Local crash log — done (§34, §36). Message, source location, version, build stamp, Windows build
+  and thread, with the symbols for each build archived so a report can still be read later.
+- Security review — done (§37), and its findings fixed in §38 and §39: the tokens in `secrets.dat`,
+  the sealed sync key, the encrypted Drive document, and what a stolen state file reveals. Two of
+  the smaller findings are still open and named at the end of §37.
 - Signed binary — unsigned, SmartScreen frightens every first-time user out of running it.
 - Opt-in update check — once anyone else has it, there must be a way to ship a fix.
 - Accessibility — keyboard reach and screen-reader naming for the settings window.
