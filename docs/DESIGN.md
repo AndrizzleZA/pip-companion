@@ -1161,3 +1161,55 @@ point, not both public keys, which is the usual hardening against unknown key-sh
 
 The Android side, token revocation on disconnect, and the update mechanism, which does not exist
 yet. Each wants its own pass.
+
+## 38. Three fixes from the review, and the one that went wrong, 2026-10-07
+
+Findings 1, 2 and 3–4 of §37.
+
+**The random number generator fails loudly now.** `random_bytes` and `sha256` check the status they
+were discarding. A key of all zeros is not a degraded outcome, it is a catastrophic one, and the
+only thing that made it survivable before was that `BCryptGenRandom` never fails — which is an
+argument for checking, not against.
+
+**Low-order public keys are refused.** `join::shared` asks `was_contributory()` and returns
+`None` if the shared secret collapsed to zero. Seven points are pinned in tests: zero, one, the two
+of order eight, and p−1, p, p+1. Writing those tests found that a first attempt used `[1; 32]` —
+every byte one — which is an ordinary full-order point, correctly accepted. The test was wrong, not
+the code, and a vaguer test would have passed while proving nothing.
+
+**The data folder is taken off every other account.** Inheritance off; full control to this user,
+SYSTEM and the administrators by well-known SID. Once per installation, marked by a file.
+
+### What that third fix did the first time
+
+It ran `icacls` with `/T`, intending "and everything inside". `/T` applied `/inheritance:r` to each
+file as well, and a file whose permissions came *only* from inheritance was left with an empty list
+— reachable by nobody. Pip, running as the user who had just lost access, then read nothing, found
+nothing, and did exactly what it is built to do when there is nothing to find: it started fresh and
+saved a new empty `state.json` and `settings.json` over the real ones.
+
+Recovered: the state from the previous night's backup, and the reminders, dates and preferences from
+the encrypted Drive document, which is what that document is for. Not recovered: the Gmail account
+and the calendar connection, because `SyncDoc` carries prefs, reminders and dates and does not carry
+connections; and the companion's character, colour, size and voice, because `Prefs` carries
+`pet_name` and none of the rest. A second mistake during recovery is worth recording too: a
+PowerShell `Set-Content -Encoding utf8` wrote a BOM, `serde_json` refused the file, and Pip
+quarantined it as `.corrupt` and reset again — the quarantine is why nothing was lost that time.
+
+Three things this says, in order of how much they matter.
+
+**Pip resets rather than refuses.** A file it cannot read is treated exactly like a file that is not
+there, and the difference between "this user has no data" and "this user's data is unreadable" is
+the difference between a correct fresh start and silent destruction. `load` already tells them
+apart — it renames an unparseable file to `.corrupt` and says so in the log — but a permission
+error takes the `Err(_)` arm and is indistinguishable from absence. That is the real defect here and
+it is not yet fixed.
+
+**A change that cannot be undone should not be made on a hunch.** The ACL was altered on a live
+install with no snapshot of what it had been, so the repair was `/reset`, which also reset the
+folder and undid the hardening. It is still undone.
+
+**And the blast radius was not thought through.** The fix was tested on an empty folder, where it
+works, and shipped to a folder with eight files in it, where it does not. Pre-existing files were
+the entire point of the change — the inherited permissions being removed were on files that already
+existed.

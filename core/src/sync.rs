@@ -472,15 +472,23 @@ pub mod join {
         (Secret(secret), req)
     }
 
-    fn shared(secret: &StaticSecret, other_public: &[u8; 32]) -> Key {
+    /// The wrap key for one join, from X25519 and a domain-separated hash.
+    ///
+    /// Refuses a peer public key of low order. X25519 accepts one and quietly produces an all-zero
+    /// shared secret, so a join request carrying such a point would make this device derive a wrap
+    /// key the other side already knows - and what gets sealed under it is the sync key itself.
+    fn shared(secret: &StaticSecret, other_public: &[u8; 32]) -> Option<Key> {
         let point = secret.diffie_hellman(&PublicKey::from(*other_public));
+        if !point.was_contributory() {
+            return None;
+        }
         let mut h = Blake2b512::new();
         h.update(b"pip-device-join-v1");
         h.update(point.as_bytes());
         let out = h.finalize();
         let mut key = [0u8; 32];
         key.copy_from_slice(&out[..32]);
-        key
+        Some(key)
     }
 
     /// Approving device: seal the sync key for whoever made this request. The random bytes are an
@@ -488,7 +496,7 @@ pub mod join {
     pub fn grant(req: &Request, sync_key: &Key, random: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, String> {
         let their_public = unhex(&req.public_key).ok_or("That join request looks damaged")?;
         let ephemeral = StaticSecret::from(*random);
-        let wrap = shared(&ephemeral, &their_public);
+        let wrap = shared(&ephemeral, &their_public).ok_or("That join request looks damaged")?;
         let mut holder = super::SyncDoc::default();
         holder.device = hex(sync_key);
         let mut out = PublicKey::from(&ephemeral).as_bytes().to_vec();
@@ -503,7 +511,7 @@ pub mod join {
         }
         let mut their_public = [0u8; 32];
         their_public.copy_from_slice(&sealed[..32]);
-        let wrap = shared(&secret.0, &their_public);
+        let wrap = shared(&secret.0, &their_public).ok_or("That approval was meant for another device")?;
         let holder = super::open(&wrap, &sealed[32..]).map_err(|_| "That approval was meant for another device".to_string())?;
         unhex(&holder.device).ok_or_else(|| "The shared key is damaged".to_string())
     }
@@ -706,5 +714,75 @@ mod ack_sweeping {
         assert_eq!(left, vec!["feed1|2026-10-06T09:00"], "only a real event ack is left");
         assert_eq!(state.reminders.get("date:mum").map(|r| r.acked), Some(5_000), "kept, where it belongs");
         assert_eq!(state.reminders.get("r1").map(|r| r.acked), Some(6_000));
+    }
+}
+
+#[cfg(test)]
+mod join_safety {
+    use super::join;
+
+    /// X25519 points whose order is small: each drives the shared secret to all zeros, which is
+    /// the value an attacker would be counting on. RFC 7748 names these as the ones to refuse.
+    const LOW_ORDER: [[u8; 32]; 7] = [
+        // u = 0
+        [0; 32],
+        // u = 1
+        [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+        // the two points of order 8
+        [
+            0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a, 0xda, 0x09,
+            0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+        ],
+        [
+            0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef, 0x5b, 0x04, 0x44,
+            0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
+        ],
+        // p - 1, p, p + 1
+        [
+            0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+        ],
+        [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+        ],
+        [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+        ],
+    ];
+
+    fn request_with(public: [u8; 32]) -> join::Request {
+        let (_, mut req) = join::new_request(&[7u8; 32], "r1".into(), "A phone".into(), 100);
+        req.public_key = join::hex(&public);
+        req
+    }
+
+    #[test]
+    fn a_join_request_with_a_low_order_key_is_refused() {
+        let sync_key = [9u8; 32];
+        for (i, public) in LOW_ORDER.iter().enumerate() {
+            let out = join::grant(&request_with(*public), &sync_key, &[3u8; 32], &[4u8; 24]);
+            assert!(out.is_err(), "low-order point {i} was accepted, which would hand over the sync key");
+        }
+    }
+
+    #[test]
+    fn an_honest_join_still_works() {
+        let sync_key = [9u8; 32];
+        let (secret, req) = join::new_request(&[7u8; 32], "r1".into(), "A phone".into(), 100);
+        let sealed = join::grant(&req, &sync_key, &[3u8; 32], &[4u8; 24]).expect("an ordinary join is granted");
+        assert_eq!(join::accept(&secret, &sealed).expect("and opens"), sync_key);
+    }
+
+    #[test]
+    fn an_approval_sealed_for_someone_else_is_refused() {
+        let sync_key = [9u8; 32];
+        let (_mine, req) = join::new_request(&[7u8; 32], "r1".into(), "A phone".into(), 100);
+        let (theirs, _) = join::new_request(&[8u8; 32], "r2".into(), "Another".into(), 100);
+        let sealed = join::grant(&req, &sync_key, &[3u8; 32], &[4u8; 24]).unwrap();
+        assert!(join::accept(&theirs, &sealed).is_err());
     }
 }

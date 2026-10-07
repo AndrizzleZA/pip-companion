@@ -104,15 +104,28 @@ pub fn builtin_google_client() -> Option<ClientKeys> {
     (!id.is_empty()).then(|| ClientKeys { id: id.into(), secret: env!("PIP_BUILTIN_GOOGLE_SECRET").into() })
 }
 
+/// Random bytes from the system generator.
+///
+/// A failure here is not survivable. The caller is about to use these as a sync key, a nonce, an
+/// X25519 secret or a PKCE verifier, and the buffer it would otherwise hand back is all zeros. The
+/// system-preferred RNG failing is close to unthinkable, which is precisely why it must not be able
+/// to pass silently as a key: ask for randomness, get randomness or get a crash report (crash.rs).
 pub fn random_bytes(n: usize) -> Vec<u8> {
     let mut v = vec![0u8; n];
-    unsafe { BCryptGenRandom(std::ptr::null_mut(), v.as_mut_ptr(), n as u32, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    let status =
+        unsafe { BCryptGenRandom(std::ptr::null_mut(), v.as_mut_ptr(), n as u32, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    assert!(status == 0, "the system random number generator failed (0x{:08x}); refusing to carry on with predictable bytes", status as u32);
     v
 }
 
+/// SHA-256. Checked for the same reason as `random_bytes`: this hashes the PKCE verifier, and a
+/// silent failure would return thirty-two zeros as the challenge.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, std::ptr::null(), 0, data.as_ptr(), data.len() as u32, out.as_mut_ptr(), 32) };
+    let status = unsafe {
+        BCryptHash(BCRYPT_SHA256_ALG_HANDLE, std::ptr::null(), 0, data.as_ptr(), data.len() as u32, out.as_mut_ptr(), 32)
+    };
+    assert!(status == 0, "the system hash function failed (0x{:08x})", status as u32);
     out
 }
 
