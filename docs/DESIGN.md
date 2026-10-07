@@ -1247,3 +1247,37 @@ would have overwritten both files and the new one leaves them untouched and says
 One thing that caught: the message first used an em dash, which the bubble font has no glyph for, so
 it rendered as `(2014)`. It was the first em dash in `messages.rs` — found by looking at the bubble
 rather than at the string.
+
+## 40. Tuft stops being a recoloured Sprout, 2026-10-07
+
+Four creatures, and two of them were the same drawing. As height against width, Sprout was 66×70 =
+0.94 and Tuft 61×62 = 0.98 — both round, within a few percent of each other — while Bunny sat at
+1.32 and Kit at 0.64. Their faces agreed too: Sprout's eyes at 61.0 and 11.0 apart, Tuft's at 60.0
+and 10.5. Only the crown really differed, so Tuft read as Pip with different hair.
+
+Slimming it was the obvious move and the wrong one on its own, because Bunny is already the slim
+one; it would have traded a Sprout collision for a Bunny collision. What none of the four had was a
+silhouette that is not symmetrical top to bottom: every one of them had shoulders and hips within a
+point of each other — 22/21, 17/17, 27/26, 20/19 — so nothing was bottom-heavy. Tuft is now
+13/19, with the widest point dropped to 70. Narrow at the shoulder, full at the hip, widest low: a
+pear, which reads as sitting into the ground rather than standing up.
+
+The face follows from the body by the ratios the other four already keep — `mouth_y = eye_y + 10`,
+`eye_dx = half × 0.33`, `arm.x = half × 0.83`, `shadow_rx = half × 0.72` and so on — so the
+proportions stay in the family even though the outline no longer does.
+
+**Honestly, the proportion alone does not separate it from Bunny:** 1.25 against Bunny's 1.32 is
+nearly the same build. What separates them is the taper, which is why the shoulder-to-hip number is
+the one doing the work here, not the slimming. Rendered side by side at all three stages, Sprout is
+now unmistakably a different creature and Bunny reads as a tall capsule against Tuft's teardrop.
+
+A stronger taper was tried — shoulders in to 11, widest down to 72 — and reverted: at the size a
+companion is actually drawn, it was indistinguishable from this, and a change nobody can see is not
+worth the risk of a pinched head.
+
+**This changes a companion under the person using it.** The rule until now has been that nobody's
+companion changes under them — §31 went to some trouble so that growing up could never take
+something away. This breaks that rule knowingly, because the alternative is leaving two of the four
+characters as the same drawing, and it was asked for by the person it happens to. It should not
+become a habit: once anyone else is using Pip, reshaping a character they chose needs a better
+answer than this one.

@@ -180,23 +180,26 @@ pub fn shape_of(who: Character) -> Shape {
             ear: (16.0, 45.0),
             acc: (90.0, 36.0),
         },
-        // Round: as tall as it is wide.
+        // Narrow-shouldered and bottom-heavy: slim, but it sits into the ground rather than
+        // standing tall. Bunny is already the slim one, so narrowing alone would only trade one
+        // collision for another; what no other creature has is a low widest point with the
+        // shoulders pulled well inside the hips.
         Character::Tuft => Shape {
             crown: Crown::Tuft,
-            body: Body { top: 32.0, bottom: 93.0, half: 31.0, widest: 62.0, shoulder: 20.0, hip: 19.0, flank_hi: 44.0, flank_lo: 83.0 },
+            body: Body { top: 28.0, bottom: 93.0, half: 26.0, widest: 70.0, shoulder: 13.0, hip: 19.0, flank_hi: 46.0, flank_lo: 86.0 },
             eye_y: 60.0,
-            eye_dx: 10.5,
+            eye_dx: 9.0,
             mouth_y: 70.0,
-            belly: (79.0, 17.0, 11.5),
-            shine: (35.0, 45.0),
-            shine2: (44.0, 39.0),
-            blush: (19.0, 70.5),
-            arm: (26.0, 64.0),
-            foot: (11.0, 91.0),
-            shadow_rx: 23.0,
-            crown_y: 33.0,
-            ear: (11.0, 36.0),
-            acc: (80.0, 31.0),
+            belly: (79.0, 14.5, 11.0),
+            shine: (38.0, 43.0),
+            shine2: (45.0, 37.0),
+            blush: (15.5, 70.5),
+            arm: (21.5, 63.0),
+            foot: (9.0, 91.0),
+            shadow_rx: 19.0,
+            crown_y: 29.0,
+            ear: (8.5, 33.0),
+            acc: (74.0, 28.0),
         },
     }
 }
