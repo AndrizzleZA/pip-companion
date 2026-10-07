@@ -1322,3 +1322,30 @@ this build does not know failed the whole file — and `load` moves an unparseab
 hours with it. It now reads as Sprout. The cost is that the unknown name is then saved as "sprout",
 so going back to a newer build will not restore the choice; keeping the raw string is the better
 answer the day more than one version is in the wild.
+
+## 42. Kit becomes a mushroom, 2026-10-07
+
+Kit was the wide, low one with pointed ears. It is now a stem under a cap: the body narrowed from
+half 43 to half 20 and its widest point dropped almost to the ground, so the silhouette flares at
+the foot and the width now comes from the crown instead. The shadow is 32 against the 14 the ratio
+would give, because the cap overhangs the stem by more than two to one and a shadow the width of
+the stem would look like the cap was floating.
+
+The cap is flat underneath rather than a full ellipse. A dome on a stem is a lollipop; the single
+line that makes it a mushroom is the straight edge where cap meets stem, lifted very slightly in
+the middle so the stem does not appear to spear it. Three lighter spots, kept because at the size a
+companion is drawn they read as a toadstool rather than as noise.
+
+**Caps get a shrink floor and nothing else does.** Crowns scale to 0.40 at the first stage, and a
+cap at 0.40 is narrower than the stem it sits on: rendered, a baby read as a blob in a red beanie,
+not as a young mushroom. Every other crown is narrower than its own head, so shrinking only makes
+it look younger — which is the whole point of §31. The cap is the one crown wider than its body, so
+the floor belongs to the cap rather than to the growth table the whole cast shares.
+
+`Crown::CatEars` stays in the enum with nothing wearing it. Crowns are a library that bodies
+multiply with, and the next creature that wants pointed ears should find them drawn already.
+
+**The variant is still `Character::Kit`.** Only `label()` changed, to "Toadstool". The name
+serialises to "kit", and until today an unrecognised value failed the whole settings file — §41
+softened that, but renaming the variant would still have silently turned every existing Kit into a
+Sprout on first load. The identity people chose is the serialised name, not the label.

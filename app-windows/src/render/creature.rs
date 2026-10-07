@@ -49,9 +49,14 @@ pub enum Crown {
     Leaf,
     /// Tall, soft ears — drawn behind the body so the head overlaps their base.
     LongEars,
-    /// Pointed ears, also behind.
+    /// Pointed ears, also behind. Nothing wears these since Kit became a mushroom; it stays
+    /// because crowns are a library that bodies multiply with, and the next creature that wants
+    /// pointed ears should find them already drawn rather than draw them again.
+    #[allow(dead_code)]
     CatEars,
     Tuft,
+    /// A wide domed cap with a flat underside. On top, and much wider than the body it sits on.
+    Cap,
     /// A ring of small petals around the crown point. On top, so they overlap the head.
     Petals,
     /// Two thin jointed stalks with a knob on each tip.
@@ -166,23 +171,25 @@ pub fn shape_of(who: Character) -> Shape {
             ear: (9.0, 25.0),
             acc: (76.0, 20.0),
         },
-        // Wide and low: a broad face with the eyes set further apart.
+        // A stem under a wide cap. The body is narrow and flares at the foot — the widest point is
+        // almost at the ground — so the cap is what gives this one its width. The shadow is far
+        // wider than half × 0.72 because the cap overhangs the stem by more than two to one.
         Character::Kit => Shape {
-            crown: Crown::CatEars,
-            body: Body { top: 38.0, bottom: 93.0, half: 43.0, widest: 74.0, shoulder: 27.0, hip: 26.0, flank_hi: 54.0, flank_lo: 86.0 },
-            eye_y: 66.0,
-            eye_dx: 13.0,
-            mouth_y: 76.0,
-            belly: (83.0, 23.0, 10.5),
-            shine: (30.0, 51.0),
-            shine2: (42.0, 46.0),
-            blush: (25.5, 76.0),
-            arm: (36.0, 71.0),
-            foot: (15.0, 91.0),
-            shadow_rx: 30.0,
-            crown_y: 39.0,
-            ear: (16.0, 45.0),
-            acc: (90.0, 36.0),
+            crown: Crown::Cap,
+            body: Body { top: 50.0, bottom: 93.0, half: 20.0, widest: 86.0, shoulder: 12.0, hip: 17.0, flank_hi: 66.0, flank_lo: 91.0 },
+            eye_y: 68.0,
+            eye_dx: 6.5,
+            mouth_y: 78.0,
+            belly: (84.0, 11.0, 8.0),
+            shine: (41.0, 62.0),
+            shine2: (46.0, 57.0),
+            blush: (12.0, 78.5),
+            arm: (16.5, 72.0),
+            foot: (7.0, 91.0),
+            shadow_rx: 32.0,
+            crown_y: 51.0,
+            ear: (10.0, 44.0),
+            acc: (68.0, 50.0),
         },
         // Narrow-shouldered and bottom-heavy: slim, but it sits into the ground rather than
         // standing tall. Bunny is already the slim one, so narrowing alone would only trade one
@@ -536,6 +543,9 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
 
 const INK: u32 = 0x2A2A3A;
 const LEAF: u32 = 0x4FA86A;
+/// The mushroom cap and its spots.
+const CAP: u32 = 0xD4695C;
+const CAP_SPOT: u32 = 0xFBF0E4;
 /// Bloom's petals and the dot of pollen at their centre.
 const PETAL: u32 = 0xF3B9D4;
 const POLLEN: u32 = 0xF7D774;
@@ -565,9 +575,15 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
         .pre_scale(pose.sx * g.scale * g.squat, pose.sy * g.scale / g.squat)
         .pre_translate(-CX, -GROUND_Y);
     // Crowns grow on their own curve, about the top of the head.
+    //
+    // A cap gets a floor, because it is the only crown wider than the body under it: at 0.40 it
+    // shrinks past its own stem and reads as a red band around the head rather than a mushroom.
+    // Everything else is narrower than its head and only looks younger as it shrinks, so the floor
+    // is here rather than in the growth table, which the whole cast shares.
+    let crown = if s.crown == Crown::Cap { g.crown.max(0.70) } else { g.crown };
     let ct = t
         .pre_translate(CX, s.crown_y)
-        .pre_scale(g.crown, g.crown)
+        .pre_scale(crown, crown)
         .pre_translate(-CX, -s.crown_y);
 
     // Feet
@@ -632,6 +648,7 @@ fn draw_crown(pm: &mut PixmapMut, t: Transform, s: &Shape, sway: f32) {
     match s.crown {
         Crown::Leaf => draw_sprout(pm, t, s.crown_y, sway),
         Crown::Tuft => draw_tuft(pm, t, s.crown_y, sway),
+        Crown::Cap => draw_cap(pm, t, s.crown_y, sway),
         Crown::Petals => draw_petals(pm, t, s.crown_y, sway),
         Crown::Antennae => draw_antennae(pm, t, s.crown_y, sway),
         // Ears were already drawn, behind the body.
@@ -688,6 +705,28 @@ fn draw_tuft(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
         pb.move_to(0.0, 0.0);
         pb.quad_to(dx * 0.4, -len * 0.6, dx * 0.9, -len);
         stroke_path(pm, pb.finish(), color(INK, 0.85), 2.0, top.pre_concat(Transform::from_rotate(lean + sway * 0.6)));
+    }
+}
+
+/// A wide domed cap with a flat underside, and three lighter spots.
+///
+/// Flat underneath rather than a full ellipse: a ball on a stem reads as a lollipop, and the one
+/// line that makes it a mushroom is the straight edge where the cap meets the stem.
+fn draw_cap(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
+    let top = t.pre_translate(CX, crown_y).pre_concat(Transform::from_rotate(sway * 0.35));
+    const HALF: f32 = 44.0;
+    const RISE: f32 = 22.0;
+    let mut pb = PathBuilder::new();
+    pb.move_to(-HALF, 0.0);
+    pb.cubic_to(-HALF, -RISE * 0.95, -HALF * 0.45, -RISE, 0.0, -RISE);
+    pb.cubic_to(HALF * 0.45, -RISE, HALF, -RISE * 0.95, HALF, 0.0);
+    // The underside lifts very slightly at the middle so the cap sits on the stem rather than
+    // being speared by it.
+    pb.quad_to(0.0, -2.6, -HALF, 0.0);
+    pb.close();
+    fill_path(pm, pb.finish(), color(CAP, 1.0), top);
+    for (dx, dy, r) in [(-19.0f32, -9.0f32, 5.2f32), (6.0, -13.5, 4.0), (22.0, -6.5, 4.6)] {
+        fill_path(pm, ellipse_path(dx, dy, r, r * 0.86), color(CAP_SPOT, 0.9), top);
     }
 }
 

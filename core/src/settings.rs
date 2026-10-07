@@ -91,7 +91,7 @@ impl Character {
         match self {
             Character::Sprout => "Sprout",
             Character::Bunny => "Bunny",
-            Character::Kit => "Kit",
+            Character::Kit => "Toadstool",
             Character::Tuft => "Tuft",
             Character::Bloom => "Bloom",
             Character::Moth => "Moth",
