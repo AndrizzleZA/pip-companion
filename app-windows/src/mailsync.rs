@@ -193,12 +193,11 @@ pub fn start(hwnd: HWND, keys: ClientKeys, rules: EmailSettings, jobs: Vec<MailJ
         .name("pip-mail".into())
         .stack_size(256 * 1024)
         .spawn(move || {
-            // A panic in here would otherwise leave the app waiting for a check that never lands,
-            // so it reports an empty result and the next check goes ahead as normal.
-            let results: Vec<MailResult> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                jobs.iter().map(|j| check(&keys, &rules, j, now)).collect()
-            }))
-            .unwrap_or_default();
+            // No catch_unwind here. Release builds abort on panic (Cargo.toml), so catching was
+            // only ever possible in a debug build - the one place a crash does least harm - and
+            // the comment that used to sit here promised a resilience that shipped to nobody. A
+            // panic in a mail check is a bug; it now leaves a report behind instead (crash.rs).
+            let results: Vec<MailResult> = jobs.iter().map(|j| check(&keys, &rules, j, now)).collect();
             let ptr = Box::into_raw(Box::new(results));
             unsafe {
                 if PostMessageW(hwnd_bits as HWND, WM_MAILSYNC, 0, ptr as isize) == 0 {

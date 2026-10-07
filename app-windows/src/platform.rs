@@ -450,3 +450,38 @@ pub fn open_url(url: &str) {
         ShellExecuteW(std::ptr::null_mut(), wide("open").as_ptr(), wide(url).as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
     }
 }
+
+/// Which Windows this is, for a crash report that arrives from someone else's machine.
+///
+/// Read from the registry rather than `GetVersionEx`, which reports 6.2 for everything after 8.1
+/// unless the executable carries a compatibility manifest saying otherwise. Read once at startup,
+/// never from the panic hook, which must not be doing registry work.
+pub fn os_build() -> String {
+    let path = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+    let read = |name: &str| -> Option<String> {
+        let n = wide(name);
+        let mut buf = [0u16; 128];
+        let mut len = (buf.len() * 2) as u32;
+        let ok = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                path.as_ptr(),
+                n.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut c_void,
+                &mut len,
+            )
+        };
+        if ok != ERROR_SUCCESS {
+            return None;
+        }
+        let chars = (len as usize / 2).saturating_sub(1);
+        Some(String::from_utf16_lossy(&buf[..chars.min(buf.len())]))
+    };
+    let build = read("CurrentBuild").unwrap_or_default();
+    // Windows 11 still calls itself 10 in ProductName; the build number is the only honest answer.
+    let major = if build.parse::<u32>().unwrap_or(0) >= 22000 { "11" } else { "10" };
+    let display = read("DisplayVersion").unwrap_or_default();
+    format!("Windows {major} {display} (build {build})").replace("  ", " ")
+}

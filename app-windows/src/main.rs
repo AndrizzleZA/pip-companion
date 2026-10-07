@@ -8,6 +8,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod crash;
 mod install;
 mod calsync;
 mod drivesync;
@@ -468,9 +469,7 @@ fn main() {
 
     platform::set_dpi_awareness();
     let store = storage::Storage::open();
-    std::panic::set_hook(Box::new(|info| {
-        storage::Storage::open().log(&format!("panic: {info}"));
-    }));
+    crash::install(store.dir().join("pip.log"), platform::os_build());
 
     let mutex_name = format!("Local\\{}", instance_title().replace(['[', ']', ' '], "_"));
     if !platform::acquire_single_instance(&mutex_name) {

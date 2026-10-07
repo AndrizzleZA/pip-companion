@@ -1823,6 +1823,8 @@ impl App {
                 format!("running={} total={}\n{}\n{}", self.sync_running, self.events.len(), feeds.join("\n"), evs.join("\n"))
             }
             "snap" => self.dev_snapshot(arg),
+            // The crash path is the one path that cannot be tested by using the app normally.
+            "crash" => panic!("deliberate test crash from the devtools command"),
             "stats" => {
                 let u = platform::process_usage();
                 format!(

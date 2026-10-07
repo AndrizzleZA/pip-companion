@@ -995,3 +995,43 @@ does — it is idempotent — but a migration that never lands is not a migratio
 Backfilling from the days that *met the water goal* was the obvious alternative and is wrong: two of
 those fifteen days met it, which would still have shown a newborn. Grandfathering from `created_at`
 is worse — it is the age rule §31 deleted, let back in through the migration.
+
+## 34. What Pip leaves behind when it dies, 2026-10-07
+
+*(§33 is held for the iOS decision the roadmap cites; the reasoning for it is not recorded yet.)*
+
+Phase 6 begins here because every other item in it assumes you can find out what went wrong on a
+machine you cannot see. There was already a panic hook — it logged `panic: {info}` — and it had two
+problems. It called `Storage::open()` from inside the hook, so a panic raised anywhere in storage
+would have panicked a second time on the way out and aborted with nothing written at all. And what
+it wrote was a single line with no version, no Windows build, no thread and no stack: enough to
+know that Pip died, never enough to know why.
+
+Everything the hook needs is now resolved at startup, while the program still works — the log path
+and the Windows build string — and the hook only formats and appends. The Windows build comes from
+the registry, not `GetVersionEx`, which reports 6.2 for everything after 8.1 unless the executable
+carries a compatibility manifest.
+
+**The backtrace is the part that needed measuring rather than assuming.** MSVC keeps debug symbols
+in a separate `pip.pdb`, so `debug = 1` costs the shipped executable nothing — 2 118 144 bytes with,
+2 118 656 without, on identical code. But the `.pdb` is 11 MB against Pip's 2 MB, so it is archived
+per release, never shipped; and on a machine without it every frame of ours resolves to `<unknown>`
+— not even an address. A stranger's crash report would have been thirty lines of `<unknown>` burying
+the one line that helps. So the trace is printed only when it names Pip's own functions, with the
+six frames of panic machinery dropped, and otherwise replaced by a sentence saying why there is
+none. What survives everywhere is the message, the exact source location, the version, the Windows
+build and the thread — six lines, each of which earns its place.
+
+**An honest limit:** a crash on someone else's machine still arrives without a stack. If the
+location ever proves not to be enough, the next step is recording raw frame addresses and the module
+base, which the archived `.pdb` can resolve offline — more work, and not worth it until a real
+report proves the need.
+
+The mail thread's `catch_unwind` went at the same time. Its comment promised that a panic there
+would be contained so the next check could go ahead, but release builds abort on panic, so it could
+only ever have caught something in a debug build — the one place a crash does least harm. It read
+as a safety net and shipped to nobody as one.
+
+A crash is also the one path that cannot be reached by using the app, so `--cmd crash` panics on
+purpose. It is behind the devtools feature and absent from the shipped binary, which was checked
+rather than assumed.

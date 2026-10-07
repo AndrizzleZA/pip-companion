@@ -694,8 +694,14 @@ impl App {
         c.y = y + 144.0 * s;
 
         // Privacy
+        // The sidebar already carries the version, so this only has to say where the evidence is.
+        let version_line = "If something ever goes wrong, what happened is written to pip.log in that folder.";
         let privacy = "Everything stays on this computer: no account, no network access, no tracking. Your settings live in a small folder you can open below.";
         for l in text::wrap(&f.regular, 12.5 * s, privacy, c.x1 - c.x0) {
+            text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y + 14.0 * s, c.pal.muted, 1.0, &l);
+            c.y += 19.0 * s;
+        }
+        for l in text::wrap(&f.regular, 12.5 * s, version_line, c.x1 - c.x0) {
             text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y + 14.0 * s, c.pal.muted, 1.0, &l);
             c.y += 19.0 * s;
         }
