@@ -1055,3 +1055,31 @@ which is also honest, rather than warning about traffic that will never happen.
 Checked against the binary rather than memory: every host Pip can reach belongs to Google or is a
 test fixture, and there is no telemetry of any kind. Both states were rendered — nothing connected,
 and a Gmail account connected — and read back from the screenshots.
+
+## 36. Symbols kept for a build that has gone out, 2026-10-07
+
+§34 said the `.pdb` was archived per release. Nothing archived it. `target\release\pip.pdb` is
+overwritten by the next build, and a `.pdb` only matches the exact binary it was built with, so
+every build handed to anyone was already unreadable by the time the next `cargo build` finished.
+
+Archiving alone would not have fixed it, because nothing identified a build. The version has been
+0.1.0 since the first commit and will be for a while yet, so every crash report named the same
+thing and a shelf of symbol files would have had nothing to key them by. So builds are now stamped:
+`build.rs` resolves the commit, bakes it in as `PIP_BUILD`, and it appears on the first line of
+every crash report and in the startup line of the log. `tools/archive-symbols.ps1` builds release
+with that stamp and copies the executable, its symbols and a manifest — commit, subject, date, size
+and SHA-256 of the exe — into a folder named after the commit.
+
+The archive sits outside the repository. It is binary, it is eleven megabytes a build, and nothing
+in git should be able to remove it. A dirty tree is refused rather than archived, because a commit
+that does not describe what was built is worse than no record at all: it looks authoritative and
+sends you to the wrong source. `-Force` archives it as `<commit>-dirty` for when that is what you
+actually want.
+
+**What this does not yet do.** §34 is still true: on a machine without the `.pdb`, every frame of
+ours comes back `<unknown>` rather than an address, so an archived `.pdb` cannot decode a stranger's
+report. What the archive buys today is the ability to take a report's build stamp, recover the exact
+binary and symbols, and reproduce or debug against them — rather than guessing which of a month of
+builds the person was running. Making a stranger's stack readable needs raw frame addresses and the
+module base in the report, which `std::backtrace` does not expose on stable; that means taking on
+the `backtrace` crate, and it should wait until a real report proves the location line insufficient.

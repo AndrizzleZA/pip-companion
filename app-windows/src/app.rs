@@ -298,7 +298,12 @@ impl App {
             self.state_dirty = true;
             self.schedule_save();
         }
-        self.store.log(&format!("started in {} ms (v{})", self.startup_ms, env!("CARGO_PKG_VERSION")));
+        self.store.log(&format!(
+            "started in {} ms (v{} build {})",
+            self.startup_ms,
+            env!("CARGO_PKG_VERSION"),
+            env!("PIP_BUILD")
+        ));
         // Once startup settles, hand back pages that were only needed to get going.
         self.set_timer(T_TRIM, 30_000);
         self.reschedule();

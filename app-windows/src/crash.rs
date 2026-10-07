@@ -37,12 +37,13 @@ fn record(summary: &str, trace: &str) {
     let text = format!(
         "
 ──── crash ────
-{when}  Pip {ver}  ·  {os}  ·  thread {thread:?}
+{when}  Pip {ver} (build {build})  ·  {os}  ·  thread {thread:?}
 {summary}
 {body}
 ──── end ────
 ",
         ver = env!("CARGO_PKG_VERSION"),
+        build = env!("PIP_BUILD"),
         os = g.os,
         body = readable(trace),
     );

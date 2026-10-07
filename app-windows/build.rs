@@ -22,7 +22,39 @@ fn field(json: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Which build this is, so a crash report can be matched to the exact binary that produced it —
+/// and so to that binary's archived `.pdb`. The version cannot do this job: it has been 0.1.0 for
+/// every build ever made, and a pile of symbol files with nothing to key them by is not an archive.
+///
+/// `PIP_BUILD` wins when set, because `tools/archive-symbols.ps1` passes the commit it is archiving
+/// under and that must be exact. Falling back to asking git is for ordinary development builds,
+/// where Cargo may not re-run this script the instant a commit lands; a stale stamp there costs
+/// nothing, while a wrong one on a release would send you to the wrong source.
+fn build_stamp() -> String {
+    if let Ok(v) = std::env::var("PIP_BUILD") {
+        if !v.trim().is_empty() {
+            return v.trim().to_string();
+        }
+    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    match git(&["rev-parse", "--short=10", "HEAD"]).filter(|h| !h.is_empty()) {
+        Some(hash) if git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty()) => format!("{hash}-dirty"),
+        Some(hash) => hash,
+        None => "unknown".to_string(),
+    }
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=PIP_BUILD");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rustc-env=PIP_BUILD={}", build_stamp());
     let path = std::env::var_os("PIP_GOOGLE_CLIENT_JSON")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("google-client.json"));
