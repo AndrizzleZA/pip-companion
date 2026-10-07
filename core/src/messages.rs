@@ -158,6 +158,15 @@ pub fn cannot_read_its_own_files(name: &str) -> (String, String) {
     )
 }
 
+/// Said once, on the day a new character turns up. Never a countdown: §7 says the pet never
+/// guilt-trips, and "one more in three days" is exactly that in a friendly voice.
+pub fn character_arrived(label: &str) -> (String, String) {
+    (
+        format!("{label} has come to visit"),
+        format!("A {label} has turned up and would like to stay. You can switch to it in Settings whenever you feel like it, or not at all."),
+    )
+}
+
 /// Said once, when a companion reaches a new stage.
 pub fn grew_up(stage: u8, name: &str) -> String {
     match stage {

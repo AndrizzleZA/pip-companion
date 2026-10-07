@@ -55,6 +55,8 @@ pub enum Crown {
     #[allow(dead_code)]
     CatEars,
     Tuft,
+    /// Nothing at all: a smooth head, distinct by absence.
+    None,
     /// A wide domed cap with a flat underside. On top, and much wider than the body it sits on.
     Cap,
     /// A ring of small petals around the crown point. On top, so they overlap the head.
@@ -211,6 +213,26 @@ pub fn shape_of(who: Character) -> Shape {
             crown_y: 29.0,
             ear: (8.5, 33.0),
             acc: (74.0, 28.0),
+        },
+        // Broad, low and smooth-headed. It takes the wide silhouette the mushroom gave up, and
+        // with no crown at all the outline is the entire character — so it has to be the widest
+        // thing in the set or there is nothing to recognise it by.
+        Character::Pebble => Shape {
+            crown: Crown::None,
+            body: Body { top: 38.0, bottom: 93.0, half: 43.0, widest: 74.0, shoulder: 27.0, hip: 26.0, flank_hi: 54.0, flank_lo: 86.0 },
+            eye_y: 66.0,
+            eye_dx: 14.0,
+            mouth_y: 76.0,
+            belly: (83.0, 23.5, 10.5),
+            shine: (30.0, 51.0),
+            shine2: (42.0, 46.0),
+            blush: (25.5, 76.5),
+            arm: (36.0, 69.0),
+            foot: (15.0, 91.0),
+            shadow_rx: 31.0,
+            crown_y: 39.0,
+            ear: (16.0, 45.0),
+            acc: (91.0, 38.0),
         },
         // A small round body under a wide ring of petals, so the crown carries the shape rather
         // than the outline. The shadow is wider than half × 0.72 on purpose: the petals overhang.
@@ -648,6 +670,8 @@ fn draw_crown(pm: &mut PixmapMut, t: Transform, s: &Shape, sway: f32) {
     match s.crown {
         Crown::Leaf => draw_sprout(pm, t, s.crown_y, sway),
         Crown::Tuft => draw_tuft(pm, t, s.crown_y, sway),
+        // Nothing to draw: Pebble is bald on purpose.
+        Crown::None => {}
         Crown::Cap => draw_cap(pm, t, s.crown_y, sway),
         Crown::Petals => draw_petals(pm, t, s.crown_y, sway),
         Crown::Antennae => draw_antennae(pm, t, s.crown_y, sway),

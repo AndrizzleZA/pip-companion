@@ -54,6 +54,8 @@ pub enum Character {
     Bunny,
     Kit,
     Tuft,
+    /// Broad, low and bald: the outline is the whole character.
+    Pebble,
     /// A small body under a wide ring of petals.
     Bloom,
     /// The smallest, with antennae.
@@ -76,6 +78,7 @@ impl<'de> Deserialize<'de> for Character {
             "bunny" => Character::Bunny,
             "kit" => Character::Kit,
             "tuft" => Character::Tuft,
+            "pebble" => Character::Pebble,
             "bloom" => Character::Bloom,
             "moth" => Character::Moth,
             _ => Character::Sprout,
@@ -84,8 +87,54 @@ impl<'de> Deserialize<'de> for Character {
 }
 
 impl Character {
-    pub const ALL: [Character; 6] =
-        [Character::Sprout, Character::Bunny, Character::Kit, Character::Tuft, Character::Bloom, Character::Moth];
+    pub const ALL: [Character; 7] = [
+        Character::Sprout,
+        Character::Bunny,
+        Character::Kit,
+        Character::Tuft,
+        Character::Pebble,
+        Character::Bloom,
+        Character::Moth,
+    ];
+
+    /// Good days before this one turns up, or 0 for the ones that have always been here.
+    ///
+    /// A gift, not an unlock. Nothing that was ever free becomes conditional: the four originals
+    /// and every colour stay available on the first day and on every day after, because taking
+    /// back a companion someone already chose is the one thing §31 was built to prevent. Only
+    /// characters that have never existed before can arrive, and nothing anywhere counts down to
+    /// them — a companion that says "22 more days" is guilt-tripping, which §7 forbids and §28
+    /// refused on purpose.
+    pub fn arrives_at(self) -> u32 {
+        match self {
+            Character::Sprout | Character::Bunny | Character::Kit | Character::Tuft => 0,
+            Character::Pebble => 7,
+            Character::Bloom => 21,
+            Character::Moth => 45,
+        }
+    }
+
+    pub fn arrived(self, experience: u32) -> bool {
+        experience >= self.arrives_at()
+    }
+
+    /// The characters to offer at this point. Everything else is simply not drawn, which is both
+    /// the kindest option and the cheapest: there is no locked state to design.
+    pub fn available(experience: u32) -> impl Iterator<Item = Character> {
+        Character::ALL.into_iter().filter(move |c| c.arrived(experience))
+    }
+
+    /// Which character to actually draw. A settings file can name one that has not arrived — hand
+    /// edited, carried back from a further-along device, or restored from a backup — and the
+    /// answer is to show the original rather than to fail or to quietly rewrite their choice.
+    /// The choice stays in the file, so it comes back by itself on the day it arrives.
+    pub fn shown(self, experience: u32) -> Character {
+        if self.arrived(experience) {
+            self
+        } else {
+            Character::Sprout
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -93,6 +142,7 @@ impl Character {
             Character::Bunny => "Bunny",
             Character::Kit => "Toadstool",
             Character::Tuft => "Tuft",
+            Character::Pebble => "Pebble",
             Character::Bloom => "Bloom",
             Character::Moth => "Moth",
         }
@@ -517,6 +567,38 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nothing_that_was_ever_free_becomes_conditional() {
+        // The four originals were available from the first day Pip existed. Gating any of them
+        // would take away a companion somebody already chose, which is the one thing growing up
+        // was built never to do.
+        for who in [Character::Sprout, Character::Bunny, Character::Kit, Character::Tuft] {
+            assert_eq!(who.arrives_at(), 0, "{who:?} has always been here");
+            assert!(who.arrived(0), "{who:?} must be there on day one");
+        }
+    }
+
+    #[test]
+    fn the_new_ones_arrive_gently_and_in_order() {
+        assert_eq!(Character::Pebble.arrives_at(), 7);
+        assert_eq!(Character::Bloom.arrives_at(), 21);
+        assert_eq!(Character::Moth.arrives_at(), 45);
+        assert_eq!(Character::available(0).count(), 4, "day one offers the four originals");
+        assert_eq!(Character::available(6).count(), 4);
+        assert_eq!(Character::available(7).count(), 5, "and nothing announces itself early");
+        assert_eq!(Character::available(20).count(), 5);
+        assert_eq!(Character::available(21).count(), 6);
+        assert_eq!(Character::available(45).count(), 7);
+    }
+
+    #[test]
+    fn a_character_that_has_not_arrived_shows_as_sprout_without_losing_the_choice() {
+        // A hand-edited file, or one carried back from a device further along.
+        assert_eq!(Character::Moth.shown(10), Character::Sprout);
+        assert_eq!(Character::Moth.shown(45), Character::Moth, "and it comes back by itself");
+        assert_eq!(Character::Tuft.shown(0), Character::Tuft, "the originals are never withheld");
+    }
+
     #[test]
     fn a_character_this_build_has_never_heard_of_reads_as_sprout() {
         // The whole file used to fail on this, and one bad field costs every setting: storage

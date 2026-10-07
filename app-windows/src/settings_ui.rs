@@ -408,7 +408,7 @@ impl App {
         pose.blush = 0.6;
         // The portrait is this companion, so it is as grown as it actually is.
         pose.stage = self.state.stage();
-        creature::draw(&mut pm, &pose, pal.body, self.settings.pet.character, base);
+        creature::draw(&mut pm, &pose, pal.body, self.settings.pet.character.shown(self.state.experience), base);
         let name = &self.settings.pet.name;
         text::draw_centered(&mut pm, &f.semibold, 16.0 * s, SIDEBAR_W * s / 2.0, 100.0 * s, pal.text, 1.0, name);
         text::draw_centered(&mut pm, &f.regular, 11.5 * s, SIDEBAR_W * s / 2.0, 118.0 * s, pal.muted, 1.0, "your tiny friend");
@@ -450,8 +450,12 @@ impl App {
         // would have run off the left and over the description. Four to a line, each line its own
         // control right-aligned like every other one. A line that does not hold the current
         // character shows nothing selected, which is what an out-of-range index already does.
+        // Only what has arrived is drawn. There is no locked state here and there is not going to
+        // be one: a row of greyed-out creatures with the days left on them is a countdown, and the
+        // pet does not do that (§7, §28, §43).
+        let here: Vec<Character> = Character::available(self.state.experience).collect();
         let mut cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
-        for (i, chunk) in Character::ALL.chunks(4).enumerate() {
+        for (i, chunk) in here.chunks(4).enumerate() {
             if i > 0 {
                 cy = c.row("", None);
             }
@@ -1087,7 +1091,7 @@ impl App {
             self.settings_changed(&prev);
             if prev.pet.color != self.settings.pet.color || prev.pet.character != self.settings.pet.character {
                 if let Some(ui) = &self.ui {
-                    set_window_icon(ui.hwnd, self.settings.pet.color.rgb(), self.settings.pet.character);
+                    set_window_icon(ui.hwnd, self.settings.pet.color.rgb(), self.settings.pet.character.shown(self.state.experience));
                 }
             }
             self.ui_apply_chrome();

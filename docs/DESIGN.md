@@ -1349,3 +1349,42 @@ multiply with, and the next creature that wants pointed ears should find them dr
 serialises to "kit", and until today an unrecognised value failed the whole settings file — §41
 softened that, but renaming the variant would still have silently turned every existing Kit into a
 Sprout on first load. The identity people chose is the serialised name, not the label.
+
+## 43. The seventh character, and a cast that arrives, 2026-10-07
+
+**Pebble** completes the set, and it only became possible once Kit stopped being wide (§42). It is
+the broad, low, bald one: `Crown::None` draws nothing at all, so the outline *is* the character and
+it has to be the widest thing here or there is nothing to recognise. It took the exact body the
+mushroom gave up, which is why it could not be written until that landed.
+
+One honest consequence: Pebble has the least legible growing-up of the seven. §31 built four cues —
+scale, eyes, crown, squat — and said plainly that size alone was too easy to miss. A creature with
+no crown is down to three, and the one carrying most of the legibility is the one it does not have.
+It still reads younger as a baby; it just says it more quietly than the others, and that is the
+price of a character defined by absence.
+
+### Arrivals, not unlocks
+
+The three new characters are not there on the first day. They turn up at 7, 21 and 45 good days.
+
+This is the kind of feature that usually arrives as a grid of greyed-out skins with "22 more days!"
+under each one, and this project has refused that four separate times: §7 says the pet never
+guilt-trips, §28 declined it deliberately rather than by accident, and §31 made growing up
+something that can only ever be good news. So it is built as a gift and the refusals are the design:
+
+- **Nothing that has not arrived is drawn.** `Character::available` filters the list and the
+  settings row simply has four entries on the first day. There is no locked state, no greyed chip,
+  no tooltip. It is also the cheapest possible implementation, which is usually what honesty costs.
+- **Nothing counts.** No "next one in N days", no progress bar, nowhere to go and feel behind. The
+  only number anywhere is the one that was already there, and it only ever says what has happened.
+- **It speaks once, on the day.** `welcome_arrivals` is the shape of `celebrate_growth`: compare
+  before and after, say it once, and have no counterpart for "not yet". It writes the state as it
+  speaks, because "once" is only true if the day that caused it is saved — found by rendering it,
+  where the second launch announced Pebble a second time.
+- **Nothing that was ever free becomes conditional.** The four originals and all seven colours are
+  unconditional on day one and every day after. Gating something already chosen would take a
+  companion away from the person who chose it, which is what §31 exists to prevent. A test pins it.
+- **A character that has not arrived falls back to Sprout** — a hand-edited file, a restore, a
+  device further along — and the choice stays in the file rather than being rewritten, so it comes
+  back by itself on the day it arrives. `experience` already merges across devices by taking the
+  higher, so two devices cannot disagree about what has turned up.

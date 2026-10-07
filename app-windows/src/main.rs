@@ -128,7 +128,9 @@ fn open_settings() {
         return;
     }
     let Some((anchor, name, body, who)) =
-        with_app(|a| (a.pet.anchor, a.settings.pet.name.clone(), a.settings.pet.color.rgb(), a.settings.pet.character))
+        with_app(|a| {
+            (a.pet.anchor, a.settings.pet.name.clone(), a.settings.pet.color.rgb(), a.settings.pet.character.shown(a.state.experience))
+        })
     else {
         return;
     };

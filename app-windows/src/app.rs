@@ -11,6 +11,7 @@ use crate::storage::Storage;
 use crate::calsync::{self, FeedJob, FeedMeta};
 use crate::tray::Tray;
 use pip_core::agenda;
+use pip_core::settings::Character;
 use pip_core::calendar::Event;
 use pip_core::connectors::{ConnectorId, SignInProblem};
 use pip_core::health;
@@ -238,10 +239,12 @@ impl App {
         let now = now_unix();
         let today = local(&Local, now).date();
         let grown_before = self.state.stage();
+        let arrived_before = self.state.experience;
         if self.state.roll_day(&self.settings, today) {
             self.state.water.seen_since = Some(now);
         }
         self.celebrate_growth(grown_before);
+        self.welcome_arrivals(arrived_before);
         self.pet.anchor = match self.state.desktop_pos {
             Some([x, y]) if platform::monitor_at(x + 20, y + 20, true).is_some() => (x, y),
             _ => Pet::default_anchor(self.size()),
@@ -259,7 +262,7 @@ impl App {
         self.startup_ms = platform::ms_since_process_start();
         self.up_since = now_unix();
         let tip = self.tray_tip();
-        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character, false, &tip);
+        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character.shown(self.state.experience), false, &tip);
         platform::register_appbar(self.hwnd, WM_APPBAR);
         // Calendars: secret links from the encrypted store, cached events right away (offline),
         // then a network refresh once the desktop has settled.
@@ -417,7 +420,9 @@ impl App {
         let view =
             View {
                 pal: &pal,
-                who: self.settings.pet.character,
+                // A character that has not arrived (a hand-edited file, a restore) shows as Sprout
+                // without the file being rewritten, so it returns by itself on the day it arrives.
+                who: self.settings.pet.character.shown(self.state.experience),
                 stage: self.state.stage(),
                 expr: self.expr(),
                 attention: self.attention(),
@@ -632,6 +637,7 @@ impl App {
         let tz = Local;
         let today = local(&tz, now).date();
         let grown_before = self.state.stage();
+        let arrived_before = self.state.experience;
         if self.state.roll_day(&self.settings, today) {
             self.state.water.seen_since = Some(now);
             self.state.prune_events(now);
@@ -640,6 +646,7 @@ impl App {
             self.start_sync(false); // slide the two-week window
         }
         self.celebrate_growth(grown_before);
+        self.welcome_arrivals(arrived_before);
         if self.state.dnd_until.is_some_and(|t| t <= now) {
             self.state.dnd_until = None;
             self.state_dirty = true;
@@ -704,7 +711,7 @@ impl App {
     fn update_tray(&mut self) {
         let tip = self.tray_tip();
         let attention = !self.pending.is_empty();
-        self.tray.update(self.settings.pet.color.rgb(), self.settings.pet.character, attention, &tip);
+        self.tray.update(self.settings.pet.color.rgb(), self.settings.pet.character.shown(self.state.experience), attention, &tip);
     }
 
     fn present(&mut self, d: Due, sound: bool) {
@@ -970,6 +977,29 @@ impl App {
 
     /// Reaching a stage is said once, wherever the day happened to turn over. There is no matching
     /// notice for a day that earned nothing — growing up is only ever good news here.
+    /// Says hello to anything that turned up today. Same shape as [`Self::celebrate_growth`]: it
+    /// compares before and after, speaks once, and has no counterpart for "not yet" — there is
+    /// deliberately nothing anywhere that counts toward the next one.
+    fn welcome_arrivals(&mut self, before: u32) {
+        let now = self.state.experience;
+        let arrived: Vec<Character> =
+            Character::ALL.into_iter().filter(|c| c.arrives_at() > before && c.arrived(now)).collect();
+        let Some(who) = arrived.first() else { return };
+        let (title, body) = messages::character_arrived(who.label());
+        let mut card = Card::new(BubbleKind::Message).line(body, false);
+        card.title = Some(title);
+        card.buttons.push(("Settings".into(), Action::Settings, BtnStyle::Secondary));
+        card.buttons.push(("Lovely".into(), Action::Close, BtnStyle::Primary));
+        self.pet.show_bubble(card);
+        self.set_timer(T_BUBBLE, 20_000);
+        self.anim(AnimKind::Celebrate);
+        // Persist the day that caused this. Without it the roll stays in memory, and the next
+        // launch rolls the same day again and introduces Pebble a second time — "said once" is
+        // only true if the thing it was said about is written down.
+        self.state_dirty = true;
+        self.schedule_save();
+    }
+
     fn celebrate_growth(&mut self, before: u8) {
         let now = self.state.stage();
         if now <= before {
@@ -1394,7 +1424,7 @@ impl App {
 
     pub fn on_taskbar_created(&mut self) {
         let tip = self.tray_tip();
-        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character, !self.pending.is_empty(), &tip);
+        self.tray.add(self.settings.pet.color.rgb(), self.settings.pet.character.shown(self.state.experience), !self.pending.is_empty(), &tip);
     }
 
     // -----------------------------------------------------------------------------------------
