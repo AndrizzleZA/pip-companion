@@ -831,7 +831,9 @@ Deliberately not done:
 - **No custom sound files.** Asked for and declined for this stage: files mean loading, validating
   and failing, for a feature four built-in voices already cover.
 - **Characters don't sync to the phone.** The phone doesn't draw Pip, so putting them in the sync
-  document would add a field nothing reads.
+  document would add a field nothing reads. *Reversed in §44, for a reason this did not consider:
+  the document is not only a sync, it is the only copy of anything that exists off this machine.
+  The phone still does not read it.*
 - **No guilt-tripping.** It belongs with hunger in a later stage, and the guiding rules already say
   the pet never guilt-trips — worth deciding deliberately rather than by accident here.
 
@@ -1392,3 +1394,42 @@ something that can only ever be good news. So it is built as a gift and the refu
   device further along — and the choice stays in the file rather than being rewritten, so it comes
   back by itself on the day it arrives. `experience` already merges across devices by taking the
   higher, so two devices cannot disagree about what has turned up.
+
+## 44. A restore should give back a face, 2026-10-07
+
+When the data folder was destroyed (§38), the encrypted Drive document gave back reminders, dates
+and preferences, and nothing about the companion itself. The person got their reminders and a
+stranger's face: `Prefs` carries `pet_name` and not one thing that is actually looked at.
+
+§28 decided deliberately that characters do not sync, because the phone does not draw Pip and the
+field would be one nothing reads. That reasoning was sound and it was about sync. It did not
+consider backup — and the Drive document is the only copy of anything that exists off the machine.
+§39 stopped the overwrite that caused the loss, so this is not about preventing it again; it is
+about what is left to restore from when something else goes wrong. §28 now says it was reversed
+here rather than being quietly contradicted.
+
+So appearance travels: character, colour, size, voice, liveliness, theme.
+
+**It is its own record, and that is the whole design.** A phone deserialises the document into
+these structs and writes the merged result back, so a field its build does not know is dropped on
+the way through. Inside `Prefs` — one record, one timestamp — an older phone would have written
+prefs back with the appearance fields missing, they would have read as defaults, and the next sync
+would have reset the companion to a mint Sprout. The harm this exists to prevent, arriving through
+the door it came to lock. As a separate `Option`, an older phone drops it to `None`, and in the
+merge **absence never wins**: `None` can fail to carry appearance but can never erase it. The cost
+is that while such a phone is in the loop the Drive copy may be written without it, which narrows
+the backup rather than corrupting it — and ends the moment the phone is rebuilt against this core.
+
+**A restored character still waits for its arrival.** The choice is taken as given and written to
+settings, because holding it back would quietly rewrite what somebody picked. What §43 decides is
+what gets *drawn*, and it declines to draw a character that has not arrived and hands it back on the
+day it does. So a restore cannot bypass an arrival, and cannot lose a choice either.
+
+### Deliberately not done
+
+- **The `WM_COPYDATA` command channel stays unauthenticated.** Finding 6 of §37 named it; it is
+  declined, and the argument is the one the review already made. A shipping build answers exactly
+  two verbs, `show` and `quit`, and any process in the session that wanted Pip gone could post
+  `WM_CLOSE` or call `TerminateProcess` without asking Pip's permission. Windows already refuses
+  the message from a lower integrity level, which is the boundary that matters. Authenticating it
+  would mean a shared secret on disk to protect a door that opens onto a corridor anyone can walk.

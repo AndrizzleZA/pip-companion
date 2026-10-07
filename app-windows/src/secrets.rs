@@ -43,23 +43,47 @@ fn unprotect(cipher: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Overwrites a buffer before it is dropped.
+///
+/// `write_volatile` through the pointer, because a plain loop writing bytes that are never read
+/// again is exactly the work an optimiser is entitled to delete. This is the same courtesy the
+/// buffer DPAPI allocates already gets; the copies made from it were going to the allocator
+/// unwiped, leaving refresh tokens and the sync key in freed heap for as long as it stayed unused
+/// (§37). It does not reach copies serde has already made inside the strings it parsed — those
+/// live as long as the map does, which is the life of the process, and chasing them would mean a
+/// secret-string type rather than a `BTreeMap<String, String>`.
+fn wipe(buf: &mut [u8]) {
+    for b in buf.iter_mut() {
+        unsafe { std::ptr::write_volatile(b, 0) };
+    }
+}
+
 pub fn load(dir: &Path) -> BTreeMap<String, String> {
-    std::fs::read(dir.join("secrets.dat"))
-        .ok()
-        .and_then(|c| unprotect(&c))
-        .and_then(|p| serde_json::from_slice(&p).ok())
-        .unwrap_or_default()
+    let Ok(cipher) = std::fs::read(dir.join("secrets.dat")) else { return BTreeMap::new() };
+    let Some(mut plain) = unprotect(&cipher) else { return BTreeMap::new() };
+    let map = serde_json::from_slice(&plain).unwrap_or_default();
+    wipe(&mut plain);
+    map
 }
 
 pub fn save(dir: &Path, map: &BTreeMap<String, String>) -> bool {
-    let Ok(plain) = serde_json::to_vec(map) else { return false };
-    let Some(cipher) = protect(&plain) else { return false };
+    let Ok(mut plain) = serde_json::to_vec(map) else { return false };
+    let cipher = protect(&plain);
+    wipe(&mut plain);
+    let Some(cipher) = cipher else { return false };
     let tmp = dir.join("secrets.dat.tmp");
     std::fs::write(&tmp, cipher).and_then(|_| std::fs::rename(&tmp, dir.join("secrets.dat"))).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wiped_buffer_keeps_nothing() {
+        let mut buf = b"refresh-token-abc123".to_vec();
+        super::wipe(&mut buf);
+        assert!(buf.iter().all(|b| *b == 0), "the plaintext copy must not go to the allocator readable");
+    }
+
     #[test]
     fn roundtrip_and_not_plaintext() {
         let dir = std::env::temp_dir().join(format!("pip-secrets-test-{}", std::process::id()));

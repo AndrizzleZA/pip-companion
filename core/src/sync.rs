@@ -30,11 +30,54 @@ pub struct SyncDoc {
     pub device: String,
     pub updated_at: i64,
     pub prefs: Option<Prefs>,
+    /// What the companion looks like. See [`Appearance`] for why this is its own record and not
+    /// four more fields on `Prefs`.
+    pub appearance: Option<Appearance>,
     pub reminders: Vec<CustomReminder>,
     pub dates: Vec<ImportantDate>,
     /// Records the user deleted: id → when. Keeps them deleted everywhere.
     pub deleted: BTreeMap<String, i64>,
     pub progress: Progress,
+}
+
+/// What the companion looks like, carried so a restore gives back a face and not a stranger's.
+///
+/// **Its own record, deliberately not four more fields on [`Prefs`].** A phone deserialises the
+/// document into these very structs and writes the merged result back, so any field its build does
+/// not know is dropped on the way through. Inside `Prefs` — one record with one timestamp — an
+/// older phone would therefore write prefs back with the appearance fields missing, they would read
+/// as `#[serde(default)]`, and the next sync would reset the companion to a mint Sprout. That is
+/// the exact harm this is meant to prevent, arriving by the door it came to lock.
+///
+/// As a separate `Option`, an older phone drops it to `None`, and `None` never beats `Some` in the
+/// merge below — so a phone that has never heard of appearance cannot erase it, it can only fail to
+/// carry it. The cost is that while such a phone is in the loop the Drive copy may be written
+/// without it, which narrows the backup rather than corrupting it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub updated_at: i64,
+    pub character: crate::settings::Character,
+    pub color: crate::settings::PetColor,
+    pub size: crate::settings::PetSize,
+    pub voice: crate::settings::Voice,
+    pub liveliness: crate::settings::Liveliness,
+    pub theme: crate::settings::Theme,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        let p = crate::settings::PetSettings::default();
+        Appearance {
+            updated_at: 0,
+            character: p.character,
+            color: p.color,
+            size: p.size,
+            voice: p.voice,
+            liveliness: p.liveliness,
+            theme: p.theme,
+        }
+    }
 }
 
 /// Settings that aren't lists: the whole block is one record with one timestamp.
@@ -126,6 +169,15 @@ impl SyncDoc {
                 event_lead_min: settings.dates.event_lead_min,
                 date_keywords: settings.dates.keywords.clone(),
             }),
+            appearance: Some(Appearance {
+                updated_at: settings.prefs_updated_at,
+                character: settings.pet.character,
+                color: settings.pet.color,
+                size: settings.pet.size,
+                voice: settings.pet.voice,
+                liveliness: settings.pet.liveliness,
+                theme: settings.pet.theme,
+            }),
             reminders: settings.reminders.clone(),
             dates: settings.dates.items.clone(),
             deleted: state.sync_deleted.clone(),
@@ -141,6 +193,12 @@ impl SyncDoc {
             device: if other.updated_at > self.updated_at { other.device.clone() } else { self.device.clone() },
             updated_at: newest(self.updated_at, other.updated_at),
             prefs: match (&self.prefs, &other.prefs) {
+                (Some(a), Some(b)) => Some(if b.updated_at > a.updated_at { b.clone() } else { a.clone() }),
+                (a, b) => a.clone().or_else(|| b.clone()),
+            },
+            // Newest wins, but absence never does: a device whose build predates this field sends
+            // `None`, and `None` taking the side it is on would erase the only copy there is.
+            appearance: match (&self.appearance, &other.appearance) {
                 (Some(a), Some(b)) => Some(if b.updated_at > a.updated_at { b.clone() } else { a.clone() }),
                 (a, b) => a.clone().or_else(|| b.clone()),
             },
@@ -221,6 +279,20 @@ impl SyncDoc {
                 settings.dates.event_alerts = p.event_alerts;
                 settings.dates.event_lead_min = p.event_lead_min;
                 settings.dates.keywords = p.date_keywords.clone();
+            }
+        }
+        if let Some(a) = &self.appearance {
+            if a.updated_at >= settings.prefs_updated_at {
+                // The character is taken as chosen, even if it has not arrived here yet. Holding
+                // it back would quietly rewrite somebody's choice; §43 already declines to *draw*
+                // one that has not arrived and gives it back on the day it does, which keeps the
+                // arrival intact without losing what they picked.
+                settings.pet.character = a.character;
+                settings.pet.color = a.color;
+                settings.pet.size = a.size;
+                settings.pet.voice = a.voice;
+                settings.pet.liveliness = a.liveliness;
+                settings.pet.theme = a.theme;
             }
         }
         // Remember the merged tombstones, and forget ones older than three months.
@@ -598,6 +670,7 @@ mod ack_tidying {
             device: "test".into(),
             updated_at: 1_000,
             prefs: None,
+            appearance: None,
             reminders: Vec::new(),
             dates: Vec::new(),
             deleted: deleted.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
@@ -784,5 +857,61 @@ mod join_safety {
         let (theirs, _) = join::new_request(&[8u8; 32], "r2".into(), "Another".into(), 100);
         let sealed = join::grant(&req, &sync_key, &[3u8; 32], &[4u8; 24]).unwrap();
         assert!(join::accept(&theirs, &sealed).is_err());
+    }
+}
+
+#[cfg(test)]
+mod appearance_survives {
+    use super::*;
+    use crate::settings::{Character, PetColor, Settings};
+
+    fn doc_with(face: Option<Appearance>, at: i64) -> SyncDoc {
+        SyncDoc { format: FORMAT, device: "pc".into(), updated_at: at, appearance: face, ..SyncDoc::default() }
+    }
+
+    fn face(character: Character, color: PetColor, at: i64) -> Appearance {
+        Appearance { updated_at: at, character, color, ..Appearance::default() }
+    }
+
+    /// The point of the whole thing: a folder is lost, the document is all that is left.
+    #[test]
+    fn a_restore_gives_back_the_face_that_was_chosen() {
+        let mut fresh = Settings::default();
+        let mut state = State::new(0);
+        state.experience = 60; // everything has arrived
+        doc_with(Some(face(Character::Moth, PetColor::Rose, 500)), 500).apply(&mut fresh, &mut state);
+        assert_eq!(fresh.pet.character, Character::Moth);
+        assert_eq!(fresh.pet.color, PetColor::Rose);
+    }
+
+    /// A phone built before this field existed sends `None`. It must not be able to take the only
+    /// copy of someone's companion with it.
+    #[test]
+    fn a_device_that_never_heard_of_appearance_cannot_erase_it() {
+        let mine = doc_with(Some(face(Character::Moth, PetColor::Rose, 500)), 500);
+        let older_phone = doc_with(None, 900); // newer document, no appearance in it at all
+        assert_eq!(mine.merge(&older_phone).appearance, mine.appearance, "absence must never win");
+        assert_eq!(older_phone.merge(&mine).appearance, mine.appearance, "from either side");
+    }
+
+    #[test]
+    fn between_two_that_have_it_the_newer_wins() {
+        let a = doc_with(Some(face(Character::Tuft, PetColor::Mint, 100)), 100);
+        let b = doc_with(Some(face(Character::Bloom, PetColor::Butter, 200)), 200);
+        assert_eq!(a.merge(&b).appearance.unwrap().character, Character::Bloom);
+        assert_eq!(b.merge(&a).appearance.unwrap().character, Character::Bloom);
+    }
+
+    /// A restore can carry a character this companion has not grown into yet. The choice is kept,
+    /// but §43 still decides what is drawn, so the arrival is not bypassed.
+    #[test]
+    fn a_restored_character_still_waits_for_its_arrival() {
+        let mut fresh = Settings::default();
+        let mut state = State::new(0);
+        state.experience = 3; // Moth arrives at 45
+        doc_with(Some(face(Character::Moth, PetColor::Rose, 500)), 500).apply(&mut fresh, &mut state);
+        assert_eq!(fresh.pet.character, Character::Moth, "what they chose is not rewritten");
+        assert_eq!(fresh.pet.character.shown(state.experience), Character::Sprout, "but it is not drawn yet");
+        assert_eq!(fresh.pet.character.shown(45), Character::Moth, "and it arrives on its own day");
     }
 }
