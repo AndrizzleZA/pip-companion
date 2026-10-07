@@ -1086,3 +1086,78 @@ binary and symbols, and reproduce or debug against them — rather than guessing
 builds the person was running. Making a stranger's stack readable needs raw frame addresses and the
 module base in the report, which `std::backtrace` does not expose on stable; that means taking on
 the `backtrace` crate, and it should wait until a real report proves the location line insufficient.
+
+## 37. Security review, 2026-10-07
+
+The Phase 6 item. Covered: where the Google tokens live, the sync key and how it reaches a second
+device, the encrypted Drive document, and what a stolen state file would give away. Read against the
+code and checked against the running install, not from memory.
+
+### What holds up
+
+**The scopes are minimal, and they are what actually enforces the privacy claim.** Gmail is
+`gmail.metadata`, which cannot return a message body at all — the promise that Pip never reads your
+mail is kept by Google's API, not by Pip's good manners. Calendar is `calendar.readonly`. Drive is
+`drive.appdata`, which reaches Pip's own folder and no other file the person owns.
+
+**The sign-in flow is correct.** PKCE with S256 over a 32-byte verifier, a 16-byte `state` checked
+before either a code or an error is accepted, a loopback redirect on an ephemeral port, https
+enforced (plain http only for a local mock, and only in devtools builds), and an authority
+containing `@` rejected so a crafted link cannot disguise its host. WinHTTP is called with
+`WINHTTP_FLAG_SECURE` and nothing anywhere relaxes certificate validation.
+
+**The sync document is properly sealed.** XChaCha20-Poly1305, a fresh 24-byte random nonce stored
+alongside, `pip-sync-v1` as associated data, and tampering or a wrong key is an error rather than
+garbage. Adding a device is X25519 with the shared secret hashed under a domain separator — not a
+short typed code, which is the usual weak point and is absent here.
+
+**Nothing secret reaches the log.** Every line written is a fixed string, a file name, or Google's
+own OAuth error code and description. No token, address or subject appears, including on the crash
+path added in §34.
+
+### What should change
+
+**1. The random number generator's failure is silent.** `random_bytes` ignores the status from
+`BCryptGenRandom` and returns its zero-filled buffer if the call fails. That buffer becomes the sync
+key, the nonces, the X25519 secrets and the PKCE verifier. `sha256` ignores `BCryptHash` the same
+way. The system-preferred RNG failing is close to unthinkable, which is exactly why nobody would
+notice it: the result is not an error but a key of all zeros. These must fail loudly.
+
+**2. A low-order public key is not rejected.** `join::shared` calls `diffie_hellman` and hashes the
+result without asking `was_contributory()`. A join request carrying a low-order point makes the
+approving device derive a wrap key the attacker can predict, so the sealed grant — which contains
+the sync key — can be opened by them. It is a chained attack: it needs write access to the person's
+Drive app folder *and* the person tapping Approve on a device they do not recognise. The check is
+one line and should be there regardless.
+
+**3. What a stolen state file gives away is more than it looks.** `state.json` holds `mail_pending`:
+sender names, sender addresses and subject lines of important mail not yet acknowledged — three
+entries on the live install while writing this. `settings.json` holds reminder titles and the
+connected account's address. Both are plaintext. The copy that travels to Drive is encrypted; the
+copy sitting on the disk is not, which is the wrong way round, since the disk is where it stays.
+
+**4. On this machine that file is not even hard to reach.** `%APPDATA%\Pip` inherits an ACL from
+`AppData\Roaming` granting `CodexSandboxUsers` — two local accounts, `CodexSandboxOffline` and
+`CodexSandboxOnline` — read access. `secrets.dat` resists them, being DPAPI-bound to this user, but
+the plaintext above does not. Pip did not cause this and cannot assume it is unusual; writing its
+own folder with inheritance disabled and only this user on it would close it wherever it happens.
+
+**5. DPAPI is as strong as the account, and the docs oversell it.** Anything running as this Windows
+user can call `CryptUnprotectData` with the entropy constant compiled into the binary and read every
+token. That is inherent to DPAPI and the right trade for an app with no password of its own — but
+§4 claims "Windows Credential Manager (DPAPI), never in our files", and the Credential Manager is
+not used anywhere. Everything is in `secrets.dat`. The two are about equally strong, so this is a
+documentation defect rather than a weakness, but it is the kind that makes a reader doubt the rest.
+The UI's own wording — "stored encrypted for your Windows account on this PC" — is accurate.
+
+**6. Smaller things.** Decrypted plaintext is copied into a `Vec` and dropped without being wiped,
+so secrets linger in freed heap. The `WM_COPYDATA` command channel is unauthenticated, though a
+shipping build only answers `show` and `quit`, which any process in the session could achieve
+anyway. `join::accept` does not check that a grant came from a device that really held the key, so a
+forged grant costs a wrong key rather than a disclosure. And `join::shared` hashes only the shared
+point, not both public keys, which is the usual hardening against unknown key-share.
+
+### Not covered
+
+The Android side, token revocation on disconnect, and the update mechanism, which does not exist
+yet. Each wants its own pass.
