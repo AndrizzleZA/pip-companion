@@ -285,7 +285,17 @@ impl App {
         if !self.dev_mode {
             platform::set_autostart(self.settings.pet.start_with_system);
         }
-        if self.first_run {
+        // Before the greeting, not after: a blocked load looks exactly like a first run — no
+        // settings, no state — and welcoming someone to a fresh start on top of data that is still
+        // on disk is the most misleading thing Pip could do here.
+        if self.store.blocked() {
+            let (t, b) = messages::cannot_read_its_own_files(&self.settings.pet.name);
+            let mut card = Card::new(BubbleKind::Message).line(b, false);
+            card.title = Some(t);
+            card.buttons.push(("I understand".into(), Action::Close, BtnStyle::Primary));
+            self.pet.show_bubble(card);
+            self.set_timer(T_BUBBLE, 120_000);
+        } else if self.first_run {
             let (t, b) = messages::first_run(&self.settings.pet.name);
             let mut card = Card::new(BubbleKind::Message).line(b, false);
             card.title = Some(t);

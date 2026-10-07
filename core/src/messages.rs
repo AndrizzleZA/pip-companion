@@ -146,6 +146,18 @@ pub fn growth_label(experience: u32) -> String {
     format!("{stage} \u{00B7} {days}")
 }
 
+/// Shown at startup when a file exists but will not open: no permission, a lock, a failing disk.
+///
+/// It has to say three things and no more - that nothing was lost, that nothing is being saved,
+/// and that the person has not done anything wrong - because the one thing they must not do is
+/// start setting everything up again on top of data that is still there.
+pub fn cannot_read_its_own_files(name: &str) -> (String, String) {
+    (
+        format!("{name} can't read its own files"),
+        "Your settings and history are still there, but something on this PC is keeping me from opening them, most often a permissions change. Nothing has been lost, and I won't save over anything until I can read them again.".to_string(),
+    )
+}
+
 /// Said once, when a companion reaches a new stage.
 pub fn grew_up(stage: u8, name: &str) -> String {
     match stage {
@@ -167,6 +179,14 @@ mod growth_labels {
         assert_eq!(growth_label(44), "Growing up \u{00B7} 44 good days");
         assert_eq!(growth_label(45), "Fully grown \u{00B7} 45 good days");
         assert_eq!(growth_label(900), "Fully grown \u{00B7} 900 good days");
+    }
+
+    #[test]
+    fn the_unreadable_warning_never_blames_the_person_or_claims_a_loss() {
+        let (title, body) = cannot_read_its_own_files("Tuft");
+        assert_eq!(title, "Tuft can't read its own files");
+        assert!(body.contains("still there"), "it must say the data survives");
+        assert!(body.contains("won't save over"), "and that nothing will be written over it");
     }
 
     #[test]

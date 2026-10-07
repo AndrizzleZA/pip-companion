@@ -3,9 +3,12 @@
 use pip_core::{Settings, State};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Storage {
     pub dir: PathBuf,
+    /// Set when a file existed but would not open. While it is set, nothing is written.
+    blocked: AtomicBool,
 }
 
 /// Takes the data folder off every account but this one, once.
@@ -81,7 +84,7 @@ impl Storage {
             .unwrap_or_else(|| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&dir);
         lock_to_this_user(&dir);
-        Storage { dir }
+        Storage { dir, blocked: AtomicBool::new(false) }
     }
 
     pub fn is_custom_dir() -> bool {
@@ -125,8 +128,24 @@ impl Storage {
                     (T::default(), false)
                 }
             },
-            Err(_) => (T::default(), false),
+            // The file isn't there: a first run, or a setting never saved. Defaults are right.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (T::default(), false),
+            // The file is there and will not open — no permission, a lock, a failing disk. This is
+            // emphatically not the same as having no data, and treating it as such is how §38
+            // destroyed a real install: defaults in memory, then saved straight over the file
+            // nobody could read. Refuse to write anything from here on instead.
+            Err(e) => {
+                self.blocked.store(true, Ordering::Relaxed);
+                self.log(&format!("{name} is there but could not be read ({e}); nothing will be saved over it"));
+                (T::default(), false)
+            }
         }
+    }
+
+    /// True when a file existed and could not be read, so saving is off. What is in memory are
+    /// defaults, and writing them would destroy whatever could not be opened.
+    pub fn blocked(&self) -> bool {
+        self.blocked.load(Ordering::Relaxed)
     }
 
     pub fn save_settings(&self, s: &Settings) {
@@ -138,6 +157,11 @@ impl Storage {
     }
 
     fn save<T: serde::Serialize>(&self, name: &str, v: &T) {
+        // Something here could not be read, so what is in memory may be defaults standing in for
+        // real data. Writing them would be the destructive act, not the cautious one.
+        if self.blocked() {
+            return;
+        }
         let Ok(json) = serde_json::to_vec_pretty(v) else { return };
         let target = self.path(name);
         let tmp = target.with_extension("json.tmp");
@@ -167,5 +191,65 @@ impl Storage {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+}
+
+#[cfg(test)]
+mod unreadable_is_not_absent {
+    use super::*;
+
+    fn store(dir: &Path) -> Storage {
+        Storage { dir: dir.to_path_buf(), blocked: AtomicBool::new(false) }
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("pip-unreadable-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A file that is simply not there is an ordinary first run: defaults, and saving is fine.
+    #[test]
+    fn a_missing_file_is_still_just_a_fresh_start() {
+        let d = scratch("missing");
+        let s = store(&d);
+        let (_, existed): (State, bool) = s.load("state.json");
+        assert!(!existed);
+        assert!(!s.blocked(), "nothing was unreadable, so saving must stay on");
+        s.save_state(&State::new(0));
+        assert!(d.join("state.json").is_file(), "and a first run does write its state");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A file that exists and will not open must not be mistaken for one that isn't there.
+    /// A directory standing where the file belongs is the portable way to force that error.
+    #[test]
+    fn a_file_that_will_not_open_stops_every_save() {
+        let d = scratch("blocked");
+        std::fs::create_dir_all(d.join("state.json")).unwrap();
+        let s = store(&d);
+        let (_, existed): (State, bool) = s.load("state.json");
+        assert!(!existed, "nothing could be loaded");
+        assert!(s.blocked(), "but it must know the difference between that and an empty folder");
+
+        s.save_state(&State::new(0));
+        s.save_settings(&Settings::default());
+        assert!(d.join("state.json").is_dir(), "the unreadable thing is left exactly as it was");
+        assert!(!d.join("settings.json").exists(), "and nothing else is written either");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Unparseable is a different case and keeps its old behaviour: quarantine, then start fresh.
+    #[test]
+    fn nonsense_in_a_file_is_still_quarantined_rather_than_locking_saves() {
+        let d = scratch("corrupt");
+        std::fs::write(d.join("state.json"), b"this is not json").unwrap();
+        let s = store(&d);
+        let (_, existed): (State, bool) = s.load("state.json");
+        assert!(!existed);
+        assert!(!s.blocked(), "a readable file we cannot parse is recoverable, so saving stays on");
+        assert!(d.join("state.json.corrupt").is_file(), "the original is kept for inspection");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

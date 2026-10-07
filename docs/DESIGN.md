@@ -1213,3 +1213,37 @@ folder and undid the hardening. It is still undone.
 works, and shipped to a folder with eight files in it, where it does not. Pre-existing files were
 the entire point of the change — the inherited permissions being removed were on files that already
 existed.
+
+## 39. A file that will not open is not a file that is not there, 2026-10-07
+
+The defect behind §38. `load` read a file, and anything that went wrong on the way — any `Err` at
+all — became "no data, use defaults", which the caller then saved. For a first run that is exactly
+right. For a file that exists and will not open, it is the destructive answer to a recoverable
+problem, and it is what turned a bad permission change into lost settings.
+
+The two cases are now separated at the only place that can tell them apart. `ErrorKind::NotFound`
+is an ordinary fresh start. Every other error — no permission, a lock, a failing disk — sets a flag
+that turns off saving entirely, for every file, until Pip is restarted and can read them again.
+Nothing in memory is trustworthy in that state: it is defaults standing in for data that is still on
+the disk, and writing it is the only way to actually lose anything.
+
+Unparseable is a third case and keeps its old behaviour: the file is readable, so it can be moved
+aside as `.corrupt` and reported, and starting fresh after that loses nothing that was not already
+broken.
+
+The person is told, in the one place they will see it — a bubble, before anything else, because a
+blocked load looks exactly like a first run from the inside and greeting someone as new while their
+data sits unreadable on the disk is the most misleading thing Pip could do. The wording says the
+data is still there, that nothing is being saved over it, and that they have not broken anything,
+because the harmful response would be to set everything up again on top of it.
+
+Three tests hold the distinction: a missing file still starts fresh and still saves; a file that
+will not open stops every save and leaves the file exactly as it was; nonsense in a readable file is
+still quarantined and does not lock saving. They force the unreadable case with a directory standing
+where the file belongs, which is the portable way to get an error that is not `NotFound`. It was
+also checked for real, with a file denied by ACL — the §38 scenario exactly — where the old build
+would have overwritten both files and the new one leaves them untouched and says why.
+
+One thing that caught: the message first used an em dash, which the bubble font has no glyph for, so
+it rendered as `(2014)`. It was the first em dash in `messages.rs` — found by looking at the bubble
+rather than at the string.
