@@ -1281,3 +1281,44 @@ something away. This breaks that rule knowingly, because the alternative is leav
 characters as the same drawing, and it was asked for by the person it happens to. It should not
 become a habit: once anyone else is using Pip, reshaping a character they chose needs a better
 answer than this one.
+
+## 41. Two more creatures, and the row that had to wrap, 2026-10-07
+
+A character is a `Body` — eight numbers — and a `Crown`, and the bodies are symmetric blobs, so the
+body only sets proportions and the crown is what makes it a different animal. New characters
+therefore need new crowns or they arrive as siblings of the ones already here, which is exactly how
+Tuft spent its first weeks being a recoloured Sprout (§40).
+
+**Bloom** is a small round body under a ring of six petals with a dot of pollen, and it is the only
+crown in the cast that is not green or ink: colour alone separates it across a desktop. The first
+version sat the ring at the crown point and it read as a flower *badge* stuck on a forehead — the
+petals have to be wider than the head they sit on, and sit above it, or the body is just round. The
+shadow is wider than `half × 0.72` for the same reason: the petals overhang.
+
+**Moth** is the smallest of the six, with two jointed stalks and a knob on each tip. The knobs are
+load-bearing. Crowns scale to 0.40 at the first stage, which takes a 2.8-wide stalk under a pixel —
+a stroke that thin greys out to nothing, while a filled knob only gets smaller. Both crowns are
+drawn as fills rather than outlines for that reason, and both were checked as babies rather than
+assumed: Bloom's flower becomes a bud and Moth's antennae become two dark specks, which is the same
+language as Sprout's stub and Tuft's three nubs.
+
+**An honest limit.** Bloom and Moth have nearly the same body — 53×54 against 49×48, both round —
+and are told apart entirely by their crowns. That is within how this is built, and at a glance a
+pink flower and a pair of dark antennae are not confusable, but it does mean the cast now has one
+body shape doing double duty. The next character to arrive should take a proportion none of them
+have rather than a sixth round one.
+
+**The settings row.** One segmented control is sized by its own labels, so the characters were going
+to run back over their description: six on a line is 309 wide and would start at x=415, while the
+hint text runs to x=432. They wrap four to a line now, each line its own right-aligned control, and
+a line not holding the current character simply shows nothing selected — which is what an
+out-of-range index already did. A test pins this at 100%, 125% and 150%: every width here is a
+constant times `s` and the window itself is created at `LOGICAL_W * s`, so fitting at one scale is
+fitting at all of them, but that argument only holds while it holds.
+
+**An unknown character no longer costs every setting.** `Character` derived `Deserialize`, so a name
+this build does not know failed the whole file — and `load` moves an unparseable file aside as
+`.corrupt` and starts from defaults, so one unrecognised word took someone's reminders and quiet
+hours with it. It now reads as Sprout. The cost is that the unknown name is then saved as "sprout",
+so going back to a newer build will not restore the choice; keeping the raw string is the better
+answer the day more than one version is in the wild.

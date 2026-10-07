@@ -52,6 +52,10 @@ pub enum Crown {
     /// Pointed ears, also behind.
     CatEars,
     Tuft,
+    /// A ring of small petals around the crown point. On top, so they overlap the head.
+    Petals,
+    /// Two thin jointed stalks with a knob on each tip.
+    Antennae,
 }
 
 impl Crown {
@@ -200,6 +204,43 @@ pub fn shape_of(who: Character) -> Shape {
             crown_y: 29.0,
             ear: (8.5, 33.0),
             acc: (74.0, 28.0),
+        },
+        // A small round body under a wide ring of petals, so the crown carries the shape rather
+        // than the outline. The shadow is wider than half × 0.72 on purpose: the petals overhang.
+        Character::Bloom => Shape {
+            crown: Crown::Petals,
+            body: Body { top: 40.0, bottom: 93.0, half: 27.0, widest: 72.0, shoulder: 17.0, hip: 17.0, flank_hi: 56.0, flank_lo: 86.0 },
+            eye_y: 64.0,
+            eye_dx: 9.0,
+            mouth_y: 74.0,
+            belly: (79.0, 15.0, 10.5),
+            shine: (37.0, 54.0),
+            shine2: (45.0, 48.0),
+            blush: (16.0, 74.5),
+            arm: (22.5, 67.0),
+            foot: (9.5, 91.0),
+            shadow_rx: 24.0,
+            crown_y: 41.0,
+            ear: (10.0, 44.0),
+            acc: (75.0, 40.0),
+        },
+        // The smallest of the set: a low, narrow body that leaves the antennae room to read.
+        Character::Moth => Shape {
+            crown: Crown::Antennae,
+            body: Body { top: 44.0, bottom: 93.0, half: 24.0, widest: 74.0, shoulder: 15.0, hip: 16.0, flank_hi: 58.0, flank_lo: 87.0 },
+            eye_y: 66.0,
+            eye_dx: 8.0,
+            mouth_y: 76.0,
+            belly: (79.0, 13.0, 10.0),
+            shine: (39.0, 58.0),
+            shine2: (45.5, 52.0),
+            blush: (14.5, 76.5),
+            arm: (20.0, 69.0),
+            foot: (8.5, 91.0),
+            shadow_rx: 17.0,
+            crown_y: 45.0,
+            ear: (9.0, 48.0),
+            acc: (72.0, 44.0),
         },
     }
 }
@@ -495,6 +536,9 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
 
 const INK: u32 = 0x2A2A3A;
 const LEAF: u32 = 0x4FA86A;
+/// Bloom's petals and the dot of pollen at their centre.
+const PETAL: u32 = 0xF3B9D4;
+const POLLEN: u32 = 0xF7D774;
 const WATER: u32 = 0x4DB3F2;
 
 /// Draws the creature. `base` maps design space (0..100) into the target pixmap.
@@ -588,6 +632,8 @@ fn draw_crown(pm: &mut PixmapMut, t: Transform, s: &Shape, sway: f32) {
     match s.crown {
         Crown::Leaf => draw_sprout(pm, t, s.crown_y, sway),
         Crown::Tuft => draw_tuft(pm, t, s.crown_y, sway),
+        Crown::Petals => draw_petals(pm, t, s.crown_y, sway),
+        Crown::Antennae => draw_antennae(pm, t, s.crown_y, sway),
         // Ears were already drawn, behind the body.
         c if c.behind() => {}
         _ => {}
@@ -642,6 +688,40 @@ fn draw_tuft(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
         pb.move_to(0.0, 0.0);
         pb.quad_to(dx * 0.4, -len * 0.6, dx * 0.9, -len);
         stroke_path(pm, pb.finish(), color(INK, 0.85), 2.0, top.pre_concat(Transform::from_rotate(lean + sway * 0.6)));
+    }
+}
+
+/// A ring of petals, drawn as filled circles about the crown point.
+///
+/// Circles rather than strokes because the whole crown is scaled to 0.40 at the first stage: a
+/// stroked outline thins to under a pixel and greys out, while a filled shape only gets smaller.
+fn draw_petals(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
+    // Above the head, not on it. Sitting it at the crown point made a badge on the forehead; the
+    // flower has to be wider than the head it sits on or Bloom is just a round body with a sticker.
+    let top = t.pre_translate(CX, crown_y - 3.0).pre_concat(Transform::from_rotate(sway * 0.5));
+    const PETALS: usize = 6;
+    for i in 0..PETALS {
+        let a = (i as f32 / PETALS as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let (x, y) = (a.cos() * 11.0, a.sin() * 11.0);
+        fill_path(pm, ellipse_path(x, y, 6.2, 6.2), color(PETAL, 1.0), top);
+    }
+    fill_path(pm, ellipse_path(0.0, 0.0, 4.4, 4.4), color(POLLEN, 1.0), top);
+}
+
+/// Two jointed stalks with a knob on each tip.
+///
+/// The knobs are what make this survive growing up: at 0.40 the stalks are under a pixel wide and
+/// nearly gone, and without something solid on the end a baby Moth would read as having nothing on
+/// its head at all.
+fn draw_antennae(pm: &mut PixmapMut, t: Transform, crown_y: f32, sway: f32) {
+    let top = t.pre_translate(CX, crown_y - 0.5);
+    for dir in [-1.0f32, 1.0] {
+        let at = top.pre_concat(Transform::from_rotate(dir * 24.0 + sway * 0.6));
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        pb.quad_to(dir * 3.0, -7.0, dir * 4.5, -13.0);
+        stroke_path(pm, pb.finish(), color(INK, 0.85), 2.8, at);
+        fill_path(pm, ellipse_path(dir * 4.5, -13.0, 3.3, 3.3), color(INK, 0.85), at);
     }
 }
 

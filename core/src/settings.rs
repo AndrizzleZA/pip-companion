@@ -46,7 +46,7 @@ impl Default for Settings {
 
 /// Which little creature this is. Only the crown differs — the body, the animations and the
 /// expressions are shared, so a character costs a few lines of drawing and nothing at runtime.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Character {
     /// The original: a stem with two leaves.
@@ -54,10 +54,38 @@ pub enum Character {
     Bunny,
     Kit,
     Tuft,
+    /// A small body under a wide ring of petals.
+    Bloom,
+    /// The smallest, with antennae.
+    Moth,
+}
+
+/// A character this build has never heard of reads as Sprout.
+///
+/// The derived version failed the whole file on an unknown name, and one unparseable field costs
+/// every setting: `load` moves the file aside as `.corrupt` and starts from defaults. A companion
+/// added by a newer Pip, or a hand-edited name, is not worth someone's reminders and quiet hours.
+///
+/// What this does cost is the unknown name itself — it becomes "sprout" the next time settings are
+/// saved, so going back to the newer build will not restore the choice. Keeping the raw string
+/// would avoid that and is the better answer the day more than one version is in the wild.
+impl<'de> Deserialize<'de> for Character {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        Ok(match name.as_str() {
+            "bunny" => Character::Bunny,
+            "kit" => Character::Kit,
+            "tuft" => Character::Tuft,
+            "bloom" => Character::Bloom,
+            "moth" => Character::Moth,
+            _ => Character::Sprout,
+        })
+    }
 }
 
 impl Character {
-    pub const ALL: [Character; 4] = [Character::Sprout, Character::Bunny, Character::Kit, Character::Tuft];
+    pub const ALL: [Character; 6] =
+        [Character::Sprout, Character::Bunny, Character::Kit, Character::Tuft, Character::Bloom, Character::Moth];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -65,6 +93,8 @@ impl Character {
             Character::Bunny => "Bunny",
             Character::Kit => "Kit",
             Character::Tuft => "Tuft",
+            Character::Bloom => "Bloom",
+            Character::Moth => "Moth",
         }
     }
 }
@@ -487,6 +517,24 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_character_this_build_has_never_heard_of_reads_as_sprout() {
+        // The whole file used to fail on this, and one bad field costs every setting: storage
+        // moves it aside as .corrupt and starts from defaults.
+        let s: super::Settings = serde_json::from_str(r#"{"pet":{"character":"wyvern","name":"Zed"}}"#)
+            .expect("an unknown character must not fail the file");
+        assert_eq!(s.pet.character, super::Character::Sprout);
+        assert_eq!(s.pet.name, "Zed", "and the rest of the settings survive it");
+    }
+
+    #[test]
+    fn every_character_still_round_trips() {
+        for who in super::Character::ALL {
+            let json = serde_json::to_string(&who).unwrap();
+            assert_eq!(serde_json::from_str::<super::Character>(&json).unwrap(), who, "{json}");
+        }
+    }
+
     use super::*;
 
     #[test]

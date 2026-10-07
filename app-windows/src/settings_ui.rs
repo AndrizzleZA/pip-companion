@@ -446,10 +446,19 @@ impl App {
         let growth = pip_core::messages::growth_label(self.state.experience);
         c.row("Growing up", Some(&growth));
 
-        let cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
-        let sel = Character::ALL.iter().position(|x| *x == p.character).unwrap_or(0);
-        let labels: Vec<&str> = Character::ALL.iter().map(|x| x.label()).collect();
-        c.segmented(cy, &labels, sel, Character::ALL.iter().map(|x| UiAct::Who(*x)).collect());
+        // More characters than fit on one line: a single control is sized by its labels, so it
+        // would have run off the left and over the description. Four to a line, each line its own
+        // control right-aligned like every other one. A line that does not hold the current
+        // character shows nothing selected, which is what an out-of-range index already does.
+        let mut cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
+        for (i, chunk) in Character::ALL.chunks(4).enumerate() {
+            if i > 0 {
+                cy = c.row("", None);
+            }
+            let labels: Vec<&str> = chunk.iter().map(|x| x.label()).collect();
+            let sel = chunk.iter().position(|x| *x == p.character).unwrap_or(usize::MAX);
+            c.segmented(cy, &labels, sel, chunk.iter().map(|x| UiAct::Who(*x)).collect());
+        }
 
         let cy = c.row("Voice", Some("Played with reminders; tap one to hear it"));
         let sel = Voice::ALL.iter().position(|x| *x == p.voice).unwrap_or(0);
@@ -1970,3 +1979,53 @@ fn section_label(c: &mut Ctx, label: &str) {
     text::draw(c.pm, &fonts().semibold, 11.0 * s, c.x0, c.y, c.pal.muted, 1.0, label);
 }
 
+
+#[cfg(test)]
+mod character_row_fits {
+    use super::*;
+
+    /// The content column, in the same units everything else here is drawn in.
+    fn content(s: f32) -> (f32, f32) {
+        let x0 = (SIDEBAR_W + 36.0) * s;
+        let x1 = LOGICAL_W as f32 * s - 36.0 * s;
+        (x0, x1)
+    }
+
+    /// Every width in this window is a constant times `s` — the window itself is created at
+    /// `LOGICAL_W * s` — so a row that fits at 100% fits at every scaling. The three scales are
+    /// checked anyway, because that argument is only true while it stays true.
+    #[test]
+    fn the_characters_fit_beside_their_own_label() {
+        let f = fonts();
+        for s in [1.0f32, 1.25, 1.5] {
+            let (x0, x1) = content(s);
+            let hint = text::width(&f.regular, 12.0 * s, "Who your companion is — the rest stays the same");
+            for (i, chunk) in Character::ALL.chunks(4).enumerate() {
+                let labels: Vec<&str> = chunk.iter().map(|x| x.label()).collect();
+                let w = ui::segmented_width(&labels, s);
+                // The first line shares its row with the label and hint; the rest have the row to
+                // themselves and only have to stay inside the column.
+                let left = if i == 0 { x0 + hint + 12.0 * s } else { x0 };
+                assert!(
+                    x1 - w >= left,
+                    "at {s}x, character line {i} ({labels:?}) is {:.0}px too wide and would run back over the text",
+                    left - (x1 - w)
+                );
+            }
+        }
+    }
+
+    /// Why the wrapping exists. Six on one line is 309 wide and would start at 415, while the hint
+    /// text runs to 432 - a seventeen-pixel collision, and worse with every character added.
+    #[test]
+    fn one_line_of_every_character_would_run_back_over_the_hint() {
+        let f = fonts();
+        let labels: Vec<&str> = Character::ALL.iter().map(|x| x.label()).collect();
+        let (x0, x1) = content(1.0);
+        let hint = x0 + text::width(&f.regular, 12.0, "Who your companion is — the rest stays the same");
+        assert!(
+            x1 - ui::segmented_width(&labels, 1.0) < hint,
+            "they all fit on one line beside the hint now, so the wrapping can go"
+        );
+    }
+}
