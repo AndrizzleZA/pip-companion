@@ -13,17 +13,20 @@
   a folder named after that commit, with a manifest recording what it is.
 
   The archive lives outside the repository by default: it is binary, it is large, and nothing in
-  git should be able to delete it.
+  git should be able to delete it. The default is <drive of the repo>\pip-symbols rather than a
+  folder beside the repo, because the folder holding this project denies creating anything new in
+  it, and because the project's own drive is the one with room for it.
 
   Usage:  powershell -ExecutionPolicy Bypass -File tools\archive-symbols.ps1 [-To <dir>] [-Force]
 #>
 param(
-    [string]$To = "$PSScriptRoot\..\..\pip-symbols",
+    [string]$To,
     [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path "$PSScriptRoot\.."
+if (-not $To) { $To = Join-Path ([System.IO.Path]::GetPathRoot($repo)) "pip-symbols" }
 
 # A dirty tree cannot be archived honestly: the commit would name source that is not what was
 # built, which is worse than having no symbols at all, because it looks authoritative.

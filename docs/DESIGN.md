@@ -1071,7 +1071,10 @@ with that stamp and copies the executable, its symbols and a manifest — commit
 and SHA-256 of the exe — into a folder named after the commit.
 
 The archive sits outside the repository. It is binary, it is eleven megabytes a build, and nothing
-in git should be able to remove it. A dirty tree is refused rather than archived, because a commit
+in git should be able to remove it. It goes to the repo drive's root rather than
+alongside the repo, because the folder holding this project refuses to have anything new created
+in it - which is also why the first attempt to archive quietly produced nothing - and because that
+drive is the one with room to spare. A dirty tree is refused rather than archived, because a commit
 that does not describe what was built is worse than no record at all: it looks authoritative and
 sends you to the wrong source. `-Force` archives it as `<commit>-dirty` for when that is what you
 actually want.
