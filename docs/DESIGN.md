@@ -151,36 +151,35 @@ limited to a few short runs per day; battery attribution "negligible".
 
 ## 6. Roadmap
 
-**Phase 1 — MVP (desktop foundation)** ← current
-- Procedural creature with expressions and event-driven animations (blink, hop, wave, celebrate,
-  drink, look-around, nap/wake).
-- Layered desktop window: drag, remembered position, optional always-on-top, hide to tray.
-- Tray icon + native menu; single instance; start with Windows.
-- Time on hover/click (info card); optional mini clock that ticks once a minute.
-- Reminder engine: hydration (interval since last drink, active window, days, daily goal) and custom
-  reminders (time + repeat days, important flag, missed-while-off).
-- Notification policy: priorities, quiet hours, DND (1 h / until tomorrow), snooze, dismiss, complete,
-  pause during fullscreen apps, hold while locked.
-- Mood from hydration progress and interaction; gentle rotating copy.
-- Custom-drawn settings (Pet, Water, Reminders, Quiet, About/diagnostics), applied instantly.
-- Measurement script; targets verified.
+**Phase 1 — MVP (desktop foundation)** — complete (§8). Procedural creature, layered desktop
+window, tray, reminder engine, notification policy, mood, custom-drawn settings, measured targets.
 
-**Phase 2 — Dates & calendar**: important dates (birthdays, anniversaries, deadlines) with lead time;
-public holidays computed offline (South Africa first, pluggable); ICS/webcal subscriptions with
-ETag/If-Modified-Since every 30–60 min (works with Google secret address, iCloud, Outlook); Google
-Calendar (syncToken) and Microsoft Graph (delta) via OAuth PKCE; important vs informational; agenda card.
+**Phase 2 — Dates & calendars** — complete (§9, §13). Birthdays, anniversaries and deadlines with
+lead time; South African public holidays offline; Google Calendar read-only. iCloud and generic
+.ics were removed in §14 — Apple offers no OAuth, and app-specific passwords are not one click.
 
-**Phase 3 — Email**: OAuth PKCE, refresh token in Credential Manager; IMAP IDLE push; headers only;
-local rules (sender, domain, keywords, flagged, combinations); discreet notifications.
+**Phase 3 — Email** — complete (§10, §22). Gmail metadata only — sender, subject, labels, never
+contents; local rules; "Always from this sender" in one click.
 
-**Phase 4 — Mobile + sync**: UniFFI bindings; Android (Compose + Glance widget + AlarmManager);
-iOS (SwiftUI + WidgetKit + local notifications); local-first sync with per-record `updated_at`,
-last-writer-wins per field, tombstones. Transport chosen then — preference for the user's own cloud
-app-folder (no server of ours holding personal data).
+**Phase 4 — Phone + sync** — complete (§17, §18, §19, §20, §26). Android (Compose, AlarmManager,
+boot receiver) over a small JNI bridge to pip-core; local-first sync through one encrypted file in
+the user's own Google Drive app folder; joining a device is one Approve tap.
+*Not UniFFI* — the bridge is eight calls, and a hand-written JNI shim was smaller (§19).
+*No iOS* — dropped (§33).
 
-**Phase 5 — Polish**: customisation (colours, accessories, variants), personality presets, more
-animations, per-user installer, signed binary, opt-in update check, local crash log, security review,
-accessibility, final polish.
+**Phase 5 — The companion itself** — complete (§16, §28–§32). Per-user install without an
+installer; choosing a character; one drawing shared by every creature; growing up earned through
+good days, with an upgrade that never makes an existing companion younger.
+
+**Phase 6 — Ready for someone else** ← current
+The gate between "it works on my machine" and "I can hand this to a person who is not me."
+- Local crash log — a stranger's problem cannot be diagnosed without one.
+- Security review — the Google tokens in Credential Manager, the sealed sync key, the encrypted
+  Drive document, and what a stolen state file would reveal.
+- Signed binary — unsigned, SmartScreen frightens every first-time user out of running it.
+- Opt-in update check — once anyone else has it, there must be a way to ship a fix.
+- Accessibility — keyboard reach and screen-reader naming for the settings window.
+- Final polish: personality presets, more animations.
 
 ## 7. Guiding rules
 
