@@ -977,6 +977,17 @@ minimum 45 calendar days, and realistically two or three months. Many companions
 fully grown. 0/10/30 would put the last stage inside a month for someone using it daily, and is a
 one-line change if that reads better in practice.
 
+**Settled on 2026-10-08: they stay at 15 and 45**, and the reservation above was wrong about the
+arithmetic. It assumed a good day would be rare. The first real companion earned sixteen of them in
+sixteen calendar days — one every day, because meeting the water goal *or* any moment together
+counts, and a day with neither is rare for someone who has the thing on their desktop. Fully grown
+is about a month away at that rate, not two or three.
+
+There is also a convergence worth keeping now that characters arrive (§43): Moth arrives at 45 and
+the last stage lands at 45, so the final character turns up on the same day the companion finishes
+growing. Under 0/10/30 that splits — fully grown at 30, with something still to come at 45 — which
+makes the arrival read as an afterthought rather than as the end of the arc.
+
 ## 32. The upgrade must not make anyone's companion younger, 2026-10-06
 
 §31 was correct and still shipped a regression: a state file written before it has no experience, so
@@ -1466,3 +1477,27 @@ What follows from it:
 
 The honest summary is that iOS was dropped for a recurring bill, not for a technical reason, and it
 is worth the design saying so plainly rather than implying the platform was found wanting.
+
+- **`join::shared` keeps hashing only the shared point, and `join::accept` keeps trusting the
+  grant.** The last two of §37's finding 6, declined on 2026-10-08.
+
+  Both defend the step where a new device is let in, and both attacks need the same thing first:
+  the ability to write into the person's own Drive app folder. That means already being inside
+  their Google account — at which point the mail, the calendar and the sync document's hiding place
+  are all available directly, and the sync key is the least of what has been lost. Binding both
+  public keys into the hash is the textbook hardening against unknown key-share, but the attack it
+  would have to stop here is an attacker substituting their *own* public key into a join request,
+  and binding does not prevent that: their key is bound just as honestly as anyone's. Authenticating
+  the granter turns a forged grant from "this device adopts a key that does not work" into "this
+  device refuses it", which is a denial of service someone could only mount against themselves.
+
+  Against no reachable benefit sits a real cost. Both change what the two sides hash, so a PC and a
+  phone that are not rebuilt together can no longer pair at all — and the Android app in the field
+  was built against the current handshake. It is surgery on working cryptography to close a door
+  that opens onto a corridor the attacker already owns.
+
+  This is not "never". The comfortable part of the argument is that the Google account in question
+  belongs to the person running Pip, and that stops being comfortable the moment it is a stranger's.
+  Both should be done before anyone else uses this, and the natural moment is the signed binary,
+  when a release that updates both ends exists anyway. Recorded here so that the next person to
+  read §37 finds the decision rather than an open finding nobody acted on.
