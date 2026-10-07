@@ -62,8 +62,8 @@ Everything else (calendar, email, sync, mobile) is a *source of events* feeding 
    "Testing" gets refresh tokens that expire after 7 days, so Phase 3 must publish the personal
    project as "In production (unverified, <100 users)".
 6. **Mobile background limits** → phones forbid long-running background work. The shared core
-   computes *when*; the OS scheduler (Android AlarmManager/WorkManager, iOS UNUserNotificationCenter)
-   delivers. No persistent service, no wake locks.
+   computes *when*; the OS scheduler (Android AlarmManager/WorkManager) delivers. No persistent
+   service, no wake locks.
 7. **Cross-platform without a heavy framework** → shared logic, thin native shells.
 8. **Sync without complexity/battery** → local-first; every record has an id + `updated_at`;
    sync is an occasional merge of small documents, not a live connection.
@@ -73,16 +73,18 @@ Everything else (calendar, email, sync, mobile) is a *source of events* feeding 
 **Rust shared core + thin native shell per platform.**
 
 ```
- ┌─────────────────────────── pip-core (Rust, no OS dependencies) ───────────────────────────┐
- │ settings · reminder engine · quiet hours/DND/snooze policy · mood · messages               │
- │ (later) calendar model · email rules · sync merge                                           │
- └──────────────┬───────────────────────────┬──────────────────────────────┬──────────────────┘
-                │ plain Rust                │ UniFFI → Kotlin              │ UniFFI → Swift
-     ┌──────────▼───────────┐   ┌───────────▼───────────┐       ┌──────────▼──────────┐
-     │ Windows shell (Rust) │   │ Android: Compose app, │       │ iOS: SwiftUI app,   │
-     │ Win32 layered window,│   │ Glance widget,        │       │ WidgetKit widget,   │
-     │ tray, OS events      │   │ AlarmManager          │       │ local notifications │
-     └──────────────────────┘   └───────────────────────┘       └─────────────────────┘
+ ┌─────────────────────── pip-core (Rust, no OS dependencies) ───────────────────────┐
+ │ settings · reminder engine · quiet hours/DND/snooze policy · mood · messages       │
+ │ calendar model · email rules · sync merge                                          │
+ └──────────────┬─────────────────────────────────────┬───────────────────────────────┘
+                │ plain Rust                          │ hand-written JNI → Kotlin (§19)
+     ┌──────────▼───────────┐             ┌───────────▼───────────┐
+     │ Windows shell (Rust) │             │ Android: Compose app, │
+     │ Win32 layered window,│             │ boot receiver,        │
+     │ tray, OS events      │             │ AlarmManager          │
+     └──────────────────────┘             └───────────────────────┘
+
+     No iOS column: see §33. Not UniFFI either — the bridge is eight calls (§19).
 ```
 
 | Option | Idle RAM (Windows) | Mobile story | Verdict |
@@ -1004,7 +1006,7 @@ is worse — it is the age rule §31 deleted, let back in through the migration.
 
 ## 34. What Pip leaves behind when it dies, 2026-10-07
 
-*(§33 is held for the iOS decision the roadmap cites; the reasoning for it is not recorded yet.)*
+*(§33, written later, records why iOS was dropped.)*
 
 Phase 6 begins here because every other item in it assumes you can find out what went wrong on a
 machine you cannot see. There was already a panic hook — it logged `panic: {info}` — and it had two
@@ -1433,3 +1435,34 @@ day it does. So a restore cannot bypass an arrival, and cannot lose a choice eit
   `WM_CLOSE` or call `TerminateProcess` without asking Pip's permission. Windows already refuses
   the message from a lower integrity level, which is the boundary that matters. Authenticating it
   would mean a shared secret on disk to protect a door that opens onto a corridor anyone can walk.
+
+## 33. No iOS, because of the rent, 2026-10-07
+
+Written late: §6 and §34 have both been pointing at this section for a while.
+
+The original plan had three shells — Windows, Android, iOS — and the architecture diagram carried
+an iOS column from the first day. It is gone, and the reason is not technical.
+
+**Shipping an iOS app means paying Apple $99 a year, for as long as the app exists.** Not once, to
+publish: every year, to keep it installed on anybody's phone, including the author's. A build
+stops working when the certificate lapses. That is a subscription for the privilege of running
+software on hardware you already own, and this is a free pet with no revenue and no intention of
+having any — so the rent would be paid out of pocket, indefinitely, to keep a second phone app
+alive that duplicates what the Android one already does.
+
+Nothing else about iOS was a problem. The core is portable Rust with no OS dependencies; the shell
+would have been SwiftUI over the same eight-call bridge; local notifications map onto the same
+"the core computes *when*, the OS delivers" split as AlarmManager. It would have worked. It simply
+costs a recurring fee that nothing here will ever earn back.
+
+What follows from it:
+
+- The architecture diagram in §4 now shows two shells, not three, and no longer names
+  `UNUserNotificationCenter` among the schedulers.
+- Phase 4's sync is PC and Android. The design never assumed more than two devices, and the join
+  handshake does not care how many there are, so nothing was built around the absent third.
+- Nothing in the core is iOS-shaped and nothing needs removing. If the fee ever stops mattering,
+  this is a new shell against an unchanged core, not a reversal.
+
+The honest summary is that iOS was dropped for a recurring bill, not for a technical reason, and it
+is worth the design saying so plainly rather than implying the platform was found wanting.
