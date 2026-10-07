@@ -1035,3 +1035,23 @@ as a safety net and shipped to nobody as one.
 A crash is also the one path that cannot be reached by using the app, so `--cmd crash` panics on
 purpose. It is behind the devtools feature and absent from the shipped binary, which was checked
 rather than assumed.
+
+## 35. A promise a stranger can check, 2026-10-07
+
+The About page said: *"Everything stays on this computer: no account, no network access, no tracking."*
+That was true in Phase 1 and has not been since Phase 2. It sat one click away from a Connections
+page offering Gmail, Google Calendar and sync through Drive — so the first curious person to open
+both would have caught Pip in a plain untruth about the one subject where being caught costs most.
+Nothing was leaking; the words were simply left behind by the features that came after them.
+
+What is actually true does not fit in a fixed sentence, because it depends on what the person has
+switched on. So the claim is assembled from the live settings. Always: no account of its own, no
+server behind it, no tracking — all three still exactly true, and worth keeping, because they are
+what people are really asking. Then, only for what is connected: mail read as sender, subject and
+labels and never the message; the calendar read and never written; one encrypted file passing
+through the person's own Google Drive. Connect nothing and the page says nothing about Google,
+which is also honest, rather than warning about traffic that will never happen.
+
+Checked against the binary rather than memory: every host Pip can reach belongs to Google or is a
+test fixture, and there is no telemetry of any kind. Both states were rendered — nothing connected,
+and a Gmail account connected — and read back from the screenshots.

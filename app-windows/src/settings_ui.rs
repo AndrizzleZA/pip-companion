@@ -696,8 +696,32 @@ impl App {
         // Privacy
         // The sidebar already carries the version, so this only has to say where the evidence is.
         let version_line = "If something ever goes wrong, what happened is written to pip.log in that folder.";
-        let privacy = "Everything stays on this computer: no account, no network access, no tracking. Your settings live in a small folder you can open below.";
-        for l in text::wrap(&f.regular, 12.5 * s, privacy, c.x1 - c.x0) {
+        // What leaves this PC depends on what has been connected, so the claim is built from what
+        // is actually switched on. "No network access" was true in Phase 1 and has not been since
+        // Phase 2, and a promise a stranger can catch out is worse than no promise at all.
+        let gmail_on = !self.settings.email.accounts.is_empty();
+        let cal_on =
+            self.settings.dates.calendars.iter().any(|fd| pip_core::gcal::feed_address(&fd.url).is_some());
+        let sync_on = self.sync_connected();
+        let mut privacy =
+            "Pip has no account of its own, no server behind it, and never tracks you. Your settings live in a small folder you can open below."
+                .to_string();
+        let mut told: Vec<&str> = Vec::new();
+        if gmail_on {
+            told.push("it reads who your mail is from, the subject and the labels, never the message itself");
+        }
+        if cal_on {
+            told.push("it reads your calendar and never changes it");
+        }
+        if sync_on {
+            told.push("your devices pass one encrypted file through your own Google Drive");
+        }
+        if !told.is_empty() {
+            privacy.push_str(" Pip talks to Google only, signed in as you: ");
+            privacy.push_str(&told.join("; "));
+            privacy.push('.');
+        }
+        for l in text::wrap(&f.regular, 12.5 * s, &privacy, c.x1 - c.x0) {
             text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y + 14.0 * s, c.pal.muted, 1.0, &l);
             c.y += 19.0 * s;
         }
