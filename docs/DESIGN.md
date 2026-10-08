@@ -1613,3 +1613,63 @@ described cannot be built, tested or refused on its merits.
 Two words on a list are not a plan, and carrying them from phase to phase makes the roadmap look
 like it has work left in it when it does not. If it comes back it should come back as a sentence
 about what a companion would do differently — not as a word that sounds like it means something.
+
+## 47. Where this stands, 2026-10-08
+
+Phase 6 is complete except for signing, which money fixes and nothing else does. This section is
+the handover: what exists, what was refused and why, and what to do first.
+
+### What exists
+
+A companion that lives on the desktop in one process, under 2 MB of memory and a fifth of a second
+of CPU an hour, drawn per-pixel into a layered window with no framework under it. It reminds you
+about water and whatever else you ask, keeps birthdays and deadlines, reads the metadata of mail
+that matters and your calendar read-only, and syncs to an Android phone through one encrypted file
+in your own Google Drive. Seven characters, three of which arrive as the companion grows. Settings
+is seven pages, usable without a mouse. A crash leaves a readable report behind, and the symbols for
+every build that went out are archived so it can still be read a year later.
+
+Phases 1 to 5 are in §8 through §32. Phase 6 is §34 to §46.
+
+### What was deliberately refused
+
+The refusals are the design as much as the features, and each one is argued where it was made:
+
+- **Guilt-tripping**, four times over: §7 made it a rule, §28 declined it rather than letting it
+  arrive by accident, §31 made growing up something that can only be good news, and §43 built
+  arrivals as gifts with nothing counting down to them.
+- **iOS** (§33) — $99 a year, forever, for a free pet. Not a technical judgement.
+- **The two `join::` hardenings** (§44) — both need an attacker already inside the person's Google
+  account, and both would break pairing until the PC and phone were rebuilt together. Revisit
+  before anyone else uses this.
+- **The `WM_COPYDATA` channel** (§44) — a lock on an inside door; anything in the session can
+  already close the window.
+- **A screen reader** (§45) — its own milestone, because bridging an immediate-mode renderer to a
+  retained accessibility tree is a structural addition, and a half-built provider looks supported
+  while helping nobody.
+- **The update check and personality presets** (§46) — nowhere to publish, and two words nobody ever
+  defined.
+- **Custom sound files, and ICS/iCloud calendars** (§28, §14) — a feature four voices already cover,
+  and a connector Apple makes impossible to do in one click.
+
+### What to do first
+
+1. **Rebuild and install the phone.** It is the only live gap. The phone runs a build from before
+   the appearance record, so every sync it performs writes the Drive document back without the
+   companion's face in it (§44). Nothing is lost — absence never wins the merge — but the backup is
+   narrowed until this is done. `ANDROID_NDK_HOME`, then `cd app-android && ./gradlew assembleDebug`.
+   Then make the phone sync and confirm the document still carries appearance.
+2. **Price a certificate** if this is ever handed to someone who is not you. Everything else in
+   Phase 6 is done; this is the wall every first-time user hits.
+3. **Read §37 before changing anything about secrets or sync**, and §38 and §39 before changing
+   anything that writes a file. The first is what the security review found; the second two are what
+   happened when a fix went wrong, and why `load` now refuses to treat a file it cannot read as a
+   file that is not there.
+
+### The rule this project kept
+
+Every section here answers *why*, not *what* — the code says what. Where something was tried and
+reverted, the revert is written down with the reason (§40's stronger taper, §41's flower badge,
+§42's beanie, §38's whole incident). Where a decision was reversed, the original says so (§28, and
+§44 which overturned it). Someone picking this up should keep that habit: a design document that
+only records what survived is a list of outcomes, and a list of outcomes cannot be argued with.
