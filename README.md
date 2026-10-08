@@ -1,11 +1,46 @@
 # Pip — a tiny companion that lives on your computer
 
-A small creature that sits quietly on your desktop and gently reminds you about the things humans
-forget: water, stand-ups, vitamins, calling someone back. It is built to be *barely noticeable as
-software*: one ~2 MB executable, one process, under 2 MB of RAM, and no CPU while nothing is happening.
+**Pip is a small creature that sits on your Windows desktop and quietly reminds you about the
+things humans forget: water, stand-ups, vitamins, calling someone back. It is built to be barely
+noticeable as software — one process, about two megabytes of memory, and nothing happening at all
+when nothing needs to happen.**
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the research, architecture decision, performance targets
-and roadmap.
+Measured on the machine it was written on, with mail, calendar and phone sync all connected and
+checking:
+
+| | |
+|---|---|
+| Memory | 1.8 MB private, 1.7 MB working set |
+| CPU | ~1 second per hour |
+| Threads / handles | 1 / 172 |
+| Startup | under 80 ms, cold |
+| Download | one 2.1 MB `pip.exe`, no installer, no runtime, no dependencies |
+
+There is no account, no server, and no telemetry. Nothing leaves your machine until you connect a
+service, and then only to Google, as you — see [What leaves your machine](#layout) below.
+
+### The design document is the interesting part
+
+[**docs/DESIGN.md**](docs/DESIGN.md) is 49 sections of *why*, written as the thing was built. It is
+not a feature list: it is the reasoning, including the parts that did not work.
+
+- Why Rust and a hand-drawn Win32 window instead of Electron or Tauri, with the RAM numbers that
+  decided it (§3)
+- What was deliberately **not** built, and the argument in each case: guilt-tripping, refused four
+  separate times; an iOS app, dropped over a recurring fee rather than anything technical; two
+  pieces of cryptographic hardening, declined because the attack needs someone already inside your
+  Google account; a screen reader, named as its own milestone rather than half-built (§28, §33,
+  §44, §45, §46)
+- A full security review of the token storage, the sync key and the encrypted document, and what a
+  stolen state file actually reveals (§37)
+- **The day a permissions fix destroyed a real person's settings** — what the bug was, how it was
+  recovered, and the deeper defect it exposed: a file that cannot be read is not a file that is not
+  there (§38, §39)
+- Experiments that were tried, rendered, and thrown away for being invisible at the size they are
+  drawn (§40, §41, §42)
+
+Where a decision was later reversed, the original section says so rather than being quietly
+corrected.
 
 ## Installing
 
@@ -148,3 +183,12 @@ encrypted file in your own Google Drive that only your devices can read. Disconn
 Pip's access at Google's end too.
 
 The crash log stays on your machine. Nothing is ever uploaded, and there is nothing to upload it to.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Do what you like with it.
+
+The one thing you cannot reuse is Pip's Google sign-in identity: `google-client.json` and
+`google-client-android.json` are not in this repository and never have been. Building from source
+without them gives you a working Pip that cannot connect Gmail, Calendar or phone sync; everything
+else runs. Making your own is a free Google Cloud project and twenty minutes.
