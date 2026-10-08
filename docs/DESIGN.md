@@ -1164,10 +1164,13 @@ connected account's address. Both are plaintext. The copy that travels to Drive 
 copy sitting on the disk is not, which is the wrong way round, since the disk is where it stays.
 
 **4. On this machine that file is not even hard to reach.** `%APPDATA%\Pip` inherits an ACL from
-`AppData\Roaming` granting `CodexSandboxUsers` — two local accounts, `CodexSandboxOffline` and
-`CodexSandboxOnline` — read access. `secrets.dat` resists them, being DPAPI-bound to this user, but
-the plaintext above does not. Pip did not cause this and cannot assume it is unusual; writing its
-own folder with inheritance disabled and only this user on it would close it wherever it happens.
+`AppData\Roaming` that grants read access to a group of local accounts belonging to a sandboxing
+tool installed on the machine — two ordinary user accounts, not administrators. `secrets.dat`
+resists them, being DPAPI-bound to the signed-in user, but the plaintext above does not. Nothing
+exotic put them there and the point is not about that one tool: developer tooling, backup agents and
+management software all add accounts to a user profile, and a file is only as private as the
+permissions it inherited. Pip did not cause this and cannot assume it is unusual; writing its own
+folder with inheritance disabled and only this user on it closes it wherever it happens.
 
 **5. DPAPI is as strong as the account, and the docs oversell it.** Anything running as this Windows
 user can call `CryptUnprotectData` with the entropy constant compiled into the binary and read every
