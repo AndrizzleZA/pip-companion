@@ -1707,3 +1707,34 @@ One thing the check revealed that is worth writing down: the phone does **not** 
 appearance into its own settings, and should not. It holds `sprout`/`mint` while the PC holds
 something else, because the phone does not draw Pip — §28's original reasoning, still true. What
 changed in §44 was that the field travels *through* it, not that the phone has any use for it.
+
+## 49. A record that merges on a timestamp has to own one, 2026-10-08
+
+§44 gave appearance its own record and then merged it on `prefs_updated_at`. That was wrong, and it
+only showed once the phone was rebuilt — the first sync after §48 turned a lavender Toadstool back
+into a mint Sprout.
+
+The asymmetry did it. The phone keeps prefs and never draws Pip, so it holds *default* appearance
+with a prefs stamp from months of ordinary use: 1 791 292 047. The PC had never edited the prefs
+block, so its stamp was 0. Sharing one timestamp meant the phone's defaults were "newer" than a
+choice the person had actually made, and the merge did exactly what it was told.
+
+`Settings` now carries `appearance_updated_at`, stamped by the settings window whenever the
+character, colour, size, voice, liveliness or theme changes, and the merge takes **strictly** newer
+so a tie keeps what the device already has. Two devices that have never touched appearance both sit
+at 0 and neither imposes anything on the other; the first real change wins everywhere, which is what
+was wanted all along.
+
+Three tests hold it: a device with only a clock cannot overwrite a real choice, a real change still
+travels, and an older change never wins.
+
+**What this says about the §44 design.** The separate record was right — it is what stopped an older
+phone erasing appearance. What was wrong was borrowing someone else's clock for it, which looked
+economical and quietly coupled two records that change for different reasons and on different
+devices. A record that merges on a timestamp has to own that timestamp.
+
+**And about how it was found.** Not by reasoning about the merge, which had looked fine twice. By
+installing the build and reading the companion's name back off the running app, where it said
+`sprout / mint` and should have said `kit / lavender`. The phone rebuild was the first time the two
+stamps were ever compared on real devices, and it took about ten seconds to see and far longer to
+work out.
