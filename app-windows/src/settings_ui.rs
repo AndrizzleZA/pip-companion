@@ -1119,17 +1119,35 @@ impl App {
                 return;
             }
             UiAct::Focus(_) => return,
-            UiAct::Who(w) => st.pet.character = w,
+            // Each of these stamps the appearance record. Without it the stamp stays at 0 forever
+            // and any device that merely has a clock beats a choice actually made here (§48).
+            UiAct::Who(w) => {
+                st.pet.character = w;
+                st.appearance_updated_at = platform::now_unix();
+            }
             UiAct::Say(v) => {
                 st.pet.voice = v;
+                st.appearance_updated_at = platform::now_unix();
                 // Choosing a voice plays it, whether or not reminder sounds are on: the tap is
                 // the request, and a silent answer would look broken.
                 platform::Chime::new(v).play();
             }
-            UiAct::Color(c) => st.pet.color = c,
-            UiAct::Size(z) => st.pet.size = z,
-            UiAct::Live(l) => st.pet.liveliness = l,
-            UiAct::Theme(t) => st.pet.theme = t,
+            UiAct::Color(c) => {
+                st.pet.color = c;
+                st.appearance_updated_at = platform::now_unix();
+            }
+            UiAct::Size(z) => {
+                st.pet.size = z;
+                st.appearance_updated_at = platform::now_unix();
+            }
+            UiAct::Live(l) => {
+                st.pet.liveliness = l;
+                st.appearance_updated_at = platform::now_unix();
+            }
+            UiAct::Theme(t) => {
+                st.pet.theme = t;
+                st.appearance_updated_at = platform::now_unix();
+            }
             UiAct::Top => st.pet.always_on_top = !st.pet.always_on_top,
             UiAct::Clock => st.pet.show_clock = !st.pet.show_clock,
             UiAct::Startup => st.pet.start_with_system = !st.pet.start_with_system,

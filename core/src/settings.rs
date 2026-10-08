@@ -26,6 +26,14 @@ pub struct Settings {
     /// Newest edit to the settings that sync as one block (water, quiet, alerts, pet name).
     /// Per-item settings (reminders, dates) carry their own timestamps.
     pub prefs_updated_at: i64,
+    /// Newest change to what the companion looks like: character, colour, size, voice, liveliness,
+    /// theme.
+    ///
+    /// Its own stamp rather than sharing `prefs_updated_at`, which §48 found the hard way. The
+    /// phone keeps prefs and never draws Pip, so it holds default appearance with a recent prefs
+    /// timestamp - and sharing the stamp let those defaults beat a real choice made on the PC. A
+    /// record that merges on its own timestamp has to keep its own timestamp.
+    pub appearance_updated_at: i64,
 }
 
 impl Default for Settings {
@@ -40,6 +48,7 @@ impl Default for Settings {
             dates: DatesSettings::default(),
             email: EmailSettings::default(),
             prefs_updated_at: 0,
+            appearance_updated_at: 0,
         }
     }
 }

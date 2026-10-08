@@ -170,7 +170,7 @@ impl SyncDoc {
                 date_keywords: settings.dates.keywords.clone(),
             }),
             appearance: Some(Appearance {
-                updated_at: settings.prefs_updated_at,
+                updated_at: settings.appearance_updated_at,
                 character: settings.pet.character,
                 color: settings.pet.color,
                 size: settings.pet.size,
@@ -282,7 +282,10 @@ impl SyncDoc {
             }
         }
         if let Some(a) = &self.appearance {
-            if a.updated_at >= settings.prefs_updated_at {
+            // Strictly newer, so a tie keeps what this device already has: two devices that have
+            // never touched appearance both sit at 0, and neither imposes its defaults on the other.
+            if a.updated_at > settings.appearance_updated_at {
+                settings.appearance_updated_at = a.updated_at;
                 // The character is taken as chosen, even if it has not arrived here yet. Holding
                 // it back would quietly rewrite somebody's choice; §43 already declines to *draw*
                 // one that has not arrived and gives it back on the day it does, which keeps the
@@ -913,5 +916,56 @@ mod appearance_survives {
         assert_eq!(fresh.pet.character, Character::Moth, "what they chose is not rewritten");
         assert_eq!(fresh.pet.character.shown(state.experience), Character::Sprout, "but it is not drawn yet");
         assert_eq!(fresh.pet.character.shown(45), Character::Moth, "and it arrives on its own day");
+    }
+}
+
+#[cfg(test)]
+mod appearance_timestamps {
+    use super::*;
+    use crate::settings::{Character, PetColor, Settings};
+
+    fn face(character: Character, at: i64) -> Appearance {
+        Appearance { updated_at: at, character, ..Appearance::default() }
+    }
+
+    fn doc(face: Option<Appearance>) -> SyncDoc {
+        SyncDoc { format: FORMAT, device: "d".into(), updated_at: 10, appearance: face, ..SyncDoc::default() }
+    }
+
+    /// §48. The phone keeps prefs and never draws Pip, so it carries default appearance with a
+    /// recent prefs timestamp. Sharing one stamp let those defaults overwrite a real choice.
+    #[test]
+    fn a_device_with_only_a_clock_cannot_overwrite_a_real_choice() {
+        let mut pc = Settings::default();
+        pc.pet.character = Character::Kit;
+        pc.pet.color = PetColor::Lavender;
+        pc.prefs_updated_at = 0; // never edited the prefs block
+        pc.appearance_updated_at = 0; // nor the appearance, yet
+
+        // The phone: default appearance, but a prefs stamp from months of ordinary use.
+        let mut phone_face = face(Character::Sprout, 0);
+        phone_face.color = PetColor::Mint;
+        doc(Some(phone_face)).apply(&mut pc, &mut State::new(0));
+
+        assert_eq!(pc.pet.character, Character::Kit, "a tie must keep what this device has");
+        assert_eq!(pc.pet.color, PetColor::Lavender);
+    }
+
+    #[test]
+    fn a_real_change_still_travels() {
+        let mut other = Settings::default();
+        other.appearance_updated_at = 100;
+        doc(Some(face(Character::Moth, 500))).apply(&mut other, &mut State::new(0));
+        assert_eq!(other.pet.character, Character::Moth, "newer appearance wins");
+        assert_eq!(other.appearance_updated_at, 500, "and the stamp travels with it");
+    }
+
+    #[test]
+    fn an_older_change_never_wins() {
+        let mut mine = Settings::default();
+        mine.pet.character = Character::Bloom;
+        mine.appearance_updated_at = 900;
+        doc(Some(face(Character::Bunny, 400))).apply(&mut mine, &mut State::new(0));
+        assert_eq!(mine.pet.character, Character::Bloom);
     }
 }
