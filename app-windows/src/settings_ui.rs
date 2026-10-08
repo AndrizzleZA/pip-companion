@@ -6,7 +6,7 @@ use crate::platform::{self, tick_ms, Usage};
 use crate::render::creature::{self, Expr, Pose};
 use crate::render::text::{self, fonts};
 use crate::render::ui::{self, BtnStyle, R};
-use crate::render::{color, fill_rrect, Palette};
+use crate::render::{color, fill_rrect, stroke_rrect, Palette};
 use crate::surface::Surface;
 use pip_core::schedule;
 use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
@@ -149,6 +149,15 @@ pub struct SettingsUi {
     hits: Vec<(R, UiAct)>,
     hover: Option<R>,
     pub focus: Option<Field>,
+    /// What the keyboard is on, held as the action itself rather than as an index.
+    ///
+    /// Public so devtools can read it back: keyboard reach is the one thing here that cannot be
+    /// checked by looking at a screenshot alone.
+    ///
+    /// `hits` is rebuilt from scratch every frame and the lists on these pages grow and shrink, so
+    /// an index would mean that adding a reminder silently moved the focus to a different control.
+    /// The action is what the person is actually pointing at, and it survives the rebuild.
+    pub kb: Option<UiAct>,
     scroll: f32,
     max_scroll: f32,
     usage: Usage,
@@ -169,6 +178,7 @@ impl SettingsUi {
             hits: Vec::new(),
             hover: None,
             focus: None,
+            kb: None,
             scroll: 0.0,
             max_scroll: 0.0,
             usage: platform::process_usage(),
@@ -429,6 +439,22 @@ impl App {
             ny += 40.0 * s;
         }
         text::draw_centered(&mut pm, &f.regular, 11.0 * s, SIDEBAR_W * s / 2.0, h - 16.0 * s, pal.muted, 0.8, concat!("Pip ", env!("CARGO_PKG_VERSION")));
+
+        // The focus ring, last, so it sits over whatever it is marking — including the sidebar and
+        // the header, which are themselves painted over the scrolled content. Drawing it from the
+        // hit list rather than inside each widget means every control gets one for free, including
+        // the ones that do not know they are focusable.
+        if let Some(act) = &ui.kb {
+            if let Some((r, _)) = hits.iter().find(|(_, a)| a == act) {
+                let pad = 3.0 * s;
+                let (x, y, w2, h2) = (r.x - pad, r.y - pad, r.w + pad * 2.0, r.h + pad * 2.0);
+                // Two strokes, not one: a single accent line disappears against the accent-coloured
+                // controls it has to mark. The pale outer line keeps it visible on any of them,
+                // and the pair reads as deliberate rather than as hover, which is a fill.
+                stroke_rrect(&mut pm, x, y, w2, h2, 10.0 * s, color(pal.window, 0.9), 4.0 * s);
+                stroke_rrect(&mut pm, x, y, w2, h2, 10.0 * s, color(pal.accent, 1.0), 2.0 * s);
+            }
+        }
 
         ui.hits = hits;
         ui.max_scroll = (content_bottom - h).max(0.0);
@@ -801,6 +827,11 @@ impl App {
     pub fn ui_click(&mut self, x: f32, y: f32) {
         let Some(ui) = &self.ui else { return };
         let act = ui.hit(x, y).cloned();
+        // Clicking moves the keyboard with it, so Tab carries on from where the mouse left off.
+        if let (Some(a), Some(ui)) = (act.clone(), self.ui.as_mut()) {
+            ui.kb = Some(a);
+        }
+        let Some(ui) = &self.ui else { return };
         let was_focus = ui.focus.clone();
         // Leaving a text field (for anything but the same field) commits it.
         if was_focus.is_some() && act != was_focus.clone().map(UiAct::Focus) {
@@ -810,7 +841,25 @@ impl App {
             self.ui_commit_text();
         }
         match act {
-            Some(UiAct::Focus(f)) => {
+            Some(a) => self.ui_activate(a),
+            None => {}
+        }
+        // Remember where an edit started (adds may have focused a new field).
+        let snapshot = self.ui.as_ref().is_some_and(|u| u.focus.is_some() && u.edit_origin.is_none());
+        if snapshot {
+            let s = Box::new(self.settings.clone());
+            if let Some(ui) = &mut self.ui {
+                ui.edit_origin = Some(s);
+            }
+        }
+        self.ui_invalidate();
+    }
+
+    /// Does one thing, however it was asked for. The click path and the keyboard both end here, so
+    /// Enter on a control cannot drift from what clicking it does.
+    fn ui_activate(&mut self, act: UiAct) {
+        match act {
+            UiAct::Focus(f) => {
                 let list = match f {
                     Field::Keywords => Some(self.settings.dates.keywords.join(", ")),
                     Field::MailSenders => Some(self.settings.email.senders.join(", ")),
@@ -824,18 +873,128 @@ impl App {
                     ui.focus = Some(f);
                 }
             }
-            Some(a) => self.ui_do(a),
-            None => {}
-        }
-        // Remember where an edit started (adds may have focused a new field).
-        let snapshot = self.ui.as_ref().is_some_and(|u| u.focus.is_some() && u.edit_origin.is_none());
-        if snapshot {
-            let s = Box::new(self.settings.clone());
-            if let Some(ui) = &mut self.ui {
-                ui.edit_origin = Some(s);
-            }
+            a => self.ui_do(a),
         }
         self.ui_invalidate();
+    }
+
+    /// Everything the keyboard can reach, in reading order.
+    ///
+    /// `hits` is stored in draw order, which puts the scrolling content first and the sidebar and
+    /// header last, because those are painted over the top. Reading order is the other way round,
+    /// so they are lifted to the front here rather than the drawing being rearranged to suit the
+    /// keyboard.
+    fn tab_order(&self) -> Vec<UiAct> {
+        let Some(ui) = &self.ui else { return Vec::new() };
+        let edge = SIDEBAR_W * ui.scale();
+        let (side, body): (Vec<_>, Vec<_>) = ui.hits.iter().partition(|(r, _)| r.x < edge);
+        let (header, content): (Vec<_>, Vec<_>) = body.into_iter().partition(|(r, _)| r.y + r.h <= HEADER_H * ui.scale());
+        side.into_iter().chain(header).chain(content).map(|(_, a)| a.clone()).collect()
+    }
+
+    /// Scrolls the focused control into view, if it is off the top or the bottom.
+    fn ui_reveal(&mut self, act: &UiAct) {
+        let Some(ui) = &self.ui else { return };
+        let s = ui.scale();
+        let Some((r, _)) = ui.hits.iter().find(|(_, a)| a == act) else { return };
+        let (top, bottom) = (HEADER_H * s, ui.surface.h as f32);
+        let pad = 12.0 * s;
+        let delta = if r.y - pad < top {
+            r.y - pad - top
+        } else if r.y + r.h + pad > bottom {
+            r.y + r.h + pad - bottom
+        } else {
+            return;
+        };
+        if let Some(ui) = &mut self.ui {
+            ui.scroll = (ui.scroll + delta).clamp(0.0, ui.max_scroll);
+        }
+    }
+
+    /// Keys that work the window itself. Returns true when the key was used.
+    ///
+    /// Esc is deliberately not here: it stays in the window procedure, where it already leaves a
+    /// text field first and closes the window second.
+    pub fn ui_key(&mut self, vk: u16, shift: bool) -> bool {
+        const VK_TAB: u16 = 0x09;
+        const VK_RETURN: u16 = 0x0D;
+        const VK_SPACE: u16 = 0x20;
+        const VK_LEFT: u16 = 0x25;
+        const VK_UP: u16 = 0x26;
+        const VK_RIGHT: u16 = 0x27;
+        const VK_DOWN: u16 = 0x28;
+        if self.ui.is_none() {
+            return false;
+        }
+        // While a text field is being edited the arrows and Space belong to the text, and Enter
+        // ends the edit. Only Tab reaches past it, committing on the way out.
+        let editing = self.ui.as_ref().is_some_and(|u| u.focus.is_some());
+        if editing && !matches!(vk, VK_TAB | VK_RETURN) {
+            return false;
+        }
+        let order = self.tab_order();
+        if order.is_empty() {
+            return false;
+        }
+        let current = self.ui.as_ref().and_then(|u| u.kb.clone());
+        let at = current.as_ref().and_then(|a| order.iter().position(|x| x == a));
+
+        let next = match vk {
+            VK_TAB | VK_DOWN | VK_UP => {
+                if editing {
+                    if let Some(ui) = &mut self.ui {
+                        ui.focus = None;
+                    }
+                    self.ui_commit_text();
+                }
+                let back = shift || vk == VK_UP;
+                let n = order.len();
+                Some(match at {
+                    Some(i) if back => order[(i + n - 1) % n].clone(),
+                    Some(i) => order[(i + 1) % n].clone(),
+                    None => order[if back { n - 1 } else { 0 }].clone(),
+                })
+            }
+            // Within one segmented control. Same variant, not same row: the characters are drawn
+            // as two rows and must feel like the single control they are.
+            VK_LEFT | VK_RIGHT => {
+                let Some(cur) = current.clone() else { return false };
+                let same: Vec<&UiAct> =
+                    order.iter().filter(|a| std::mem::discriminant(*a) == std::mem::discriminant(&cur)).collect();
+                let Some(i) = same.iter().position(|a| **a == cur) else { return false };
+                let step = if vk == VK_LEFT { same.len() - 1 } else { 1 };
+                let target = same[(i + step) % same.len()].clone();
+                // Moving along a segmented control chooses as it goes, the way it behaves anywhere
+                // else in Windows.
+                if let Some(ui) = &mut self.ui {
+                    ui.kb = Some(target.clone());
+                }
+                self.ui_reveal(&target);
+                self.ui_activate(target);
+                return true;
+            }
+            VK_RETURN | VK_SPACE => {
+                if editing {
+                    if let Some(ui) = &mut self.ui {
+                        ui.focus = None;
+                    }
+                    self.ui_commit_text();
+                    self.ui_invalidate();
+                    return true;
+                }
+                let Some(act) = current else { return false };
+                self.ui_activate(act);
+                return true;
+            }
+            _ => None,
+        };
+        let Some(next) = next else { return false };
+        if let Some(ui) = &mut self.ui {
+            ui.kb = Some(next.clone());
+        }
+        self.ui_reveal(&next);
+        self.ui_invalidate();
+        true
     }
 
     fn ui_commit_text(&mut self) {

@@ -1868,6 +1868,31 @@ impl App {
                 format!("running={} total={}\n{}\n{}", self.sync_running, self.events.len(), feeds.join("\n"), evs.join("\n"))
             }
             "snap" => self.dev_snapshot(arg),
+            // Keyboard reach cannot be checked by clicking; devtools only.
+            "key" => {
+                let (name, times) = match arg.split_once(' ') {
+                    Some((n, t)) => (n, t.trim().parse::<u32>().unwrap_or(1)),
+                    None => (arg, 1),
+                };
+                let (vk, shift) = match name {
+                    "tab" => (0x09u16, false),
+                    "shifttab" => (0x09, true),
+                    "enter" => (0x0D, false),
+                    "space" => (0x20, false),
+                    "left" => (0x25, false),
+                    "up" => (0x26, false),
+                    "right" => (0x27, false),
+                    "down" => (0x28, false),
+                    _ => return "unknown key".into(),
+                };
+                let mut used = 0;
+                for _ in 0..times.max(1) {
+                    if self.ui_key(vk, shift) {
+                        used += 1;
+                    }
+                }
+                format!("{used} of {times} handled; focus={:?}", self.ui.as_ref().and_then(|u| u.kb.clone()))
+            }
             // The crash path is the one path that cannot be tested by using the app normally.
             "crash" => panic!("deliberate test crash from the devtools command"),
             "stats" => {

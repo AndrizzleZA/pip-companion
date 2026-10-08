@@ -1501,3 +1501,72 @@ is worth the design saying so plainly rather than implying the platform was foun
   Both should be done before anyone else uses this, and the natural moment is the signed binary,
   when a release that updates both ends exists anyway. Recorded here so that the next person to
   read §37 finds the decision rather than an open finding nobody acted on.
+
+## 45. The settings window without a mouse, 2026-10-08
+
+Phase 6, accessibility. Keyboard reach is done; a screen reader is not, and the second half of this
+section is the argument for why that is a milestone rather than a task.
+
+### Keyboard reach
+
+Every interactive thing is reachable with Tab and Shift+Tab, in reading order, including the
+sidebar. Enter and Space do exactly what clicking does, Left and Right move within a segmented
+control, and the view scrolls to follow the focus.
+
+**Focus is held as the action, not as an index.** `hits` is rebuilt from nothing every frame, and
+the reminder and date lists grow and shrink while the window is open, so an index would have meant
+that adding a reminder quietly moved the focus to a different control. Keyed by `UiAct`, the focus
+is on the thing the person is pointing at and survives the rebuild — verified by focusing "+ Add
+reminder" and pressing Enter twice: the list below it grew by two and the focus did not move.
+
+**The two character rows behave as one control.** Left and Right walk the whole group rather than
+the row, because the group is "every act of the same variant" — `Who(_)` is seven chips that happen
+to be drawn on two lines, and `std::mem::discriminant` already knows that without being told. Moving
+along a segmented control also chooses as it goes, which is how every other one in Windows behaves.
+
+**The draw loop was not restructured**, which was the thing worth checking before starting. The ring
+is painted at the end of the frame from the hit list that already exists, so every control gets one
+without knowing it is focusable, including the sidebar and the header button that are drawn over
+the scrolled content. It is two strokes, a pale one under an accent one, because a single accent
+line vanishes against the accent-coloured controls it has to mark — and it is a ring where hover is
+a fill, so the two cannot be mistaken for each other.
+
+Reading order needed one small inversion: `hits` is in draw order, which puts the scrolled content
+first and the sidebar and header last because those are painted over the top. The tab order lifts
+them back to the front rather than rearranging the drawing to suit the keyboard.
+
+Esc is untouched and still in the window procedure: leave the field first, close the window second.
+While a field is being edited the arrows and Space belong to the text; Tab commits and moves on.
+
+### A screen reader is its own milestone
+
+**Not built, deliberately.** A custom-drawn window is a single `HWND` with nothing inside it, so
+there is nothing for a screen reader to find and no partial version of this that helps. A provider
+that reports a window with no contents is worse than silence, because it looks supported.
+
+What it would actually take:
+
+- Answering `WM_GETOBJECT` is the easy part. Behind it sits `IRawElementProviderSimple`,
+  `IRawElementProviderFragment` and `IRawElementProviderFragmentRoot`, each with `IUnknown` — hand-
+  written vtables and reference counting, because this project depends on `windows-sys`, which is
+  raw bindings with no COM support. The crate that makes implementing COM interfaces bearable is a
+  different one, and `Win32_UI_Accessibility` is not enabled here either.
+- One provider per control, and there are around a hundred and seventy across seven pages, each
+  needing a name, a control type, a bounding rectangle, navigation to its neighbours, a stable
+  runtime id, and the right pattern — Invoke, Toggle, SelectionItem, Value or RangeValue.
+- Events: focus changes, property changes, and structure changes every time a reminder is added.
+
+The real cost is none of that. It is that UI Automation is a *retained* tree — elements that exist
+between frames and can be navigated — and this renderer is deliberately immediate: `hits` is thrown
+away and rebuilt sixty times a second. Bridging them means building and maintaining the retained
+element model the renderer exists to avoid, and keeping it correct as the drawing changes. That is
+a structural addition to the window, not a feature on top of it.
+
+It is also the half that cannot be verified by looking. Keyboard reach can be driven and
+photographed; a provider has to be tested against Narrator and Accessibility Insights, with every
+name read aloud and judged. "Character, Toadstool, 5 of 7" is the standard, and there are a hundred
+and seventy of those sentences to get right.
+
+So it is named here as its own piece of work rather than started. Keyboard reach is the half that
+stands alone and helps people who can see the window but cannot use a mouse; the screen reader is
+the half that needs a week and a different kind of testing.

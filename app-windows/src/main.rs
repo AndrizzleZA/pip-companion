@@ -333,6 +333,14 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             Some(1)
         }
         WM_CHAR => with_app(|a| a.ui_char(wp as u32)).map(|_| 0),
+        // Keyboard reach: Tab, arrows, Enter and Space, handled by the settings window itself.
+        WM_KEYDOWN if wp as u16 != VK_ESCAPE => {
+            let shift = (GetKeyState(0x10) as u16 & 0x8000) != 0;
+            match with_app(|a| a.ui_key(wp as u16, shift)) {
+                Some(true) => Some(0),
+                _ => None,
+            }
+        }
         WM_KEYDOWN if wp as u16 == VK_ESCAPE => {
             // Esc closes the window unless it is ending a text edit.
             if with_app(|a| a.ui.as_ref().is_some_and(|u| u.focus.is_none())) == Some(true) {
