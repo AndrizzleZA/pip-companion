@@ -182,10 +182,18 @@ The gate between "it works on my machine" and "I can hand this to a person who i
 - Security review — done (§37), and its findings fixed in §38 and §39: the tokens in `secrets.dat`,
   the sealed sync key, the encrypted Drive document, and what a stolen state file reveals. Two of
   the smaller findings are still open and named at the end of §37.
-- Signed binary — unsigned, SmartScreen frightens every first-time user out of running it.
-- Opt-in update check — once anyone else has it, there must be a way to ship a fix.
-- Accessibility — keyboard reach and screen-reader naming for the settings window.
-- Final polish: personality presets, more animations.
+- Signed binary — **deferred on cost, not forgotten.** A certificate is a few hundred a year and
+  there is no money in a free pet. Unsigned is survivable: SmartScreen warns once, the person clicks
+  *More info → Run anyway*, and the README now says so rather than letting them meet it cold. The
+  monthly-subscription certificates are worth pricing the day this stops being a hobby — this is the
+  one item here that money alone fixes, which is why it is the only thing left open.
+- Opt-in update check — **declined (§46).** There is no remote: the project exists on one PC, so
+  there is nowhere for a release to live and nothing to check against.
+- Accessibility — keyboard half **done (§45)**: Tab, Shift+Tab, Enter, Space, arrows within a
+  control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
+  **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
+  nothing inside it, and a provider that reports an empty window is worse than silence.
+- Final polish: more animations. *Personality presets dropped (§46).*
 
 ## 7. Guiding rules
 
@@ -1570,3 +1578,38 @@ and seventy of those sentences to get right.
 So it is named here as its own piece of work rather than started. Keyboard reach is the half that
 stands alone and helps people who can see the window but cannot use a mouse; the screen reader is
 the half that needs a week and a different kind of testing.
+
+## 46. Two things that are not being built, 2026-10-08
+
+Recorded the way §28 and §44 record a refusal: with the argument, so that the next person finds a
+decision rather than an idea nobody got round to.
+
+### The opt-in update check
+
+**Declined.** The roadmap's reasoning was "once anyone else has it, there must be a way to ship a
+fix", which is true and still does not produce a feature, because the premise underneath it is
+missing: `.git/config` has no remote. This project exists on one PC. There is no release anywhere
+for a check to find, no URL to ask, and no second copy of Pip in the world that could need telling.
+
+An update check pointing at nothing is worse than not having one. It is a network call on every
+launch that can only fail, an error state to design and explain, a privacy claim to qualify — the
+README would have to stop saying *nothing leaves your machine until you connect something* — and a
+promise to the person running it that fixes arrive, when nothing is shipping them.
+
+What has to exist first is somewhere for releases to live and a way to prove a download is the
+build it claims to be. That is the same conversation as the signing certificate, and both start
+costing money on the same day. When there is a remote and a signed release, this becomes a small
+feature: a version file, an opt-in toggle defaulting to off, a check no more than once a day, and
+never an automatic download. Until then it is scaffolding for a building nobody has started.
+
+### Personality presets
+
+**Dropped.** It has sat on the roadmap since Phase 1 as two words, and nobody — including the
+person who wrote them — has ever said what a preset would contain. Liveliness already exists and is
+a real setting with three values. Voice exists. Colour, size and character exist. Whatever
+"personality" was meant to add on top of those was never pinned down, and a feature that cannot be
+described cannot be built, tested or refused on its merits.
+
+Two words on a list are not a plan, and carrying them from phase to phase makes the roadmap look
+like it has work left in it when it does not. If it comes back it should come back as a sentence
+about what a companion would do differently — not as a word that sounds like it means something.
