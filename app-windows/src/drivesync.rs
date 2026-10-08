@@ -174,6 +174,11 @@ impl Joining {
 #[derive(Default)]
 pub struct SyncResult {
     pub merged: Option<SyncDoc>,
+    /// Whether the document fetched from Drive carried an appearance record, before this device
+    /// merged its own back in. The merge hides the answer by design (§44: absence never wins), so
+    /// a device that drops the field looks identical afterwards - this is the only place the
+    /// difference is visible, and it is what proves an updated phone is carrying it through.
+    pub remote_had_appearance: Option<bool>,
     pub access: Option<(String, i64)>,
     pub error: Option<String>,
     pub signed_out: bool,
@@ -377,7 +382,10 @@ pub fn sync_once(job: &SyncJob) -> SyncResult {
     let remote = match &agreed {
         Some(id) => match with_token(job, &mut out, &mut token, |t| fetch(t, id)) {
             Ok(Some(bytes)) => match sync::open(&key, &bytes) {
-                Ok(doc) => Some(doc),
+                Ok(doc) => {
+                    out.remote_had_appearance = Some(doc.appearance.is_some());
+                    Some(doc)
+                }
                 Err(_) => {
                     // The agreed document isn't ours: another device started this sync at the same
                     // moment and won. Stand down and ask it to let us in — our own reminders are

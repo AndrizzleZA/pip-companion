@@ -1673,3 +1673,37 @@ reverted, the revert is written down with the reason (§40's stronger taper, §4
 §42's beanie, §38's whole incident). Where a decision was reversed, the original says so (§28, and
 §44 which overturned it). Someone picking this up should keep that habit: a design document that
 only records what survived is a list of outcomes, and a list of outcomes cannot be argued with.
+
+## 48. The phone catches up, 2026-10-08
+
+§44 said the cost of an old phone "ends the moment the phone is rebuilt against this core". It was
+still running a build from 2026-10-06, so the cost was live: characters, arrivals and the appearance
+record all postdate it, and every sync it performed wrote the Drive document back without the
+companion's face in it.
+
+Rebuilt and installed over the existing app, so nothing on the phone was lost and the pairing
+survived — confirmed rather than assumed: after the update the PC reports `connected=true`,
+`waiting=false` and no join requests, so no device had to be approved again. The join handshake is
+untouched, which is exactly why that held (§44 declined the two changes that would have broken it).
+
+**Proving it needed an instrument, because the design hides the answer.** Absence never wins the
+merge, so a device that drops appearance looks identical to one that carries it: the PC merges its
+own copy back in either way and the document ends up correct. The only moment the difference is
+visible is between fetching the remote document and merging it, so `SyncResult` now records whether
+the fetched document carried an appearance record, and the devtools `sync` command reports it.
+
+Measured across the update, with the PC writing the document first each time:
+
+| | document after the phone wrote it |
+|---|---|
+| phone build of 2026-10-06 | `remote_appearance=Some(false)` |
+| phone build of 2026-10-08 | `remote_appearance=Some(true)` |
+
+The phone really did sync in both rounds rather than failing quietly, which matters because a phone
+that never ran would have produced the same "true" as a phone that carried the field: its own
+settings now hold the PC's six reminders, including one created on the PC that morning.
+
+One thing the check revealed that is worth writing down: the phone does **not** adopt the
+appearance into its own settings, and should not. It holds `sprout`/`mint` while the PC holds
+something else, because the phone does not draw Pip — §28's original reasoning, still true. What
+changed in §44 was that the field travels *through* it, not that the phone has any use for it.

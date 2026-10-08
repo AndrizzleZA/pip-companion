@@ -1772,7 +1772,7 @@ impl App {
                 "ok".into()
             }
             "sync" => format!(
-                "connected={} key={} waiting={} refused={} asking={:?} last_at={} from={:?} err={:?} signed_out={} reminders={:?} dates={:?}",
+                "connected={} key={} waiting={} refused={} asking={:?} last_at={} from={:?} err={:?} signed_out={} remote_appearance={:?} reminders={:?} dates={:?}",
                 self.sync_connected(),
                 self.secrets.contains_key("sync:key"),
                 self.sync_waiting,
@@ -1782,6 +1782,7 @@ impl App {
                 self.sync_status.last_device,
                 self.sync_status.error,
                 self.sync_status.signed_out,
+                self.sync_status.remote_had_appearance,
                 self.settings.reminders.iter().map(|r| format!("{}@{}", r.title, r.times_label())).collect::<Vec<_>>(),
                 self.settings.dates.items.iter().map(|d| d.title.clone()).collect::<Vec<_>>()
             ),
@@ -2444,6 +2445,8 @@ const SYNC_JOIN_KEY: &str = "sync:join";
 #[derive(Clone, Debug, Default)]
 pub struct SyncStatus {
     pub last_at: i64,
+    /// What the last fetched document carried (§44). None until a round has read one.
+    pub remote_had_appearance: Option<bool>,
     pub last_device: String,
     pub error: Option<String>,
     pub signed_out: bool,
@@ -2666,6 +2669,9 @@ impl App {
             self.sync_requests = r.requests;
         }
         self.sync_status.error = r.error.clone();
+        if r.remote_had_appearance.is_some() {
+            self.sync_status.remote_had_appearance = r.remote_had_appearance;
+        }
         self.sync_status.signed_out = r.signed_out;
         if let Some(doc) = r.merged {
             let prev = self.settings.clone();
