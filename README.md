@@ -2,7 +2,7 @@
 
 A small creature that sits quietly on your desktop and gently reminds you about the things humans
 forget: water, stand-ups, vitamins, calling someone back. It is built to be *barely noticeable as
-software*: one ~1 MB executable, one process, a few MB of RAM, and no CPU while nothing is happening.
+software*: one ~2 MB executable, one process, under 2 MB of RAM, and no CPU while nothing is happening.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the research, architecture decision, performance targets
 and roadmap.
@@ -15,6 +15,11 @@ Double-click `pip.exe` and choose **Yes** when it offers to install. Pip copies 
 prompt. Choose **No** to run it from where it is (portable). Settings › About has the same
 **Install** button, and **Remove Pip** when it is installed.
 
+**Windows will warn you first.** Pip is not code-signed — a certificate costs a few hundred a year
+and this is a free pet — so SmartScreen shows *"Windows protected your PC"* the first time you run
+it. Click **More info**, then **Run anyway**. You only see it once. It is not a judgement about the
+file; it is what Windows says about anything it has not seen signed before.
+
 ## Using it
 
 - **Drag** the pet anywhere; it remembers the spot and snaps onto the taskbar edge.
@@ -24,6 +29,27 @@ prompt. Choose **No** to run it from where it is (portable). Settings › About 
 - **Tray icon** click shows/hides the pet. When hidden, reminders arrive as Windows notifications.
 - Reminders appear as a speech bubble: **Done / Snooze / Dismiss**. Ignored bubbles fold into a
   small badge on the pet after a few minutes; click the pet to bring it back.
+
+**Your companion.** Settings › Companion picks who it is. Four are there from the first day —
+**Sprout**, **Bunny**, **Toadstool** and **Tuft** — and they are yours forever; changing your mind
+costs nothing and nothing is ever taken away. Name it, colour it, size it, give it a voice.
+
+**Growing up.** A companion grows over three stages as it earns *good days*: one per day, for
+meeting your water goal **or** for any moment together — a pat, a reminder finished, a glass
+logged. Either counts, so it still grows with water reminders switched off. It reaches the second
+stage at 15 good days and is fully grown at 45. The count never goes down, a quiet day is never
+mentioned, and time away costs nothing: a fortnight with the computer off leaves it exactly where
+it was. There is no streak to break here.
+
+**Three more arrive.** **Pebble**, **Bloom** and **Moth** turn up at 7, 21 and 45 good days. They
+are gifts rather than unlocks: nothing counts down to them, nothing is shown greyed out, and the
+only thing that happens is that one day your companion mentions a visitor. If you never look at the
+settings, nothing nags you about it.
+
+**Keyboard.** The settings window works without a mouse: **Tab** and **Shift+Tab** move through
+everything including the page list, **Enter** or **Space** activates, **←/→** move within a row of
+choices, and **Esc** closes (or leaves a text field first). A screen reader cannot see the window
+yet — see §45 of the design document.
 
 **Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Calendar (with an optional
 heads-up a few days before). South African public holidays are built in. Calendars come from Google
@@ -59,7 +85,7 @@ Requires Rust (stable) and the MSVC build tools.
 
 ```bash
 cargo test -p pip-core              # core logic tests
-cargo build --release               # target/release/pip.exe (~1.6 MB, no dependencies)
+cargo build --release               # target/release/pip.exe (~2.1 MB, no dependencies)
 cargo build --features devtools     # dev build with the automation/snapshot command channel
 ```
 
@@ -110,4 +136,15 @@ docs/          design document
 tools/         measurement script, mock Google server for sign-in tests
 ```
 
-Data lives in `%APPDATA%\Pip` (`settings.json`, `state.json`, `pip.log`). Nothing is sent anywhere.
+Data lives in `%APPDATA%\Pip` (`settings.json`, `state.json`, `pip.log`), in a folder Pip locks to
+your Windows account on first run.
+
+**What leaves your machine.** Nothing, until you connect a service — Pip has no account of its own,
+no server behind it, and no telemetry of any kind. Connect something and it talks to Google only,
+signed in as you: **Gmail** metadata only, meaning sender, subject and labels and never the contents
+of a message (the permission Pip asks for cannot return a message body, so this is enforced by
+Google rather than promised by us); **Google Calendar** read-only; and **sync**, which puts one
+encrypted file in your own Google Drive that only your devices can read. Disconnecting withdraws
+Pip's access at Google's end too.
+
+The crash log stays on your machine. Nothing is ever uploaded, and there is nothing to upload it to.
