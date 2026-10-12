@@ -1880,3 +1880,35 @@ mechanism, and it does not need a scaffold.
 times), one was a documentation debt that a test now covers, and one was the document doing its job
 — recording something true, and being amended when it stopped being true. Two small rules and two
 tests, rather than a procedure: that is the whole of it.
+
+## 52. Two things a stranger found, 2026-10-12
+
+The repository is public and there is a release, so Pip was installed from its own GitHub release
+onto an empty profile and used as somebody who had never seen it. The download was the file the
+release notes promise, the welcome read well, and a new profile correctly offered four characters
+rather than seven (§43). Two things did not survive the look.
+
+**Clicking "+ Add reminder" left a live alarm behind.** A new reminder was created enabled, with no
+name, set for the next hour, on weekdays — so pressing the button to find out what it does earned
+an interruption an hour later from something called "Reminder". It is also where the two reminders
+called "Reminder" in the author's own list came from, which is the kind of evidence worth more than
+an opinion: the person who wrote it had already fallen into it twice without noticing.
+
+It is now created switched **off**, and switches itself on the moment it is given a name. Naming
+something is when it stops being an experiment, and the alternative — leaving the person to find a
+toggle afterwards — trades one annoyance for another. The id of the just-added reminder is
+remembered so only that one is affected: switching on a reminder somebody had deliberately switched
+off, because they happened to edit its title, would be its own small betrayal.
+
+**Pip never said how to drink.** Double-clicking logs a glass and a single click shows the day, and
+neither appeared anywhere in the app — only in the README, which nobody reads before running a pet.
+Water is the thing Pip is mostly for. The welcome now says it.
+
+Verifying the first half needed a devtools `type` command, because the half that mattered could not
+be checked by clicking: an abandoned reminder staying off is only half the fix, and if naming one
+had failed to switch it on, the result would have been **worse** than the bug — a reminder someone
+named, expected, and never heard from. It was checked both ways: abandoned stays off, named comes
+on.
+
+Left alone deliberately: the empty title field says "Title" where it could ask a question, and the
+welcome cannot be shown again once dismissed. Both are real and neither harms anyone.

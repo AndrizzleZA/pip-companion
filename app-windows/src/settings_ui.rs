@@ -149,6 +149,14 @@ pub struct SettingsUi {
     hits: Vec<(R, UiAct)>,
     hover: Option<R>,
     pub focus: Option<Field>,
+    /// A reminder added in this session and not yet named.
+    ///
+    /// It is created switched off, so that clicking "+ Add reminder" to see what happens cannot
+    /// leave a live alarm behind, and it switches itself on the moment it is given a name. Held by
+    /// id so that only this one is affected: turning on a reminder the person had deliberately
+    /// switched off, just because they edited its title, would be its own small betrayal.
+    just_added: Option<String>,
+
     /// What the keyboard is on, held as the action itself rather than as an index.
     ///
     /// Public so devtools can read it back: keyboard reach is the one thing here that cannot be
@@ -178,6 +186,7 @@ impl SettingsUi {
             hits: Vec::new(),
             hover: None,
             focus: None,
+            just_added: None,
             kb: None,
             scroll: 0.0,
             max_scroll: 0.0,
@@ -1001,6 +1010,15 @@ impl App {
         // Diff against the settings as they were when editing began, so e.g. a changed calendar
         // link is noticed (and re-encrypted + synced) even though edits were applied live.
         let prev = self.ui.as_mut().and_then(|u| u.edit_origin.take()).map(|b| *b).unwrap_or_else(|| self.settings.clone());
+        // A reminder just added is switched on by naming it. Giving something a name is the moment
+        // it stops being an experiment, and it saves the person a second click they would resent.
+        if let Some(id) = self.ui.as_mut().and_then(|u| u.just_added.take()) {
+            if let Some(r) = self.settings.reminder_mut(&id) {
+                if !r.title.trim().is_empty() {
+                    r.enabled = true;
+                }
+            }
+        }
         self.settings.sanitize();
         if prev != self.settings {
             self.settings_changed(&prev);
@@ -1168,10 +1186,13 @@ impl App {
             UiAct::AddReminder => {
                 let next_hour = TimeOfDay::of(pip_core::time::local(&chrono::Local, now + 3600)).0 / 60 * 60;
                 let id = format!("r{:x}{:04x}", now, (platform::tick_ms() & 0xffff));
-                // Empty title: the placeholder shows until the user types, and it becomes
-                // "Reminder" when the field is committed.
-                st.reminders.push(CustomReminder::new(id.clone(), "", vec![TimeOfDay(next_hour)], DaySet::WEEKDAYS, now));
+                // Empty title, and switched off until it has one. Clicking Add to see what the
+                // button does used to leave a nameless reminder that went off an hour later.
+                let mut fresh = CustomReminder::new(id.clone(), "", vec![TimeOfDay(next_hour)], DaySet::WEEKDAYS, now);
+                fresh.enabled = false;
+                st.reminders.push(fresh);
                 if let Some(ui) = &mut self.ui {
+                    ui.just_added = Some(id.clone());
                     ui.focus = Some(Field::Title(id));
                     ui.scroll = f32::MAX; // clamped on next paint → shows the new card
                 }

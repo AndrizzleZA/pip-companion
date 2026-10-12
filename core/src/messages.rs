@@ -69,7 +69,8 @@ pub fn sleepy_poke(name: &str, seq: u32) -> String {
 pub fn first_run(name: &str) -> (String, String) {
     (
         format!("Hi, I'm {name}!"),
-        "I'll live here quietly and remind you about water and things you'd like to remember. Drag me anywhere; right-click for options.".into(),
+        "I'll live here quietly and remind you about water and things you'd like to remember. \n         Double-click me whenever you drink a glass, click once to see your day, and drag me \n         anywhere. Right-click for everything else."
+            .into(),
     )
 }
 

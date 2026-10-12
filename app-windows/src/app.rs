@@ -1869,6 +1869,14 @@ impl App {
                 format!("running={} total={}\n{}\n{}", self.sync_running, self.events.len(), feeds.join("\n"), evs.join("\n"))
             }
             "snap" => self.dev_snapshot(arg),
+            // Typing cannot be checked by clicking either, and the thing most worth checking is
+            // what a field does when it is committed. Devtools only.
+            "type" => {
+                for ch in arg.chars() {
+                    self.ui_char(ch as u32);
+                }
+                format!("typed {} characters", arg.chars().count())
+            }
             // Keyboard reach cannot be checked by clicking; devtools only.
             "key" => {
                 let (name, times) = match arg.split_once(' ') {
