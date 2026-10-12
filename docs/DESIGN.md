@@ -187,8 +187,9 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   *More info → Run anyway*, and the README now says so rather than letting them meet it cold. The
   monthly-subscription certificates are worth pricing the day this stops being a hobby — this is the
   one item here that money alone fixes, which is why it is the only thing left open.
-- Opt-in update check — **declined (§46).** There is no remote: the project exists on one PC, so
-  there is nowhere for a release to live and nothing to check against.
+- Opt-in update check — **declined; the reasoning is §46 and is not repeated here.** It has already
+  been rewritten once when its premise expired, and a summary kept in two places is the defect §51
+  is about. The short version is that it waits on the signed binary above.
 - Accessibility — keyboard half **done (§45)**: Tab, Shift+Tab, Enter, Space, arrows within a
   control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
