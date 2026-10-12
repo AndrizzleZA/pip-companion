@@ -2,26 +2,33 @@
 
 **Pip is a small creature that sits on your Windows desktop and quietly reminds you about the
 things humans forget: water, stand-ups, vitamins, calling someone back. It is built to be barely
-noticeable as software — one process, about two megabytes of memory, and nothing happening at all
+noticeable as software — one process, a few megabytes of memory, and nothing happening at all
 when nothing needs to happen.**
 
-Measured on the machine it was written on, with mail, calendar and phone sync all connected and
-checking:
+Measured on the machine it was written on. The right-hand column is the one that matters: the
+installed build, mail, calendar and phone sync all connected, twelve hours into a working day.
 
-| | |
-|---|---|
-| Memory | 1.8 MB private, 1.7 MB working set |
-| CPU | ~1 second per hour |
-| Threads / handles | 1 / 172 |
-| Startup | under 80 ms, cold |
-| Download | one 2.1 MB `pip.exe`, no installer, no runtime, no dependencies |
+| | Fresh start, nothing connected | In use, 12 h, all sync on |
+|---|---|---|
+| Memory, as Task Manager shows it | 1.4 MB | 3.1 MB |
+| Memory, committed (private bytes) | 2.0 MB | 5.5 MB |
+| CPU | — | 0.8 s per hour, lifetime average |
+| Threads | 3 | 3 idle, up to 9 mid-sync |
+| Handles | 154 | 338–418 |
+| Startup | 17–44 ms cold, over 8 logged launches | |
+| Download | one 2.1 MB `pip.exe`, no installer, no runtime, no dependencies | |
+
+Sampled for four hours at five-minute intervals (49 readings): private bytes wandered between 4.7
+and 6.0 MB and handles between 338 and 418, each drifting up and then back down again. Churn, not
+a leak. Earlier versions of this table quoted the fresh-start figures as though they were the
+connected ones; they were not, and §53 of the design document says so.
 
 There is no account, no server, and no telemetry. Nothing leaves your machine until you connect a
 service, and then only to Google, as you — see [What leaves your machine](#layout) below.
 
 ### The design document is the interesting part
 
-[**docs/DESIGN.md**](docs/DESIGN.md) is 49 sections of *why*, written as the thing was built. It is
+[**docs/DESIGN.md**](docs/DESIGN.md) is 53 sections of *why*, written as the thing was built. It is
 not a feature list: it is the reasoning, including the parts that did not work.
 
 - Why Rust and a hand-drawn Win32 window instead of Electron or Tauri, with the RAM numbers that

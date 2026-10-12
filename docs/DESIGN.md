@@ -1881,6 +1881,23 @@ times), one was a documentation debt that a test now covers, and one was the doc
 — recording something true, and being amended when it stopped being true. Two small rules and two
 tests, rather than a procedure: that is the whole of it.
 
+**Amended 2026-10-12, later the same day.** A fourth one turned up within hours (§53): the README's
+resource table quoted fresh-start numbers under a sentence promising they were measured with every
+account connected. It is a fourth *kind*, and it bears on the conclusion above, so: it was neither
+a plan written as a fact, nor duplication, nor a claim made false by later work. It was a measured
+number that travelled away from the conditions it was measured under. No test can catch it — the
+measurement needs a twelve-hour process with real accounts attached — and the rule "prefer a claim
+that cannot drift" does not help, because the number *was* the point and deleting it would have
+been a worse README.
+
+The rule it does suggest is narrow and costs nothing: **a measured number carries its conditions
+and its date, or it is not a measured number.** §8 does this and is still correct eighteen days
+later precisely because it says "Phase 1" and "pet forced awake"; the README said "with mail,
+calendar and phone sync all connected" over numbers from a Pip with nothing connected, and was
+wrong within a day of being written. That is a third small rule rather than a mechanism, which
+leaves the conclusion above standing: the count is now four, and the number of procedures invented
+is still zero.
+
 ## 52. Two things a stranger found, 2026-10-12
 
 The repository is public and there is a release, so Pip was installed from its own GitHub release
@@ -1921,3 +1938,47 @@ is precisely when the hint is worth having. It now stays until they type, with t
 of it, which is what every other text box in the world does.
 
 Left alone deliberately: the welcome cannot be shown again once dismissed. Real, and harmless.
+
+## 53. The numbers the README promised were the wrong numbers, 2026-10-12
+
+A four-hour memory sample (49 readings, five minutes apart, against the installed build at 7–11
+hours of uptime with mail, calendar and phone sync connected) was taken to answer a worry about a
+leak. It found no leak. It did find that the README's resource table was wrong, which is the more
+interesting result, and the fourth instance of the pattern §51 is about.
+
+Measured, live process, 12.7 hours uptime, everything connected:
+
+| Metric | Fresh, nothing connected | In use, all sync on |
+|---|---|---|
+| Private working set ("Memory" in Task Manager) | 1.40 MB | 3.07 MB |
+| Private bytes (committed) | 1.96 MB | 5.48 MB |
+| Working set incl. shared pages | 14.3 MB | 15.4 MB |
+| Threads | 3 | 3 idle, 9 peak mid-sync |
+| Handles | 154 | 338–418 |
+| CPU | — | 10.5 s over 12.7 h = 0.82 s/h |
+
+The README had been quoting **1.8 MB private, 1.7 MB working set, 1 thread, 172 handles** under the
+sentence "with mail, calendar and phone sync all connected and checking". Those are fresh-start
+numbers. Nobody running Pip with their accounts connected would ever see them. The CPU claim of
+~1 s/hour survived contact with reality (0.82 s/h measured over half a day); the memory claim did
+not, and the thread count was out by a factor of three at idle and nine at peak.
+
+Three distinct things were all being called "memory", which is how the error survived: private
+working set (what Task Manager shows, and the honest "what does this cost" figure), private bytes
+(committed, including pages swapped out) and total working set (which includes shared DLL pages
+Pip does not pay for and is ~14 MB even on a cold start). §8's table is a Phase-1 snapshot with
+nothing connected and no accounts to sync; it was correct when written and is still correct as a
+dated record. The README is not dated, and that is the difference.
+
+On the leak question specifically: private bytes rose from 4.74 MB to 5.93 MB across the four
+hours, which looked like 0.19 MB/hour of steady growth — and an hour later, unprompted, it was back
+down to 5.48 MB and handles had fallen from 415 to 358. The first read of this was reported to
+Andre as handles "climbing steadily with no sign of levelling off", which came from comparing two
+single readings instead of hourly averages. Hourly averages show handles flat after the first hour
+(373 → 386). Both figures oscillate inside a band and return to it. WinHTTP handles are RAII-wrapped
+(`Handle::drop` calls `WinHttpCloseHandle`) and there is no raw `CreateThread` anywhere, so there
+was no mechanism for a leak either. **No change made.** A band that is re-entered is not a leak,
+and an endpoint-to-endpoint comparison of a noisy series is not a trend.
+
+What the measurement cost: a resource claim in a public README, corrected four days after
+publishing it, found only because somebody went looking for a different bug.
