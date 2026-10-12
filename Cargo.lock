@@ -505,6 +505,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "pip-core",
+ "pip-draw",
  "serde",
  "serde_json",
  "tiny-skia",
@@ -524,12 +525,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pip-draw"
+version = "0.1.0"
+dependencies = [
+ "pip-core",
+ "tiny-skia",
+]
+
+[[package]]
 name = "pip-jni"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "jni",
  "pip-core",
+ "pip-draw",
  "serde",
  "serde_json",
 ]

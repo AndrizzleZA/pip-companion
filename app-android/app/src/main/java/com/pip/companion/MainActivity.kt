@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
         refresh()
         setContent {
             PipTheme {
-                Home(ui.value, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts, ::edit, ::addReminder, ::drink)
+                Home(ui.value, store.settings, store.state, ::connect, ::syncNow, ::approve, ::deny, ::askAgain, ::toggle, ::fixAlerts, ::edit, ::addReminder, ::drink)
                 ui.value.editing?.let { draft ->
                     EditReminder(
                         draft = draft,
@@ -356,6 +356,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Home(
     s: MainActivity.Screen,
+    settings: JSONObject,
+    state: JSONObject,
     connect: () -> Unit,
     syncNow: () -> Unit,
     approve: (JSONObject) -> Unit,
@@ -369,6 +371,11 @@ private fun Home(
 ) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
+            // The companion itself, drawn by the same Rust the PC draws with (§50).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Pip(settings, state)
+            }
+            Spacer(Modifier.height(8.dp))
             Text("Pip", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
             Text(

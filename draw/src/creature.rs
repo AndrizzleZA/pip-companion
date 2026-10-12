@@ -4,7 +4,7 @@
 //! every DPI and recolouring costs nothing. Animations are pure functions of (kind, t) that tweak a
 //! `Pose`; the window only renders frames while an animation is actually playing.
 
-use super::{color, ellipse_path, fill_path, mix, stroke_path};
+use crate::{color, ellipse_path, fill_path, mix, stroke_path};
 use pip_core::settings::Character;
 use std::f32::consts::PI;
 use tiny_skia::*;

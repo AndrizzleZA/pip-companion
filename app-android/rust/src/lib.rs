@@ -12,7 +12,9 @@
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
-use pip_core::settings::{CustomReminder, Settings};
+use pip_core::settings::{Character, CustomReminder, PetColor, Settings};
+use pip_draw::creature::{self, Expr, Pose};
+use pip_draw::tiny_skia::{Pixmap, Transform};
 use pip_core::state::State;
 use pip_core::schedule::{self, ItemKey};
 use pip_core::sync::{self, join, SyncDoc};
@@ -52,6 +54,44 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
             let state: State = from_field(a, "state")?;
             let doc = SyncDoc::from_local(&settings, &state, str_field(a, "device")?, int_field(a, "now")?);
             to_value(&doc)
+        }
+        // The companion itself, drawn into an RGBA square for Compose to show as a Bitmap.
+        //
+        // The same `pip_draw::creature::draw` the desktop calls, through the same `Pose`: there is
+        // no second drawing path and no phone-shaped copy of the creature to keep in step (§50).
+        //
+        // `experience` rather than a stage, because the phone must respect arrivals exactly as the
+        // desktop does: a character that has not arrived yet is shown as Sprout (§43), and the
+        // growing-up stage is derived here rather than trusted from the caller.
+        "draw" => {
+            let who: Character = from_field(a, "character")?;
+            let color: PetColor = from_field(a, "color")?;
+            let experience = int_field(a, "experience")?.max(0) as u32;
+            // Mapped by hand rather than derived: serde has no business in a drawing crate for the
+            // sake of six words.
+            let expr = match a.get("expr").and_then(Value::as_str).unwrap_or("content") {
+                "happy" => Expr::Happy,
+                "proud" => Expr::Proud,
+                "thirsty" => Expr::Thirsty,
+                "asleep" => Expr::Asleep,
+                "carried" => Expr::Carried,
+                "content" => Expr::Content,
+                other => return Err(format!("no such expression: {other}")),
+            };
+            let size = a.get("size").and_then(Value::as_u64).unwrap_or(220).clamp(32, 1024) as u32;
+
+            let mut pose = Pose::base(expr);
+            pose.stage = match experience {
+                e if e >= pip_core::state::GROWN => 2,
+                e if e >= pip_core::state::GROWING => 1,
+                _ => 0,
+            };
+            let mut pm = Pixmap::new(size, size).ok_or("that size is not a pixmap")?;
+            // The creature is authored in a 100-unit square, so one scale puts it anywhere.
+            let scale = size as f32 / 100.0;
+            creature::draw(&mut pm.as_mut(), &pose, color.rgb(), who.shown(experience), Transform::from_scale(scale, scale));
+
+            Ok(json!({ "w": size, "h": size, "rgba": base64(pm.data()) }))
         }
         // Local and remote, reconciled. Order never matters.
         "merge" => {
@@ -296,6 +336,26 @@ fn dispatch(name: &str, a: &Value) -> Result<Value, String> {
 fn zone(a: &Value) -> Result<chrono::FixedOffset, String> {
     let minutes = a.get("tz_offset_min").and_then(Value::as_i64).unwrap_or(0);
     chrono::FixedOffset::east_opt((minutes * 60) as i32).ok_or_else(|| "impossible time zone".to_string())
+}
+
+/// RGBA pixels as base64.
+///
+/// The rest of this bridge sends bytes as hex, which is right for a key or a nonce and wrong for a
+/// frame: a 220-pixel square is 193 KB, and hex would make the reply 387 KB where base64 makes it
+/// 258 KB. Android decodes it with `android.util.Base64`, so this still costs no dependency on
+/// either side - which was the point of the hex convention in the first place.
+fn base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let b = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        out.push(A[(n >> 18 & 63) as usize] as char);
+        out.push(A[(n >> 12 & 63) as usize] as char);
+        out.push(if c.len() > 1 { A[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+    }
+    out
 }
 
 fn from_field<T: serde::de::DeserializeOwned>(a: &Value, field: &str) -> Result<T, String> {

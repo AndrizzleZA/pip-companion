@@ -1,0 +1,14 @@
+[package]
+name = "pip-draw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pip's creature, drawn into a pixel buffer. No operating system in here."
+
+[dependencies]
+pip-core = { path = "../core" }
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
+
+[features]
+# Lets a caller save what was drawn, for the desktop's snapshot command.
+png-format = ["tiny-skia/png-format"]

@@ -84,7 +84,7 @@ Everything else (calendar, email, sync, mobile) is a *source of events* feeding 
      │ tray, OS events      │             │ AlarmManager          │
      └──────────────────────┘             └───────────────────────┘
 
-     No iOS column: see §33. Not UniFFI either — the bridge is eight calls (§19).
+     No iOS column: see §33. Not UniFFI either — the bridge is one call (§19).
 ```
 
 | Option | Idle RAM (Windows) | Mobile story | Verdict |
@@ -168,7 +168,7 @@ contents; local rules; "Always from this sender" in one click.
 **Phase 4 — Phone + sync** — complete (§17, §18, §19, §20, §26). Android (Compose, AlarmManager,
 boot receiver) over a small JNI bridge to pip-core; local-first sync through one encrypted file in
 the user's own Google Drive app folder; joining a device is one Approve tap.
-*Not UniFFI* — the bridge is eight calls, and a hand-written JNI shim was smaller (§19).
+*Not UniFFI* — the bridge is one JNI function, and a hand-written shim was smaller (§19).
 *No iOS* — dropped (§33).
 
 **Phase 5 — The companion itself** — complete (§16, §28–§32). Per-user install without an
@@ -538,11 +538,16 @@ flow both ways and a deletion stays deleted.
 byte for byte — the merge rules and the encryption — lives in `pip-core`; Kotlin owns the things
 a phone owns: the screen, the browser sign-in, HTTP and (next) alarms.
 
-**The bridge is one function.** The roadmap said UniFFI. The surface turned out to be eight calls
-on JSON objects, so a hand-written JNI shim (`app-android/rust`, ~150 lines) does the same job
-without a code generator in the build, and `pip-core` stays free of binding dependencies.
+**The bridge is one function.** The roadmap said UniFFI. The surface turned out to be a handful of
+calls on JSON objects, so a hand-written JNI shim (`app-android/rust`) does the same job without a
+code generator in the build, and `pip-core` stays free of binding dependencies.
 `Native.ask("merge", …)` in, JSON out, failures as `{"error": "…"}` so the app can show a sentence
 instead of a stack trace. Byte strings travel as hex: a few kilobytes, no dependency either side.
+
+*This said "eight calls" in four places (§50). It was eight at Phase 4 and is twenty-eight now, and
+the number was never the point — the point is that it is **one** JNI function with a command name,
+so adding a call costs a match arm rather than a binding. The count is left out deliberately: a
+number that has to be maintained in four places will be wrong in four places.*
 
 **Signing in.** Android apps get their own OAuth client, with no secret — Google checks the app's
 signature instead. The consent screen opens in the phone's own browser (Custom Tabs), PKCE ties the
@@ -1473,7 +1478,7 @@ having any — so the rent would be paid out of pocket, indefinitely, to keep a 
 alive that duplicates what the Android one already does.
 
 Nothing else about iOS was a problem. The core is portable Rust with no OS dependencies; the shell
-would have been SwiftUI over the same eight-call bridge; local notifications map onto the same
+would have been SwiftUI over the same one-function bridge; local notifications map onto the same
 "the core computes *when*, the OS delivers" split as AlarmManager. It would have worked. It simply
 costs a recurring fee that nothing here will ever earn back.
 
@@ -1741,3 +1746,56 @@ installing the build and reading the companion's name back off the running app, 
 `sprout / mint` and should have said `kit / lavender`. The phone rebuild was the first time the two
 stamps were ever compared on real devices, and it took about ten seconds to see and far longer to
 work out.
+
+## 50. Pip on the phone, 2026-10-12
+
+§28 said characters do not sync because the phone does not draw Pip. The phone draws Pip now.
+
+**This was relocation, not a rewrite, and that was the whole finding.** `render/mod.rs` and
+`render/creature.rs` imported `pip_core::settings` and `tiny_skia` and nothing else — no Windows
+anywhere — so the creature had been portable for weeks without anyone noticing. It moved into a new
+`pip-draw` crate (`pip-core` + `tiny-skia`), which both shells now use. `pip-core` stays free of a
+rendering dependency.
+
+What stayed behind is what is genuinely tied to Windows: `text.rs` loads Segoe UI by mapping
+`C:\Windows\Fonts` through `CreateFileMappingW`, `ui.rs` is built on it, and `Palette` and
+`rgba_to_bgra` are a layered window's concerns. `app-windows/src/render/mod.rs` is now a re-export
+of `pip_draw::*` plus those three, so every call site in the desktop still says `crate::render::…`
+and not one of them changed.
+
+**One JNI command, in the entry point that was already there.** `draw` takes a character, a colour,
+an `experience` and an expression, and returns an RGBA square. It takes `experience` rather than a
+stage on purpose: the phone derives the growth stage with the same thresholds and passes the
+character through `Character::shown`, so a companion that has not arrived yet (§43) is not drawn on
+the phone either. There is no second `Pose`, no second drawing path, and no Kotlin that knows what
+a creature looks like.
+
+Pixels travel as base64 rather than the hex the rest of the bridge uses. Hex is right for a 32-byte
+key and wrong for a frame: a 288-pixel square is 331 KB, which is 663 KB as hex against 442 KB as
+base64, and Android decodes base64 with `android.util.Base64` — so it still costs no dependency on
+either side, which was the reason for the hex rule in the first place.
+
+**It renders once per change, not on a timer.** Animation is deliberately not here. §7 says every
+feature justifies its cost, and a pet repainting itself sixty times a second inside a list view is
+a battery decision wearing a drawing decision's clothes. It wants arguing on its own.
+
+### What the phone actually showed
+
+Verified on the real device, not an emulator. The companion appeared as a lavender Toadstool —
+which is itself the §44 appearance record arriving: three days earlier the phone's own settings
+still said `sprout`/`mint`, because the phone stores what it is told and had nothing to draw with it.
+
+Showing it at two growth stages took two attempts, and the first failure is the more interesting
+one. Setting the phone's `experience` to 0 and relaunching produced an identical picture, because
+the app syncs on launch and the merge pulled the value straight back from the PC — `experience`
+merges by taking the higher and never decreases (§31). It could only be demonstrated with the phone
+offline for one launch. The design defending itself against a deliberate attempt to lower it is a
+better result than the screenshot was.
+
+### A number that was wrong in four places
+
+The document claimed the bridge was "eight calls" in four separate sections, including one written
+days ago that repeated it. It was eight at Phase 4 and is twenty-eight now. Fixed, and the count is
+deliberately not replaced with twenty-eight: the point was always that it is *one* JNI function with
+a command name, so a new call costs a match arm. A number maintained in four places will be wrong in
+four places — the same defect as §37's finding 5, which is how it was spotted.
