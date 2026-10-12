@@ -97,3 +97,24 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+#[cfg(test)]
+mod the_claim_section_four_makes {
+    /// §4 claimed for weeks that secrets lived in the Windows Credential Manager, which this
+    /// project has never used — finding 5 of §37, fixed in the same commit that named it.
+    ///
+    /// The corrected claim is that they are DPAPI-encrypted in `secrets.dat`, and it is pinned
+    /// here so that moving to a different store has to notice the sentence it makes false (§51).
+    #[test]
+    fn secrets_are_dpapi_and_not_the_credential_manager() {
+        // Only the module above the tests: this file's own assertions name the API they forbid,
+        // and the first version of this test failed on itself.
+        let source = include_str!("secrets.rs").split("#[cfg(test)]").next().unwrap_or_default();
+        assert!(source.contains("CryptProtectData"), "§4 says DPAPI");
+        assert!(source.contains("CryptUnprotectData"), "§4 says DPAPI");
+        assert!(
+            !source.contains("CredWriteW") && !source.contains("CredReadW"),
+            "§4 says explicitly that the Credential Manager is not used; it is being used"
+        );
+    }
+}

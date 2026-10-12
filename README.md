@@ -144,6 +144,16 @@ powershell -ExecutionPolicy Bypass -File tools/measure.ps1 -Minutes 10   # resou
 `pip-core`) behind a Compose screen. Sign in with the same Google account as the PC, tap Approve on
 the PC when it asks, and the same reminders appear.
 
+**Your companion is there too, and it is the same companion.** Not a copy of the artwork and not a
+second drawing — the phone calls the identical Rust the desktop draws with (`pip-draw`), which
+renders the creature into a buffer that Compose shows as a bitmap. Character, colour and growth
+stage all follow the PC: pick a Toadstool in lavender there and that is what the phone shows, and a
+character that has not arrived yet (see *Three more arrive* above) is not drawn on the phone either.
+
+It renders once when something changes rather than on a timer. A pet repainting itself sixty times
+a second inside a list view is a battery decision, not a drawing one, so there is no animation on
+the phone — see §50 of the design document for that argument.
+
 Building it needs a JDK 17, the Android SDK (platform 34, build-tools 34, NDK 26) and `cargo-ndk`:
 
 ```bash

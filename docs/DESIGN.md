@@ -846,9 +846,11 @@ Deliberately not done:
 - **No custom sound files.** Asked for and declined for this stage: files mean loading, validating
   and failing, for a feature four built-in voices already cover.
 - **Characters don't sync to the phone.** The phone doesn't draw Pip, so putting them in the sync
-  document would add a field nothing reads. *Reversed in §44, for a reason this did not consider:
-  the document is not only a sync, it is the only copy of anything that exists off this machine.
-  The phone still does not read it.*
+  document would add a field nothing reads. *Reversed twice. §44 put appearance in the document for
+  a reason this did not consider — it is the only copy of anything that exists off this machine —
+  while noting the phone still did not read it. §50 made that second part false too: the phone
+  draws the companion now, from this very field. Both halves of the original reasoning are gone, and
+  what replaced them is that the premise "the phone doesn't draw Pip" was never permanent.*
 - **No guilt-tripping.** It belongs with hunger in a later stage, and the guiding rules already say
   the pet never guilt-trips — worth deciding deliberately rather than by accident here.
 
@@ -1594,10 +1596,12 @@ decision rather than an idea nobody got round to.
 
 ### The opt-in update check
 
-**Declined.** The roadmap's reasoning was "once anyone else has it, there must be a way to ship a
-fix", which is true and still does not produce a feature, because the premise underneath it is
-missing: `.git/config` has no remote. This project exists on one PC. There is no release anywhere
-for a check to find, no URL to ask, and no second copy of Pip in the world that could need telling.
+**Declined, and the original reason has since expired — see the update below before reading on.**
+
+The roadmap's reasoning was "once anyone else has it, there must be a way to ship a fix", which is
+true and still does not produce a feature, because the premise underneath it is missing:
+`.git/config` has no remote. This project exists on one PC. There is no release anywhere for a check
+to find, no URL to ask, and no second copy of Pip in the world that could need telling.
 
 An update check pointing at nothing is worse than not having one. It is a network call on every
 launch that can only fail, an error state to design and explain, a privacy claim to qualify — the
@@ -1609,6 +1613,23 @@ build it claims to be. That is the same conversation as the signing certificate,
 costing money on the same day. When there is a remote and a signed release, this becomes a small
 feature: a version file, an opt-in toggle defaulting to off, a check no more than once a day, and
 never an automatic download. Until then it is scaffolding for a building nobody has started.
+
+**Updated 2026-10-12: the premise above is gone, and the answer is still no — for a different and
+smaller reason.** There is a remote now, and a `v0.1.0` release with `pip.exe` attached, so "nowhere
+for a release to live" has stopped being true. Half of what that paragraph asked for exists.
+
+The half that does not is the half that matters. A check tells someone a new version is ready and
+sends them to download it; that download is unsigned, so every update walks them through
+*"Windows protected your PC" → More info → Run anyway* again. Today they meet that wall once, when
+they first install. An update check without a certificate converts a one-time friction into a
+recurring one, and teaches the person that clicking past a security warning is a normal part of
+using Pip — which is a worse habit to install in someone than an out-of-date pet.
+
+So the condition is now exactly one thing: **a signed binary**. Not a cadence, not a version file,
+not a toggle — those are an afternoon. When a release can be downloaded without Windows objecting,
+this is worth building, in the shape the paragraph above already describes. Until then the honest
+instruction is the one the README already gives: the repository is public, and anyone who wants the
+newest Pip can look.
 
 ### Personality presets
 
@@ -1799,3 +1820,62 @@ days ago that repeated it. It was eight at Phase 4 and is twenty-eight now. Fixe
 deliberately not replaced with twenty-eight: the point was always that it is *one* JNI function with
 a command name, so a new call costs a match arm. A number maintained in four places will be wrong in
 four places — the same defect as §37's finding 5, which is how it was spotted.
+
+## 51. Why the document keeps going stale, 2026-10-12
+
+Three stale-documentation defects in two weeks, each found and fixed on its own:
+
+- **§37, finding 5** — §4 said secrets lived in the Windows Credential Manager. Nothing here has
+  ever used it; they are DPAPI-encrypted in `secrets.dat`.
+- **§50** — the bridge was "eight calls" in four places. It was eight at Phase 4 and twenty-eight
+  when counted.
+- **§28, here** — "the phone still does not read it", about the appearance record the phone now
+  draws the companion from.
+
+Nobody had asked why it keeps happening, so: they are not the same defect, and only two of the
+three were ever preventable.
+
+**They are three different failures.** The first was a plan written down as a fact — §4 described
+what Phase 3 was going to do, the implementation chose differently, and the sentence was never
+revisited because nothing pointed at it. The second was *duplication*: one fact restated in four
+places, which guarantees that fixing it anywhere leaves it wrong somewhere, and which is how it got
+written into §33 three days before §50 found it — new prose copied an old sentence that was already
+false. The third was simply true when written and made false later by work in a different part of
+the system, which is not a mistake at all.
+
+**What is worth doing, and it is small.**
+
+*Prefer a claim that cannot drift.* "The bridge is eight calls" ages; "the bridge is one function"
+does not, and it was the actual point — the count was never why the shim beat UniFFI. §50 removed
+the number rather than correcting it to twenty-eight, because a number maintained in four places
+will be wrong in four places. Where a fact must appear more than once, the second place should
+point at the first rather than restate it.
+
+*Where a claim rests on something checkable, pin it with a test.* Two now exist, and they are the
+only two that could: `there_is_exactly_one_way_in` asserts the bridge really is one JNI entry
+point, and `secrets_are_dpapi_and_not_the_credential_manager` asserts the storage really is DPAPI
+and really is not the Credential Manager. Both read their own module's source, which is unusual and
+deliberate: what they assert is the *shape* of a file, and a second entry point or a change of
+store is exactly the kind of edit made without opening this document. There is precedent in §41,
+where a test asserts a layout fact rather than a behaviour. Writing the first of them produced a
+small joke at my expense — it failed immediately, because `include_str!` included the assertion
+that named the forbidden API. It now reads only the module above the tests.
+
+**What is not worth doing, which is most of it.**
+
+A test cannot catch the third defect or anything like it. "The phone does not read this field" is a
+statement about another component's behaviour at a moment in time; there is no assertion that
+distinguishes *false* from *no longer true*, and the only way to find out is for a person to change
+the phone and remember the sentence. That is not a gap a mechanism closes.
+
+Nor is a general process worth inventing. The repair habit this project already has — amend at the
+original, point forward, never quietly rewrite — has worked every time it has been used: §28 now
+carries two forward-pointers, to §44 and to §50, and a reader arriving at the original decision
+learns its full history in the place they are already looking. A document that recorded only what
+survived would be a list of outcomes, and §47 already says why that is worse. The habit is the
+mechanism, and it does not need a scaffold.
+
+**The honest summary** is that one of these was a real process failure (restating a fact four
+times), one was a documentation debt that a test now covers, and one was the document doing its job
+— recording something true, and being amended when it stopped being true. Two small rules and two
+tests, rather than a procedure: that is the whole of it.

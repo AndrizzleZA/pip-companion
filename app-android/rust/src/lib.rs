@@ -633,3 +633,21 @@ mod real_data {
         assert_eq!(list["items"][0]["when"], "Wednesday 22 September", "the PC's own wording");
     }
 }
+
+#[cfg(test)]
+mod the_claim_this_module_makes {
+    /// §19 and §33 say the bridge is *one function*. §50 found they had also said it was "eight
+    /// calls" in four places, where it was twenty-eight — a number nobody could maintain.
+    ///
+    /// The count is gone from the document and the durable claim is pinned here instead. This
+    /// reads its own source, which is unusual for a test and is the point: the thing being
+    /// asserted is a fact about the shape of this file, and a second entry point would be exactly
+    /// the kind of change that gets made without anyone opening the design document (§51).
+    #[test]
+    fn there_is_exactly_one_way_in() {
+        // Only the module above the tests, for the same reason the secrets test does it.
+        let source = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap_or_default();
+        let entry_points = source.matches("extern \"system\"").count();
+        assert_eq!(entry_points, 1, "the design document says the bridge is one JNI function; make it true or change §19");
+    }
+}
