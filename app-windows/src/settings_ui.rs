@@ -594,7 +594,7 @@ impl App {
             }
             // Row 1: title + enabled
             let tr = R::new(c.x0, y + 12.0 * s, c.x1 - c.x0 - 60.0 * s, 32.0 * s);
-            ui::text_field(c.pm, tr, &r.title, *focus == Some(Field::Title(r.id.clone())), &c.pal, s, "Title");
+            ui::text_field(c.pm, tr, &r.title, *focus == Some(Field::Title(r.id.clone())), &c.pal, s, "What to remind you about, e.g. take vitamins");
             c.hits.push((tr, UiAct::Focus(Field::Title(r.id.clone()))));
             let tg = ui::toggle(c.pm, c.x1 - ui::TOGGLE_W * s, y + 17.0 * s, r.enabled, &c.pal, s);
             c.hits.push((tg, UiAct::RemOn(r.id.clone())));

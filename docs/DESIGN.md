@@ -1910,5 +1910,14 @@ had failed to switch it on, the result would have been **worse** than the bug â€
 named, expected, and never heard from. It was checked both ways: abandoned stays off, named comes
 on.
 
-Left alone deliberately: the empty title field says "Title" where it could ask a question, and the
-welcome cannot be shown again once dismissed. Both are real and neither harms anyone.
+**The title field now asks a question**, and showing it needed a second fix. It said "Title", which
+names the box rather than telling anyone what to put in it, and the dates page two clicks away had
+already solved this - "Name, e.g. Mom's birthday". It now reads "What to remind you about, e.g.
+take vitamins".
+
+Changing the words was not enough, because the hint was hidden whenever the field had focus, and a
+new reminder is created already focused: the person was looking at an empty box and a cursor, which
+is precisely when the hint is worth having. It now stays until they type, with the cursor in front
+of it, which is what every other text box in the world does.
+
+Left alone deliberately: the welcome cannot be shown again once dismissed. Real, and harmless.

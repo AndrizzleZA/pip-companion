@@ -139,8 +139,14 @@ pub fn text_field(pm: &mut PixmapMut, r: R, value: &str, focused: bool, pal: &Pa
     let f = &fonts().regular;
     let pad = 10.0 * s;
     let shown = text::ellipsize(f, size, value, r.w - pad * 2.0 - 4.0 * s);
-    if value.is_empty() && !focused {
+    // The hint stays while the field is focused and still empty, with the cursor in front of it.
+    // It used to vanish on focus, which hid it at the one moment it was needed: a reminder is
+    // created already focused, so the person was looking at an empty box and a cursor (§52).
+    if value.is_empty() {
         text::draw(pm, f, size, r.x + pad, baseline(r.y, r.h, size), pal.muted, 0.8, placeholder);
+        if focused {
+            fill_rrect(pm, r.x + pad, r.y + 7.0 * s, 1.5 * s, r.h - 14.0 * s, 0.7 * s, color(pal.accent, 1.0));
+        }
     } else {
         let w = text::draw(pm, f, size, r.x + pad, baseline(r.y, r.h, size), pal.text, 1.0, &shown);
         if focused {
