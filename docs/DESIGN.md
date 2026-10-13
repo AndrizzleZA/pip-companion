@@ -194,7 +194,11 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
   nothing inside it, and a provider that reports an empty window is worse than silence.
-- Final polish: more animations. *Personality presets dropped (§46).*
+- Final polish: more animations. *Personality presets dropped (§46).* The burrow — Pip digging in
+  rather than vanishing — is proposed and **parked** behind the save bug below (§54).
+- **Open bug (§54):** in one long-running process Pip stopped saving on its 1.5-second schedule and
+  only wrote state when it exited. Not diagnosed, nothing lost, and invisible to the person using
+  it, which is the worse half. The next step is to see whether it recurs.
 
 ## 7. Guiding rules
 
@@ -1982,3 +1986,71 @@ and an endpoint-to-endpoint comparison of a noisy series is not a trend.
 
 What the measurement cost: a resource claim in a public README, corrected four days after
 publishing it, found only because somebody went looking for a different bug.
+
+## 54. An open bug: Pip saved only when it exited, 2026-10-13
+
+**Open. Not diagnosed. Recorded here because it is invisible from the outside and the next person
+to look at it — including me in a week — will not find it by reading the code.**
+
+The symptom, found while checking on a long-running install rather than by looking for it:
+`state.json`, `settings.json` and `pip.log` had not been written since 8 October, across at least
+two restarts, while the same process was cheerfully writing `calendars\*.json` and `cmd-reply.txt`
+into the same folder minutes earlier.
+
+Pip debounces saves: anything that changes state sets a flag and asks for a save 1.5 seconds later
+(`schedule_save` → `T_SAVE` → `flush_save`). `shutdown()` calls `flush_save()` directly instead.
+In the affected process the first path did nothing and the second one worked:
+
+| | Old process (up 6 h) | Fresh process |
+|---|---|---|
+| `--cmd show`, then watch the folder 8 s | nothing | `state.json.tmp` → rename → `state.json`, 1.5 s later |
+| startup line in `pip.log` | missing | written |
+| data written at exit | yes — everything survived | — |
+
+So the save *code* is fine, the folder is writable, and the file permissions are correct. What had
+stopped was the scheduled save, and only in that one process. Everything accumulated over four days
+reached disk at shutdown, which is the only reason this cost nothing.
+
+**Why it matters anyway.** For four days a crash or a power cut would have lost everything since
+launch. Pip's whole persistence story is "write a temp file and rename it, so an interrupted save
+cannot corrupt anything" (§4) — which protects against a save going wrong, and not at all
+against a save never being attempted.
+
+**Ruled out, with evidence rather than reasoning:** permissions (`icacls` shows full control, and
+the process wrote other files in that folder); the wrong data folder (the reply file it wrote
+landed in `%APPDATA%\Pip`, so that *is* its folder); disk space (64 GB free); and the §39 read-safety
+valve, which would have blocked the shutdown save too, and would have left Pip running on a blank
+state — a newborn companion at the default screen position, which is not what was on screen.
+
+**The lead, which is not a diagnosis.** Handle count had climbed to 497 over six hours; a fresh
+process sits at 172. Something that accumulates with uptime is a suspect, and `SetTimer` failing is
+the kind of thing that would stop a debounced save while leaving direct calls alone. That is a
+hypothesis. It has not been tested, and §53 was written the same morning about moving faster than
+the evidence.
+
+**Two things I got wrong before getting here**, both reported to Andre as fact and both corrected
+within the hour: that the four days of water and experience were unrecoverable (they were in memory
+and were written at exit), and that the read-safety valve had tripped (it cannot have). The first
+mattered — it is the difference between "your data is gone" and "your data is fine" — and the lesson
+is the same one as §53: an endpoint, a single reading, or one plausible mechanism is not a finding.
+
+**How to make it reproducible, which is the only next step worth taking.** Let the install run and
+compare one timestamp: if `state.json` stops advancing again after a day or two of uptime while Pip
+is plainly still working, this becomes a bug with a handle on it. If it never recurs, it stays here
+as a recorded one-off rather than being quietly forgotten.
+
+**The fallback, if the cause is never found.** The worse half of this bug is that it is undetectable
+by the person using it: Pip looks completely normal while silently not saving. A save that fails, or
+a scheduled save that never arrives, should be something Pip can notice about itself and say out
+loud — the §39 valve already proves Pip can refuse to write and explain why. Making the *absence* of
+a write visible is a smaller job than finding the cause, and it is the one that survives not finding
+it.
+
+**Parked, pending this.** The burrow animation — Pip digging a hole and climbing into it instead of
+vanishing when hidden — was proposed in full and deliberately not built: tray hide only, the hole
+closing over rather than persisting, `PopIn` kept, and the body disappearing by shrinking as it
+descends under an overdrawn near lip rather than by adding a clip to the one drawing function the
+phone also calls. It is polish, it fixes nothing broken, and a save path that cannot be trusted
+outranks an animation. The proposal is not written down here on purpose: an unbuilt design
+recorded as prose is exactly the "plan written down as a fact" that §51 names as the first way this
+document goes stale.
