@@ -336,7 +336,22 @@ pub struct Pose {
     /// 0 newly arrived, 1 growing up, 2 fully grown. Defaults to grown, so anything drawing a
     /// portrait — the tray icon — shows the companion as it will be.
     pub stage: u8,
+    /// How open the burrow is: 0 no hole at all, 1 fully open. Separate from the sinking, which
+    /// rides on `dy` and the scales, because the hole outlives the creature going into it.
+    pub burrow: f32,
 }
+
+/// The hole, in design space. It sits mostly *above* the ground line on purpose: there are only
+/// four units between the ground and the bottom of the window, and the room a hole needs is the
+/// room the creature vacates on its way down. Making the window taller instead would move every
+/// saved desktop position.
+const HOLE_Y: f32 = 90.0;
+const HOLE_RX: f32 = 30.0;
+/// Reaches just past the bottom edge of the window, so the near lip has nothing left to leave
+/// uncovered: half a design unit of body showing under a hole would read as a bug, not a burrow.
+const HOLE_RY: f32 = 8.5;
+/// Earth: the same ink the eyes use, which keeps the palette to what is already there.
+const SOIL: u32 = INK;
 
 impl Pose {
     pub fn base(expr: Expr) -> Pose {
@@ -358,6 +373,7 @@ impl Pose {
             acc: Acc::None,
             acc_t: 0.0,
             stage: 2,
+            burrow: 0.0,
         };
         match expr {
             Expr::Content => {}
@@ -411,6 +427,10 @@ pub enum AnimKind {
     WakeUp,
     PopIn,
     Nod,
+    /// Digs a hole and climbs into it, instead of simply vanishing when hidden.
+    Burrow,
+    /// Climbs back out, and the hole closes behind it.
+    Unburrow,
 }
 
 impl AnimKind {
@@ -427,6 +447,9 @@ impl AnimKind {
             AnimKind::WakeUp => 1100,
             AnimKind::PopIn => 450,
             AnimKind::Nod => 600,
+            // Long enough to read as digging, short enough that hiding still feels instant.
+            AnimKind::Burrow => 650,
+            AnimKind::Unburrow => 650,
         }
     }
 }
@@ -560,7 +583,60 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
             p.eyes = Eyes::Happy;
             p.mouth = Mouth::Smile;
         }
+        AnimKind::Burrow => {
+            // The hole closes over the top once the creature is in, so hiding leaves a clean
+            // desktop rather than a dark oval sitting on top of everything else.
+            burrow_pose(smooth(0.0, 0.30, t) * (1.0 - smooth(0.80, 1.0, t)), smooth(0.25, 0.80, t), p);
+            // A moment of scrabbling before it drops, so the hole looks dug rather than arrived at.
+            let dig = (1.0 - smooth(0.0, 0.45, t)) * (t * 9.0 * PI).sin();
+            p.arm_l = p.arm_l.max(0.3 + 0.3 * dig);
+            p.arm_r = p.arm_r.max(0.3 - 0.3 * dig);
+            p.tilt += 3.5 * dig;
+        }
+        AnimKind::Unburrow => {
+            // The mirror, except the hole waits a beat before closing: a creature standing on open
+            // ground with the hole already gone would look like it had been dropped there.
+            burrow_pose(smooth(0.0, 0.12, t) * (1.0 - smooth(0.62, 1.0, t)), 1.0 - smooth(0.08, 0.70, t), p);
+        }
     }
+}
+
+/// The shared half of both burrow animations: `open` is the hole, `sink` is how far in.
+///
+/// The creature shrinks as it goes rather than being clipped at the rim, which is what makes the
+/// near lip enough on its own: at every point of the descent the body is narrow enough to be inside
+/// the hole, so there is nothing beside the hole left to hide. Clipping would mean a clip parameter
+/// on [`draw`], which is the one function the phone also calls (§50), to support something the
+/// phone will never do.
+fn burrow_pose(open: f32, sink: f32, p: &mut Pose) {
+    p.burrow = open.clamp(0.0, 1.0);
+    // All the way to nothing, not to a tenth: a five per cent creature is still three pixels, and
+    // it sat in the middle of a closed hole looking like dirt on the screen.
+    let s = (1.0 - sink).max(0.0);
+    p.sx *= s;
+    p.sy *= s;
+    p.dy += 6.0 * sink;
+    p.eyes = Eyes::Happy;
+    p.mouth = Mouth::Grin;
+    p.acc = Acc::None;
+}
+
+/// The hole the creature climbs into. Drawn before the creature, so the body is seen *against* it.
+///
+/// There is deliberately no second pass painting a near lip over the body. A hole seen at this
+/// angle is a mouth: its near rim is the ellipse's lower arc, and anything in the hole is visible
+/// through the whole opening, so an occluder across the middle is not a lip — it is a straight dark
+/// line sawing the creature in half, which is exactly what the first version looked like. What
+/// hides the body is that it shrinks as it descends and is therefore never wider than the hole.
+fn draw_hole(pm: &mut PixmapMut, base: Transform, open: f32) {
+    let (rx, ry) = (HOLE_RX * open, HOLE_RY * open);
+    if rx < 0.5 {
+        return;
+    }
+    // Disturbed ground around the rim, on the same reasoning as the creature's own soft shadow:
+    // a hard edge against a transparent desktop reads as a sticker.
+    fill_path(pm, ellipse_path(CX, HOLE_Y, rx * 1.14, ry * 1.3), color(0, 0.10 * open), base);
+    fill_path(pm, ellipse_path(CX, HOLE_Y, rx, ry), color(SOIL, 0.92 * open), base);
 }
 
 const INK: u32 = 0x2A2A3A;
@@ -579,16 +655,23 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     let body_dark = mix(body, 0x000000, 0.18);
     let s = shape_of(who);
 
-    // Ground shadow: stays on the ground, shrinks while airborne.
+    // The hole goes down before anything else, so the creature is seen against it on the way in.
+    draw_hole(pm, base, pose.burrow);
+
+    // Ground shadow: stays on the ground, shrinks while airborne, and gives way to the hole —
+    // a shadow lying across its own burrow is one thing too many on four pixels of ground.
     let lift = (-pose.dy).max(0.0);
     let sh = (1.0 - lift / 55.0).clamp(0.4, 1.0);
     let g = growth(pose.stage);
-    fill_path(
-        pm,
-        ellipse_path(CX, GROUND_Y + 0.5, s.shadow_rx * sh * pose.sx * g.scale * g.squat, 3.6 * sh),
-        color(0, 0.16 * sh),
-        base,
-    );
+    let shadow_a = 0.16 * sh * (1.0 - pose.burrow);
+    if shadow_a > 0.004 {
+        fill_path(
+            pm,
+            ellipse_path(CX, GROUND_Y + 0.5, s.shadow_rx * sh * pose.sx * g.scale * g.squat, 3.6 * sh),
+            color(0, shadow_a),
+            base,
+        );
+    }
 
     // Body transform: squash/stretch, tilt and growing up, all around the feet.
     let t = base
@@ -654,6 +737,7 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     // The mouth art is authored once and moved to this face, rather than redrawn per creature.
     draw_mouth(pm, t.pre_translate(0.0, s.mouth_y - MOUTH_BASE), pose.mouth);
     draw_accessory(pm, base, t, &s, pose);
+
 }
 
 fn draw_arm(pm: &mut PixmapMut, t: Transform, sx: f32, sy: f32, side: f32, raise: f32, c: u32) {
@@ -1036,6 +1120,44 @@ mod shape_tests {
             assert!(b.top() > -14.7, "{who:?} is clipped at the top");
             assert!(b.bottom() <= 98.3, "{who:?} is clipped at the bottom");
             assert!(s.body.bottom == 93.0, "{who:?} must stand on the same ground");
+        }
+    }
+
+    /// Nothing hides the creature while it goes down the burrow — there is no clip and no lip, only
+    /// the fact that it shrinks faster than the hole narrows. A character wider than the hole at
+    /// the moment it drops in would hang over the edge, so the next wide body gets told here
+    /// rather than on someone's desktop.
+    #[test]
+    fn no_creature_is_wider_than_the_hole_once_it_is_inside() {
+        for who in Character::ALL {
+            let s = shape_of(who);
+            for i in 0..=40 {
+                let t = i as f32 / 40.0;
+                let mut p = Pose::base(Expr::Content);
+                animate(AnimKind::Burrow, t, &mut p);
+                let top = GROUND_Y + p.dy + p.sy * (s.body.top - GROUND_Y);
+                if top < HOLE_Y - HOLE_RY * p.burrow {
+                    continue; // still standing above ground, where being wide is fine
+                }
+                let half = s.body.half * p.sx;
+                let hole = HOLE_RX * p.burrow;
+                assert!(half <= hole, "{who:?} at t={t:.2} is {half:.1} wide inside a {hole:.1} hole");
+            }
+        }
+    }
+
+    /// Hiding has to leave a clean desktop. The creature reaching zero and the hole closing are
+    /// two separate curves, and an earlier pair left a three-pixel speck sitting in the middle of
+    /// a shut hole.
+    #[test]
+    fn the_burrow_ends_with_an_empty_window() {
+        for who in Character::ALL {
+            let mut pm = Pixmap::new(140, 130).expect("a pixmap");
+            let mut p = Pose::base(Expr::Content);
+            animate(AnimKind::Burrow, 1.0, &mut p);
+            draw(&mut pm.as_mut(), &p, 0x8FD3A6, who, Transform::from_translate(20.0, 20.0));
+            let painted = pm.pixels().iter().filter(|px| px.alpha() > 0).count();
+            assert_eq!(painted, 0, "{who:?} left {painted} pixels behind after burrowing");
         }
     }
 }

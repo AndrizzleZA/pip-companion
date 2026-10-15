@@ -194,9 +194,8 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
   nothing inside it, and a provider that reports an empty window is worse than silence.
-- Final polish: more animations. *Personality presets dropped (§46).* The burrow — Pip digging in
-  rather than vanishing — is proposed and not built. It was parked behind §54, which is now fixed,
-  so it waits on nothing but a decision.
+- Final polish: more animations. *Personality presets dropped (§46).* The burrow — Pip digs a hole
+  and climbs into it instead of vanishing when you hide it — is **built (§55)**.
 - **Saving stopped at every logon — found and fixed (§54).** A file held for a moment while Windows
   logged in tripped the §39 "cannot read my own files" valve, which then refused to save for that
   entire session, for a week, in silence. The read is now retried, a log line that cannot be written
@@ -2048,8 +2047,9 @@ loud — the §39 valve already proves Pip can refuse to write and explain why. 
 a write visible is a smaller job than finding the cause, and it is the one that survives not finding
 it.
 
-**Parked, pending this.** The burrow animation — Pip digging a hole and climbing into it instead of
-vanishing when hidden — was proposed in full and deliberately not built: tray hide only, the hole
+**Was parked, pending this; built once this was fixed — §55.** The burrow animation — Pip digging a
+hole and climbing into it instead of vanishing when hidden — was proposed in full and not built
+that day: tray hide only, the hole
 closing over rather than persisting, `PopIn` kept, and the body disappearing by shrinking as it
 descends under an overdrawn near lip rather than by adding a clip to the one drawing function the
 phone also calls. It is polish, it fixes nothing broken, and a save path that cannot be trusted
@@ -2145,3 +2145,86 @@ It is left open and unchased, deliberately. Finding 0.8 s/h of drift across five
 is a bisecting job, and doing it badly — a plausible culprit named after one look — is the mistake
 this section already records twice. What it is not allowed to be is forgotten again: the number is
 written down here, with the date and the protocol, which is the rule §51 arrived at.
+
+**Corrected a few hours later, in §55's measurement pass: 1.02 s/h.** Same protocol, same build but
+for the burrow, which adds nothing to the idle loop. Two runs, 1.76 and 1.02, against a target of
+1.00 and a September reading of 0.96; the tool's own tick-sampled column moved 2.04 → 0.23 across
+the same pair and is labelled noisy for that reason. So **"idle CPU has drifted past its target" was
+over-read from a single sample**, which is the error this section was written about, committed
+inside the section itself, within a day. What is actually true is narrower and duller: idle CPU sits
+around its 1 s/h target, and a four-minute window cannot tell 0.96 from 1.76. Establishing whether
+there is drift at all needs a longer window first — and that, not a bisect, is the next step if
+anyone wants one. The paragraph above is left standing rather than rewritten, because a document
+that quietly edits its wrong readings out is the one §47 argues against.
+
+## 55. The burrow, 2026-10-15
+
+Pip used to vanish when you hid it. It now digs a hole, climbs in, and the hole closes over. Coming
+back is the same in reverse. It is pure polish and fixes nothing, which is why it waited behind §54.
+
+**Where it applies, and where it deliberately does not.** The tray's Show/Hide and `--cmd hide`,
+which are the only two callers of `set_visible(false)`. Not quiet hours: Pip sleeps *visibly* at
+night, eyes shut with a Zzz, and that sleeping pet is the only thing on screen saying why it has
+gone quiet — swapping it for an empty hole would delete information to gain an animation, and would
+mean a hole sitting on the desktop for eight hours. Not a fullscreen app either: that path calls
+`ShowWindow` directly and never comes through here, which is correct, because someone playing a
+game wants the pet gone now and not in two thirds of a second. **Calm** skips it too and hides
+instantly, since Calm is what you pick when you want fewer moving parts.
+
+**The hole does not persist.** It closes over Pip and then the window hides, leaving a clean
+desktop. A dark oval left lying there would still be a thing on your screen — on top of everything
+else, if always-on-top is set — it would keep the window composited and hit-testable all day for
+nothing, and it would turn "where did Pip go?" into a different confusion rather than less of one.
+
+**There was no room, and that nearly killed it.** The window is 112×104 and the ground line Pip
+stands on sits four design units from the bottom edge. A hole deep enough to read as a hole needs
+more than four units. Making the window taller was the trap: its top-left corner is the position
+you dragged Pip to, it is saved to disk, and growing the box downward would shift every existing
+companion and change how it clamps to screen edges. So the hole lives *above* the ground line, in
+the space the creature vacates on its way down — centred at y 90 with a 30×8.5 radius, which fits
+inside the existing window with nothing to spare and nothing to change.
+
+**How the body disappears, after getting it wrong once.** The first version drew the creature and
+then painted the front half of the hole's rim over it. It looked exactly like what it was: a
+straight dark line sawing the body in half, four units above the feet, before Pip had gone anywhere.
+The mistake was thinking of the rim as a lid. A hole seen at this angle is a *mouth* — its near edge
+is the ellipse's lower arc, and anything inside it is visible through the whole opening. There is
+nothing to paint over the body at all.
+
+What hides the body instead is that **it shrinks faster than the hole narrows**, so at no point is
+it wider than the thing it is going into. That is also what a small animal going down a burrow
+actually looks like: it foreshortens. The pose system could already sink and scale about the feet —
+growing up (§30) uses the same mechanism — so the whole animation is two curves and no new drawing
+machinery.
+
+*Clipping was the other option and was refused.* Telling the renderer "paint nothing below this
+line" is exact and tempting, and it means adding a clip parameter to `creature::draw` — the one
+function the phone also calls (§50) — to support something the phone will never do. That is the
+first crack in the one-drawing rule, bought to solve a problem that shrinking already solves.
+
+**Interruptions.** Hidden is recorded the moment you click, not when the digging stops, so a crash
+or a shutdown mid-dig still brings Pip back hidden — what you asked for. A reminder that fires
+mid-dig goes to the notification area rather than into a bubble that is about to be thrown away
+with the window, which is simply what a hidden pet already does. The pet stops accepting the mouse
+the instant it starts digging: halfway down a hole is not a thing you can pick up.
+
+**What did not change.** `PopIn` stays and is still what first launch uses; `Unburrow` only
+replaces it on the show side of a hide. The tray icon is a portrait and its job is identity, not
+state, so it does not become a hole. The phone gets nothing: it asks for one still frame through
+`Pose::base` and `creature::draw` and never touches `animate`, so adding two `AnimKind`s does not
+reach it and `there_is_exactly_one_way_in` is untouched. No shape moved, `body.bottom` is still
+93.0, and `every_creature_fits_the_window` still passes.
+
+**Two tests, both earned.** `no_creature_is_wider_than_the_hole_once_it_is_inside` walks all seven
+characters through the dig and asserts the body is never wider than the hole at that moment — the
+next wide body gets told here rather than on somebody's desktop, since nothing clips it. And
+`the_burrow_ends_with_an_empty_window` renders the last frame and counts the painted pixels, because
+the first version left a three-pixel speck sitting in the middle of a closed hole: the creature's
+scale bottomed out at five per cent while the hole went all the way to nothing. Two curves that have
+to finish together is exactly the kind of thing a number in a comment does not keep true.
+
+**Measured** (§8 protocol, 4-minute window, pet forced awake): 1.81 MB private memory, 1.93 MB
+working set, 30 ms startup (16–85), 4 threads, 171 handles, 2128 KB binary — all unchanged by this
+section, which is what it should be: the animation only runs while you are hiding or showing the
+pet, and the window draws nothing at all the rest of the time. Idle CPU 1.02 s/h, which is the
+reading that corrected §54's claim of drift.

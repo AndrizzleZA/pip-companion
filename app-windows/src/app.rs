@@ -102,6 +102,8 @@ pub struct App {
     last_mood: Option<Mood>,
     settings_dirty: bool,
     state_dirty: bool,
+    /// Digging in: the window is still up, still drawing, and hides when the hole closes.
+    burrowing_out: bool,
     chime: Option<(Voice, platform::Chime)>,
     rng: u64,
     anim_timer: bool,
@@ -202,6 +204,7 @@ impl App {
             last_mood: None,
             settings_dirty: false,
             state_dirty: false,
+            burrowing_out: false,
             chime: None,
             rng: tick_ms() ^ 0x9E37_79B9_7F4A_7C15,
             anim_timer: false,
@@ -464,6 +467,12 @@ impl App {
 
     fn on_frame(&mut self) {
         self.pet.finish_anim_if_done();
+        // The hole has closed over; now the window can actually go.
+        if self.burrowing_out && self.pet.anim.is_none() {
+            self.burrowing_out = false;
+            self.set_visible(false);
+            return;
+        }
         self.render();
     }
 
@@ -840,7 +849,10 @@ impl App {
         let card = self.notify_card(p);
         let (title, body, prio) = (p.title.clone(), p.body.clone(), p.priority);
         self.pending[0].shown = true;
-        if self.pet.visible {
+        // Mid-burrow the window is still up, but it is on its way out and the bubble would be
+        // thrown away with it in half a second. Hidden was asked for and is already recorded, so
+        // this goes the way anything for a hidden pet goes: the notification area.
+        if self.pet.visible && !self.burrowing_out {
             self.pet.show_bubble(card);
             self.set_timer(T_BUBBLE, self.settings.notify.bubble_minutes * 60_000);
             if self.asleep() {
@@ -1130,6 +1142,9 @@ impl App {
     // -----------------------------------------------------------------------------------------
 
     pub fn mouse_down(&mut self, x: i32, y: i32) {
+        if self.burrowing_out {
+            return; // halfway down a hole is not a thing you can pick up
+        }
         if self.pet.in_bubble(x, y) {
             return; // handled on button up
         }
@@ -1341,14 +1356,37 @@ impl App {
     // Window / system state
     // -----------------------------------------------------------------------------------------
 
+    /// Whether disappearing should be dug rather than instant.
+    ///
+    /// Calm is what someone picks when they want less movement, and a fullscreen app wants the pet
+    /// gone now rather than in two thirds of a second — that path calls `ShowWindow` directly and
+    /// never comes through here, which is why there is nothing about it below.
+    fn burrow_ok(&self) -> bool {
+        self.settings.pet.liveliness != Liveliness::Calm
+    }
+
     pub fn set_visible(&mut self, visible: bool) {
+        if !visible && self.pet.visible && !self.burrowing_out && self.burrow_ok() {
+            // Hidden is decided *now*, not when the digging finishes: a shutdown or a crash
+            // halfway through has to bring Pip back hidden, which is what was asked for.
+            self.state.pet_hidden = true;
+            self.state_dirty = true;
+            self.schedule_save();
+            self.burrowing_out = true;
+            self.pet.bubble = None;
+            self.pet.press = None;
+            self.pet.start_anim(AnimKind::Burrow);
+            self.render();
+            return;
+        }
+        self.burrowing_out = false;
         self.pet.visible = visible;
         self.state.pet_hidden = !visible;
         self.state_dirty = true;
         self.schedule_save();
         unsafe { ShowWindow(self.hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
         if visible {
-            self.pet.start_anim(AnimKind::PopIn);
+            self.pet.start_anim(if self.burrow_ok() { AnimKind::Unburrow } else { AnimKind::PopIn });
             self.render();
             if !self.pending.is_empty() {
                 self.set_timer(T_NEXT, 700);
