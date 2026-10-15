@@ -302,6 +302,8 @@ pub enum Acc {
     Alert,
     /// A water drop travelling to the mouth; progress in `acc_t`.
     Sip,
+    /// Earth thrown out while digging; progress in `acc_t`.
+    Dirt,
 }
 
 /// Resting expression derived from mood/status.
@@ -427,10 +429,37 @@ pub enum AnimKind {
     WakeUp,
     PopIn,
     Nod,
+    Yawn,
+    Sniff,
+    Scratch,
+    Sneeze,
+    Settle,
     /// Digs a hole and climbs into it, instead of simply vanishing when hidden.
     Burrow,
     /// Climbs back out, and the hole closes behind it.
     Unburrow,
+    /// Digs in for the night and settles down in there. Ends exactly on [`nestled`], which is the
+    /// resting pose it hands over to.
+    TurnIn,
+    /// Climbs out of the night's burrow in the morning. Starts from [`nestled`].
+    GetUp,
+}
+
+/// Curled up asleep in the burrow: the resting pose for quiet hours.
+///
+/// The hole stays open and the companion stays in it. An earlier draft had Pip dig in at bedtime
+/// and the window hide, and §55 argued against exactly that: the sleeping pet is the only thing on
+/// screen saying *why* nothing is happening, and replacing it with an empty desktop trades
+/// information for an animation. A visible creature asleep in a visible burrow keeps both.
+pub fn nestled(p: &mut Pose) {
+    p.burrow = 1.0;
+    p.sx = 0.66;
+    p.sy = 0.62;
+    p.dy = 4.5;
+    p.eyes = Eyes::Closed;
+    p.mouth = Mouth::Tiny;
+    p.acc = Acc::Zzz;
+    p.tilt = 0.0;
 }
 
 impl AnimKind {
@@ -447,9 +476,19 @@ impl AnimKind {
             AnimKind::WakeUp => 1100,
             AnimKind::PopIn => 450,
             AnimKind::Nod => 600,
-            // Long enough to read as digging, short enough that hiding still feels instant.
-            AnimKind::Burrow => 650,
-            AnimKind::Unburrow => 650,
+            AnimKind::Yawn => 1700,
+            AnimKind::Sniff => 1200,
+            AnimKind::Scratch => 1400,
+            AnimKind::Sneeze => 1100,
+            AnimKind::Settle => 900,
+            // 650 ms was long enough to *see* and too short to *notice*: by the time your eye got
+            // there it was a closed hole. Most of the extra time is the digging, which is the part
+            // that says what is happening.
+            AnimKind::Burrow => 1500,
+            AnimKind::Unburrow => 1200,
+            // Bedtime can afford to be slower than hiding: nobody is waiting for it to finish.
+            AnimKind::TurnIn => 2200,
+            AnimKind::GetUp => 1800,
         }
     }
 }
@@ -583,20 +622,160 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
             p.eyes = Eyes::Happy;
             p.mouth = Mouth::Smile;
         }
+        AnimKind::Yawn => {
+            // Wind up, open wide, settle. The squash is what carries it — a mouth shape alone is
+            // four pixels and reads as nothing.
+            let o = smooth(0.15, 0.42, t) * (1.0 - smooth(0.58, 0.85, t));
+            p.mouth = if o > 0.3 { Mouth::O } else { Mouth::Tiny };
+            p.eyes = if o > 0.15 { Eyes::Closed } else { Eyes::Sleepy };
+            p.sy *= 1.0 + 0.10 * o;
+            p.sx *= 1.0 - 0.05 * o;
+            p.dy -= 2.0 * o;
+            p.tilt += 4.0 * o;
+            p.leaf += 7.0 * o;
+        }
+        AnimKind::Sniff => {
+            // Three quick dips towards the ground, nose first.
+            let d = ((t * 3.0 * PI).sin().max(0.0)) * (1.0 - smooth(0.75, 1.0, t));
+            p.dy += 3.2 * d;
+            p.tilt += 5.0 * d;
+            p.look_y = 0.7 * d;
+            p.mouth = Mouth::Tiny;
+            p.leaf -= 6.0 * d;
+        }
+        AnimKind::Scratch => {
+            // One paw up by the ear, going fast. The head tips into it, which is the half that
+            // makes it read as scratching rather than waving.
+            let ramp = smooth(0.0, 0.18, t) * (1.0 - smooth(0.8, 1.0, t));
+            let s = (t * 11.0 * PI).sin();
+            p.arm_l = ramp * (0.85 + 0.15 * s);
+            p.tilt -= 6.0 * ramp;
+            p.sy *= 1.0 - 0.02 * ramp * s;
+            p.eyes = if ramp > 0.5 { Eyes::Happy } else { Eyes::Open };
+            p.mouth = Mouth::Smile;
+            p.leaf += 9.0 * ramp * s;
+        }
+        AnimKind::Sneeze => {
+            if t < 0.55 {
+                // Tipping back, eyes shutting, holding it.
+                let k = smooth(0.0, 0.55, t);
+                p.dy -= 2.5 * k;
+                p.tilt -= 7.0 * k;
+                p.look_y = -0.6 * k;
+                p.eyes = if k > 0.6 { Eyes::Closed } else { Eyes::Wide };
+                p.mouth = Mouth::O;
+                p.sy *= 1.0 + 0.05 * k;
+            } else {
+                // And out. Fast, then a wobble.
+                let k = (t - 0.55) / 0.45;
+                let snap = (1.0 - k).powi(2);
+                p.dy += 4.0 * snap;
+                p.tilt += 13.0 * snap * (k * 4.0 * PI).cos();
+                p.sy *= 1.0 - 0.10 * snap;
+                p.sx *= 1.0 + 0.09 * snap;
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                p.leaf -= 16.0 * snap;
+                // No puff of anything: a sneeze borrowing the digging's soil looked like Pip
+                // sneezing dirt, and the whip of the head carries it on its own.
+            }
+        }
+        AnimKind::Settle => {
+            // Shifting weight: down, a pause, back up. The quietest one in the set, and the one
+            // that can run most often without anybody feeling watched.
+            let s = (t * PI).sin();
+            p.dy += 2.2 * s;
+            p.sy *= 1.0 - 0.05 * s;
+            p.sx *= 1.0 + 0.04 * s;
+            p.look_x = 0.3 * (t * 2.0 * PI).sin();
+        }
         AnimKind::Burrow => {
-            // The hole closes over the top once the creature is in, so hiding leaves a clean
-            // desktop rather than a dark oval sitting on top of everything else.
-            burrow_pose(smooth(0.0, 0.30, t) * (1.0 - smooth(0.80, 1.0, t)), smooth(0.25, 0.80, t), p);
-            // A moment of scrabbling before it drops, so the hole looks dug rather than arrived at.
-            let dig = (1.0 - smooth(0.0, 0.45, t)) * (t * 9.0 * PI).sin();
-            p.arm_l = p.arm_l.max(0.3 + 0.3 * dig);
-            p.arm_r = p.arm_r.max(0.3 - 0.3 * dig);
-            p.tilt += 3.5 * dig;
+            // Four beats, because one continuous slide was over before it registered: dig, look
+            // down at what you dug, drop in, and the hole closes over. The creature is 112 pixels
+            // tall on a desktop someone is working on — it has to be slow enough to be *noticed*
+            // starting, not only slow enough to be seen once you are watching.
+            burrow_pose(smooth(0.0, 0.22, t) * (1.0 - smooth(0.88, 1.0, t)), smooth(0.52, 0.86, t), p);
+            if t < 0.40 {
+                // Digging: rocking on the spot, paws going, earth coming out.
+                let k = t / 0.40;
+                let dig = (k * 7.0 * PI).sin();
+                p.arm_l = 0.45 + 0.45 * dig;
+                p.arm_r = 0.45 - 0.45 * dig;
+                p.tilt += 7.0 * dig;
+                p.dy -= 1.6 * (k * 7.0 * PI).cos().abs();
+                p.acc = Acc::Dirt;
+                p.acc_t = k;
+                p.mouth = Mouth::O;
+            } else if t < 0.52 {
+                // A beat of looking into it, which is what sells the next bit as deliberate.
+                p.look_y = 0.9;
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::Smile;
+                p.tilt += 4.0;
+            }
         }
         AnimKind::Unburrow => {
-            // The mirror, except the hole waits a beat before closing: a creature standing on open
-            // ground with the hole already gone would look like it had been dropped there.
-            burrow_pose(smooth(0.0, 0.12, t) * (1.0 - smooth(0.62, 1.0, t)), 1.0 - smooth(0.08, 0.70, t), p);
+            // Out, a shake, then the hole closes: a creature standing on open ground with the hole
+            // already gone would look like it had been dropped there.
+            burrow_pose(smooth(0.0, 0.10, t) * (1.0 - smooth(0.74, 1.0, t)), 1.0 - smooth(0.06, 0.58, t), p);
+            if (0.58..0.80).contains(&t) {
+                let k = (t - 0.58) / 0.22;
+                p.tilt += 9.0 * (k * 3.0 * PI).sin() * (1.0 - k);
+                p.acc = Acc::Dirt;
+                p.acc_t = k * 0.5;
+            }
+        }
+        // Bedtime and morning. Both *set* the body transform rather than multiplying it, because
+        // they hand over to (and take over from) `nestled`, which sets it too: two of those
+        // compounding would put the companion down a well.
+        AnimKind::TurnIn => {
+            let k = smooth(0.30, 0.86, t);
+            p.burrow = smooth(0.0, 0.26, t);
+            p.sx = 1.0 - 0.34 * k;
+            p.sy = 1.0 - 0.38 * k;
+            p.dy = 4.5 * k;
+            if t < 0.34 {
+                let d = (t / 0.34 * 5.0 * PI).sin();
+                p.arm_l = 0.4 + 0.4 * d;
+                p.arm_r = 0.4 - 0.4 * d;
+                p.tilt = 6.0 * d;
+                p.acc = Acc::Dirt;
+                p.acc_t = t / 0.34;
+                p.mouth = Mouth::O;
+            } else if t < 0.88 {
+                // A yawn on the way down, then the eyes go.
+                let y = smooth(0.34, 0.62, t) * (1.0 - smooth(0.62, 0.86, t));
+                p.mouth = if y > 0.35 { Mouth::O } else { Mouth::Tiny };
+                p.eyes = if y > 0.2 { Eyes::Closed } else { Eyes::Sleepy };
+            } else {
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                p.acc = Acc::Zzz;
+            }
+        }
+        AnimKind::GetUp => {
+            let k = 1.0 - smooth(0.22, 0.78, t);
+            p.burrow = 1.0 - smooth(0.70, 1.0, t);
+            p.sx = 1.0 - 0.34 * k;
+            p.sy = 1.0 - 0.38 * k;
+            p.dy = 4.5 * k;
+            if t < 0.22 {
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                p.acc = Acc::Zzz;
+            } else if t < 0.62 {
+                // Up and a stretch, the way anything that has been curled up gets out of bed.
+                let s = smooth(0.22, 0.52, t);
+                p.eyes = if s > 0.5 { Eyes::Closed } else { Eyes::Sleepy };
+                p.mouth = Mouth::O;
+                p.arm_l = s;
+                p.arm_r = s;
+            } else {
+                let w = (t - 0.62) / 0.38;
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Smile;
+                p.tilt = 7.0 * (w * 3.0 * PI).sin() * (1.0 - w);
+            }
         }
     }
 }
@@ -628,6 +807,27 @@ fn burrow_pose(open: f32, sink: f32, p: &mut Pose) {
 /// through the whole opening, so an occluder across the middle is not a lip — it is a straight dark
 /// line sawing the creature in half, which is exactly what the first version looked like. What
 /// hides the body is that it shrinks as it descends and is therefore never wider than the hole.
+/// Earth thrown out while digging. Behind the creature, and in plain design space so the specks
+/// keep their size while the body shrinks away underneath them.
+///
+/// These are what make the digging legible: the paws move about four pixels on screen, and four
+/// pixels of arm is not something anyone notices across a desktop.
+fn draw_dirt(pm: &mut PixmapMut, base: Transform, at: f32) {
+    for i in 0..8 {
+        let k = (at * 1.9 - i as f32 * 0.1).rem_euclid(1.0);
+        let side = if i % 2 == 0 { -1.0 } else { 1.0 };
+        // Starting at ±24 rather than under the paws: behind the body means behind *Pebble's*
+        // body, which is 43 wide, and specks thrown straight up from the feet were invisible for
+        // their whole arc. They leave the ground already clear of the widest creature in the set.
+        let spread = 15.0 + (i % 3) as f32 * 7.0;
+        let x = CX + side * (24.0 + spread * k);
+        // Up and out, then down: a plain parabola is all this needs.
+        let y = GROUND_Y - 3.0 - 18.0 * (k * PI).sin() + 5.0 * k * k;
+        let fade = (1.0 - k).min(at * 3.0).clamp(0.0, 1.0);
+        fill_path(pm, PathBuilder::from_circle(x, y, 2.1 - 0.6 * k), color(SOIL, 0.85 * fade), base);
+    }
+}
+
 fn draw_hole(pm: &mut PixmapMut, base: Transform, open: f32) {
     let (rx, ry) = (HOLE_RX * open, HOLE_RY * open);
     if rx < 0.5 {
@@ -655,8 +855,12 @@ pub fn draw(pm: &mut PixmapMut, pose: &Pose, body: u32, who: Character, base: Tr
     let body_dark = mix(body, 0x000000, 0.18);
     let s = shape_of(who);
 
-    // The hole goes down before anything else, so the creature is seen against it on the way in.
+    // The hole goes down before anything else, so the creature is seen against it on the way in,
+    // and the flying earth with it.
     draw_hole(pm, base, pose.burrow);
+    if pose.acc == Acc::Dirt {
+        draw_dirt(pm, base, pose.acc_t);
+    }
 
     // Ground shadow: stays on the ground, shrinks while airborne, and gives way to the hole —
     // a shadow lying across its own burrow is one thing too many on four pixels of ground.
@@ -1014,6 +1218,10 @@ fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, s: &Sh
     match p.acc {
         Acc::None => {}
         Acc::Zzz => {
+            // The Zzz hang off the head, and the head moves: asleep in the burrow the body is
+            // two thirds its height and sunk into the ground, and three Zs left at standing
+            // height floated in the sky above an empty hole.
+            let base = base.pre_translate(0.0, (1.0 - p.sy) * 65.0 + p.dy);
             for (i, (x, y, s)) in [(73.0, 31.0, 0.8), (80.0, 22.0, 1.05), (88.0, 12.0, 1.3)].iter().enumerate() {
                 let mut pb = PathBuilder::new();
                 let k = 3.4 * s;
@@ -1041,6 +1249,10 @@ fn draw_accessory(pm: &mut PixmapMut, base: Transform, body_t: Transform, s: &Sh
             let b = base.pre_translate(78.0, 26.0 - 8.0 * at).pre_scale(s, s);
             fill_path(pm, heart_path(), color(0xFF6B8B, 1.0 - 0.6 * at.powi(3)), b);
         }
+        // Earth belongs to the ground, not to the head: drawn in `draw` before the body, so the
+        // specks that would land on the creature's face go behind it instead. The first version
+        // drew them here, last, and Pip dug its way to a faceful of its own soil.
+        Acc::Dirt => {}
         Acc::Sparkles => {
             for (i, (x, y, r)) in [(20.0, 30.0, 4.5), (82.0, 24.0, 5.5), (88.0, 52.0, 3.5), (12.0, 55.0, 3.2)].iter().enumerate() {
                 let tw = ((at * 3.0 + i as f32 * 0.37) * 2.0 * PI).sin() * 0.5 + 0.5;

@@ -115,6 +115,8 @@ pub struct View<'a> {
     pub attention: Acc,
     pub size: f32,
     pub clock: Option<String>,
+    /// Asleep in the burrow for the night.
+    pub nestled: bool,
 }
 
 impl Pet {
@@ -197,9 +199,15 @@ impl Pet {
         }
     }
 
-    pub fn pose(&self, expr: Expr, attention: Acc, stage: u8) -> Pose {
+    pub fn pose(&self, expr: Expr, attention: Acc, stage: u8, nestled: bool) -> Pose {
         let mut pose = Pose::base(expr);
         pose.stage = stage;
+        // Asleep in the burrow for the night. Applied before the animation, and skipped while the
+        // two transitions are running, because `nestled` and those two both *set* the body
+        // transform: applying both would put the companion down a well.
+        if nestled && !matches!(self.anim.map(|(k, _)| k), Some(AnimKind::TurnIn | AnimKind::GetUp)) {
+            creature::nestled(&mut pose);
+        }
         if self.eyes_shut {
             pose.blink = 1.0;
         }
@@ -296,7 +304,7 @@ impl Pet {
         }
         let (ox, oy) = (win.l as f32, win.t as f32);
         let bubble_pop = self.bubble.as_ref().map(|b| ((tick_ms().saturating_sub(b.born_ms)) as f32 / 160.0).min(1.0)).unwrap_or(1.0);
-        let pose = self.pose(v.expr, v.attention, v.stage);
+        let pose = self.pose(v.expr, v.attention, v.stage, v.nestled);
         let hover = self.hover_btn;
         let mut hits = Vec::new();
         let mut bubble_rect = None;

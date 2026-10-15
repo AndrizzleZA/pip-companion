@@ -370,6 +370,15 @@ impl App {
         self.locked || self.away || (self.night && tick_ms() > self.wake_until_ms)
     }
 
+    /// Curled up in the burrow for the night.
+    ///
+    /// Quiet hours only — not "you walked away" and not a locked screen. Those are both states Pip
+    /// comes out of the moment you touch the machine, and digging a hole for a coffee break would
+    /// be a lot of ceremony for ninety seconds. Night is the one that lasts.
+    fn night_burrow(&self) -> bool {
+        self.night && !self.away && !self.locked && tick_ms() > self.wake_until_ms
+    }
+
     pub fn expr(&self) -> Expr {
         if self.pet.press.as_ref().is_some_and(|p| p.dragging) {
             return Expr::Carried;
@@ -445,6 +454,7 @@ impl App {
                 attention: self.attention(),
                 size: self.size(),
                 clock,
+                nestled: self.night_burrow(),
             };
         self.pet.render(&view);
         let want = self.pet.visible && self.pet.animating();
@@ -510,10 +520,32 @@ impl App {
         let due_micro = now.saturating_sub(self.last_micro_ms) >= self.rand_range(lo, hi);
         let kind = if due_micro && self.pet.bubble.is_none() {
             self.last_micro_ms = now;
+            // Variety is the cheap half of liveliness. How *often* an idle animation plays is what
+            // costs CPU, and that is the timer above, unchanged; how many different ones there are
+            // to choose from costs a match arm that runs only while one is playing. So the pools
+            // grew and the cadence did not.
             let options: &[AnimKind] = match self.settings.pet.liveliness {
-                Liveliness::Calm => &[AnimKind::LookAround],
-                Liveliness::Normal => &[AnimKind::LookAround, AnimKind::Stretch, AnimKind::Wiggle],
-                Liveliness::Lively => &[AnimKind::LookAround, AnimKind::Stretch, AnimKind::Wiggle, AnimKind::Hop],
+                Liveliness::Calm => &[AnimKind::LookAround, AnimKind::Settle, AnimKind::Yawn],
+                Liveliness::Normal => &[
+                    AnimKind::LookAround,
+                    AnimKind::Stretch,
+                    AnimKind::Wiggle,
+                    AnimKind::Settle,
+                    AnimKind::Sniff,
+                    AnimKind::Yawn,
+                    AnimKind::Scratch,
+                ],
+                Liveliness::Lively => &[
+                    AnimKind::LookAround,
+                    AnimKind::Stretch,
+                    AnimKind::Wiggle,
+                    AnimKind::Hop,
+                    AnimKind::Settle,
+                    AnimKind::Sniff,
+                    AnimKind::Scratch,
+                    AnimKind::Sneeze,
+                    AnimKind::Yawn,
+                ],
             };
             options[(self.rand() % options.len() as u64) as usize]
         } else {
@@ -682,9 +714,10 @@ impl App {
         let night = schedule::is_quiet(&self.settings, now, &tz);
         if night != self.night {
             self.night = night;
-            if !night {
-                self.anim(AnimKind::WakeUp);
-            }
+            // Digging in for the night, and climbing out again in the morning. `GetUp` replaces
+            // the old `WakeUp` on this one path only: waking from a nap on open ground is still a
+            // stretch and a blink, and that is what every other caller of `WakeUp` means.
+            self.anim(if night { AnimKind::TurnIn } else { AnimKind::GetUp });
             self.arm_idle();
         }
 
@@ -1207,6 +1240,10 @@ impl App {
         self.state_dirty = true;
         self.schedule_save();
         let was_asleep = self.asleep();
+        // Read before the line below changes it: waking something that is down a burrow has to
+        // climb out, or the resting pose snaps from curled-up-in-a-hole to standing between two
+        // frames with no hole and no explanation.
+        let was_burrowed = self.night_burrow();
         if was_asleep {
             self.wake_until_ms = tick_ms() + 20_000;
         }
@@ -1221,7 +1258,11 @@ impl App {
             self.pet.show_bubble(c);
             self.set_timer(T_BUBBLE, 12_000);
         }
-        self.anim(if was_asleep { AnimKind::WakeUp } else { AnimKind::Hop });
+        self.anim(match (was_burrowed, was_asleep) {
+            (true, _) => AnimKind::GetUp,
+            (false, true) => AnimKind::WakeUp,
+            (false, false) => AnimKind::Hop,
+        });
         self.arm_clock();
     }
 

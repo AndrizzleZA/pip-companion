@@ -194,8 +194,9 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
   nothing inside it, and a provider that reports an empty window is worse than silence.
-- Final polish: more animations. *Personality presets dropped (§46).* The burrow — Pip digs a hole
-  and climbs into it instead of vanishing when you hide it — is **built (§55)**.
+- Final polish: more animations — **done for now (§55, §56)**. The burrow (Pip digs a hole and
+  climbs into it instead of vanishing), a burrow it sleeps in through quiet hours, and five more
+  idle animations: yawn, sniff, scratch, sneeze, settle. *Personality presets dropped (§46).*
 - **Saving stopped at every logon — found and fixed (§54).** A file held for a moment while Windows
   logged in tripped the §39 "cannot read my own files" valve, which then refused to save for that
   entire session, for a week, in silence. The read is now retried, a log line that cannot be written
@@ -2249,3 +2250,61 @@ reason written at both ends, because the alternative is a state enum for one ani
 verification had to be done on a running window, not reasoned about: the arithmetic for this looked
 fine, and the arithmetic for the near lip looked fine too (§55 above), and both were wrong in a way
 only looking could show.
+
+## 56. Making it visible, and a burrow to sleep in, 2026-10-15
+
+Andre watched §55 run on his own desktop and asked for three things: make it more visible, use it
+for the night, and add more of these small animations. All three are the same observation from
+different angles — the companion is 112 pixels tall on a screen someone is working on, and a
+gesture that is *technically* on screen is not the same as one anybody sees.
+
+**Slower, and in beats.** 650 ms was long enough to see and too short to notice: by the time your
+eye arrived it was a closed hole. The burrow is now 1500 ms and reads as four separate things —
+dig, look down at what you dug, drop in, hole closes over. The looking beat does most of the work:
+it is the one that makes the drop deliberate rather than a slide.
+
+**Earth, because four pixels of arm is nothing.** The paws move about four pixels at normal size.
+Specks of soil thrown out of the hole are what actually says "digging" at this scale. They taught
+two lessons immediately. Drawn last, with the other badges, they landed on the creature's face —
+Pip dug its way to a faceful of its own soil — so they moved to the ground layer, before the body.
+Drawn behind the body and thrown straight up from the feet, they were then invisible for their
+whole arc, because "behind the body" means behind *Pebble's* body, which is 43 units wide. They now
+leave the ground already clear of the widest creature in the set.
+
+**The night burrow, which contradicts §55 and should.** §55 refused to use the burrow for quiet
+hours, and the argument was that a sleeping pet is the only thing on screen saying *why* nothing is
+happening, so swapping it for an empty hole trades information for an animation. That argument was
+about *hiding*. It does not apply to what was actually wanted: the hole stays open and the
+companion stays visibly asleep in it, with its Zzz. Nothing is traded. At the start of quiet hours
+Pip digs in, yawns on the way down and curls up; in the morning it stretches and climbs out.
+
+The resting pose and the two transitions both *set* the body transform rather than multiplying it,
+and the transitions are skipped while the resting pose applies, because two things that both set a
+scale will cheerfully compound and put the companion down a well. The Zzz learned to follow the
+head: three Z's left at standing height floated in the sky above an apparently empty hole.
+
+Quiet hours only — not "you walked away", not a locked screen. Those are states Pip leaves the
+moment you touch the machine, and digging a hole for a coffee break is a lot of ceremony for ninety
+seconds. Clicking a sleeping companion climbs it out of the burrow rather than snapping it upright,
+which is the same rule the rest of this section is about.
+
+**Five more idle animations, and why they were nearly free.** Yawn, Sniff, Scratch, Sneeze and
+Settle, bringing the idle pools to three, seven and nine by liveliness. The thing worth writing
+down is the cost: **how often an idle animation plays is what costs CPU, and that did not change.**
+The timer and its intervals are untouched. What grew is how many different ones it can pick from,
+which is a match arm that runs only while one is already playing. Variety is the cheap half of
+liveliness and frequency is the expensive half, and it is easy to reach for the wrong one.
+
+Sneeze briefly borrowed the digging's soil for its puff and looked exactly like a companion
+sneezing dirt. The whip of the head carries it without help.
+
+**Measured** (§8 protocol, 4-minute window, pet forced awake): 1.80 MB private memory, 1.89 MB
+working set, 24 ms startup (11–70), 4 threads, 171 handles, 2132 KB binary. **Idle CPU 0.89 s/h,
+inside the 1 s/h target** — with five more animations in the pools than the run that reported
+1.76 s/h, which is the claim about variety being free, measured rather than asserted.
+
+That is now three readings of the same number under the same protocol: **1.76, then 1.02, then
+0.89**, a spread of nearly a second against a target of one. §54 called the first of those drift
+and had to take it back; what is actually true is that a four-minute window cannot measure this to
+better than about ±0.5 s/h, and anyone wanting to know whether idle CPU has really moved since the
+0.96 s/h of 21 September needs a longer window, not another four minutes.
