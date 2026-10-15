@@ -467,9 +467,11 @@ impl App {
 
     fn on_frame(&mut self) {
         self.pet.finish_anim_if_done();
-        // The hole has closed over; now the window can actually go.
+        // The hole has closed over; now the window can actually go. The flag stays *set* across
+        // this call on purpose: `set_visible` reads it to tell "start digging" from "the digging
+        // is done", and clearing it here sent the second call straight back into the first branch —
+        // a pet that dug, finished, and dug again, thirty times a second, for ever.
         if self.burrowing_out && self.pet.anim.is_none() {
-            self.burrowing_out = false;
             self.set_visible(false);
             return;
         }
@@ -1366,6 +1368,8 @@ impl App {
     }
 
     pub fn set_visible(&mut self, visible: bool) {
+        // `!self.burrowing_out` is what stops this from being a loop: the call that finishes the
+        // dig comes back through here and must fall past this branch into the real hide below.
         if !visible && self.pet.visible && !self.burrowing_out && self.burrow_ok() {
             // Hidden is decided *now*, not when the digging finishes: a shutdown or a crash
             // halfway through has to bring Pip back hidden, which is what was asked for.

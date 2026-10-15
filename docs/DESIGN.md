@@ -2228,3 +2228,24 @@ working set, 30 ms startup (16–85), 4 threads, 171 handles, 2128 KB binary —
 section, which is what it should be: the animation only runs while you are hiding or showing the
 pet, and the window draws nothing at all the rest of the time. Idle CPU 1.02 s/h, which is the
 reading that corrected §54's claim of drift.
+
+**The first build of this dug for ever.** Finishing the dig calls `set_visible(false)` a second time,
+to do the hide it deferred, and that call came back through the same branch that starts a burrow —
+because the "I am burrowing" flag had been cleared one line too early. The guard it needed to fail
+was the one thing switched off before the call. Pip dug, finished, dug again, thirty times a second,
+and never hid.
+
+Nothing in the test suite could have caught it: the loop lives in the window's own message pump,
+which needs a real `HWND`, a real timer and a real message loop. What caught it was a trace of three
+lines — `set_visible` on entry, `on_frame` while burrowing — against a throw-away instance in a
+temporary data folder, which printed the cycle immediately. Afterwards, with the flag left set
+across the call, the same instance measured **665 ms from asking to hidden** (650 ms of animation
+plus a frame) and 23 ms from asking to visible.
+
+Two lessons, both already in this document and both ignored here. The flag is read for two different
+questions — "should I start?" and "am I finishing?" — and a single `bool` doing that is exactly the
+sort of thing §51 says to make impossible rather than to comment; it is left as a `bool` with the
+reason written at both ends, because the alternative is a state enum for one animation. And the
+verification had to be done on a running window, not reasoned about: the arithmetic for this looked
+fine, and the arithmetic for the near lip looked fine too (§55 above), and both were wrong in a way
+only looking could show.
