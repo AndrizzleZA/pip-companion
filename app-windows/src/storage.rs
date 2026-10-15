@@ -4,11 +4,14 @@ use pip_core::{Settings, State};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 pub struct Storage {
     pub dir: PathBuf,
     /// Set when a file existed but would not open. While it is set, nothing is written.
     blocked: AtomicBool,
+    /// Log lines that could not be written yet, in order, each already carrying its timestamp.
+    pending_log: Mutex<Vec<String>>,
 }
 
 /// Takes the data folder off every account but this one, once.
@@ -84,7 +87,7 @@ impl Storage {
             .unwrap_or_else(|| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&dir);
         lock_to_this_user(&dir);
-        Storage { dir, blocked: AtomicBool::new(false) }
+        Storage { dir, blocked: AtomicBool::new(false), pending_log: Mutex::new(Vec::new()) }
     }
 
     pub fn is_custom_dir() -> bool {
@@ -116,9 +119,45 @@ impl Storage {
         st
     }
 
+    /// Reads a file, retrying for a third of a second if it is there but will not open.
+    ///
+    /// Pip starts when you log on, in the middle of everything else the machine is doing, and a
+    /// file held for a few milliseconds by a scanner or by the profile service is not the same
+    /// thing as a file Pip may never write over again. The first version did not tell those apart:
+    /// one transient failure at logon turned saving off for that whole session, and because the
+    /// only warning was a bubble shown at 06:36, it went unnoticed for a week (§54).
+    ///
+    /// Every error except "not there" is retried, including permission errors. Being precise about
+    /// which codes are transient would mean guessing which one logon actually produces, and the
+    /// cost of guessing wrong is a day of someone's data; the cost of waiting 300 ms for a
+    /// genuinely permanent error is 300 ms, once, on a path that already ends in a warning.
+    fn read_retrying(&self, p: &Path) -> (std::io::Result<Vec<u8>>, u32) {
+        const TRIES: u32 = 6;
+        let mut attempt = 1;
+        loop {
+            match std::fs::read(p) {
+                Ok(bytes) => return (Ok(bytes), attempt),
+                // Not being there is an answer, not a failure. Never spend time retrying it: it is
+                // the ordinary first run, and it is on the startup path of every launch.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Err(e), attempt),
+                Err(e) if attempt >= TRIES => return (Err(e), attempt),
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
     fn load<T: serde::de::DeserializeOwned + Default>(&self, name: &str) -> (T, bool) {
         let p = self.path(name);
-        match std::fs::read(&p) {
+        let (read, attempts) = self.read_retrying(&p);
+        if attempts > 1 && read.is_ok() {
+            // Worth a line: it is the difference between "this machine is fine" and "this nearly
+            // turned saving off", and it is the only way to see the problem receding.
+            self.log(&format!("{name} would not open at first; read it on attempt {attempts}"));
+        }
+        match read {
             Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(v) => (v, true),
                 Err(e) => {
@@ -136,7 +175,9 @@ impl Storage {
             // nobody could read. Refuse to write anything from here on instead.
             Err(e) => {
                 self.blocked.store(true, Ordering::Relaxed);
-                self.log(&format!("{name} is there but could not be read ({e}); nothing will be saved over it"));
+                self.log(&format!(
+                    "{name} is there but could not be read after {attempts} attempts ({e}); nothing will be saved over it"
+                ));
                 (T::default(), false)
             }
         }
@@ -178,14 +219,38 @@ impl Storage {
     }
 
     /// Tiny append-only log (startup timing, errors). Rotated at 256 KB.
+    ///
+    /// A line that cannot be written is kept and retried on the next call rather than dropped. The
+    /// log is the only record of what went wrong, and the moments it matters most — logon, a locked
+    /// file, a full disk — are exactly the moments the write itself fails. §54 stayed invisible for
+    /// a week because the one message that explained it was quietly thrown away.
     pub fn log(&self, msg: &str) {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let mut pending = match self.pending_log.lock() {
+            Ok(p) => p,
+            // A poisoned lock means another thread panicked while logging. The lines are still
+            // intact and losing them is the one thing this function exists to prevent.
+            Err(e) => e.into_inner(),
+        };
+        pending.push(format!("{ts}  {msg}\n"));
+        // If writing stays broken, keep the newest. Whatever has been failing since is worth more
+        // than the startup line, and an unbounded buffer would be a leak dressed as diligence.
+        const KEEP: usize = 200;
+        if pending.len() > KEEP {
+            let over = pending.len() - KEEP;
+            pending.drain(..over);
+        }
+
         let p = self.path("pip.log");
         if std::fs::metadata(&p).map(|m| m.len() > 256 * 1024).unwrap_or(false) {
             let _ = std::fs::rename(&p, p.with_extension("log.old"));
         }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(f, "{ts}  {msg}");
+            // One write for the backlog: a partial flush would reorder or duplicate lines, and
+            // the backlog is small enough that all-or-nothing is the simpler guarantee.
+            if f.write_all(pending.concat().as_bytes()).is_ok() {
+                pending.clear();
+            }
         }
     }
 
@@ -199,7 +264,22 @@ mod unreadable_is_not_absent {
     use super::*;
 
     fn store(dir: &Path) -> Storage {
-        Storage { dir: dir.to_path_buf(), blocked: AtomicBool::new(false) }
+        Storage { dir: dir.to_path_buf(), blocked: AtomicBool::new(false), pending_log: Mutex::new(Vec::new()) }
+    }
+
+    /// Holds a real Windows lock on a file for a while, the way a scanner does at logon:
+    /// `share_mode(0)` is what makes another process's open fail rather than succeed.
+    fn hold_exclusively(path: PathBuf, ms: u64) -> std::thread::JoinHandle<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let h = std::thread::spawn(move || {
+            let f = std::fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&path);
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            drop(f);
+        });
+        rx.recv().unwrap(); // the lock is held before the test goes on
+        h
     }
 
     fn scratch(tag: &str) -> PathBuf {
@@ -237,6 +317,51 @@ mod unreadable_is_not_absent {
         s.save_settings(&Settings::default());
         assert!(d.join("state.json").is_dir(), "the unreadable thing is left exactly as it was");
         assert!(!d.join("settings.json").exists(), "and nothing else is written either");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The §54 bug itself: a file locked for a moment at logon must not turn saving off for the
+    /// session. Held for 150 ms against a budget of six tries 60 ms apart.
+    #[test]
+    fn a_file_locked_for_a_moment_is_waited_for_rather_than_given_up_on() {
+        let d = scratch("locked-briefly");
+        let p = d.join("state.json");
+        std::fs::write(&p, serde_json::to_vec(&State::new(0)).unwrap()).unwrap();
+        let lock = hold_exclusively(p.clone(), 150);
+
+        let s = store(&d);
+        let (_, existed): (State, bool) = s.load("state.json");
+        lock.join().unwrap();
+
+        assert!(existed, "the file was there the whole time and had to be waited for, not skipped");
+        assert!(!s.blocked(), "a lock that lasts 150 ms must never cost a session of saving");
+        s.save_state(&State::new(0));
+        assert!(p.is_file(), "and saving still works afterwards");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The other half of §54: the message explaining the failure must survive not being writable.
+    #[test]
+    fn a_log_line_that_cannot_be_written_is_kept_and_written_later() {
+        let d = scratch("log-locked");
+        let p = d.join("pip.log");
+        std::fs::write(&p, b"").unwrap();
+        let lock = hold_exclusively(p.clone(), 250);
+
+        let s = store(&d);
+        s.log("the line that explains everything");
+        // Opening the contents is what the lock forbids; the size is still readable.
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 0, "it could not be written yet");
+
+        lock.join().unwrap();
+        s.log("something later");
+        let written = std::fs::read_to_string(&p).unwrap();
+        assert!(written.contains("the line that explains everything"), "the kept line was written: {written:?}");
+        assert!(written.contains("something later"));
+        assert!(
+            written.find("explains everything") < written.find("something later"),
+            "and in the order it happened: {written:?}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

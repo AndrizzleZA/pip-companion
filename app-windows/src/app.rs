@@ -293,11 +293,19 @@ impl App {
         // on disk is the most misleading thing Pip could do here.
         if self.store.blocked() {
             let (t, b) = messages::cannot_read_its_own_files(&self.settings.pet.name);
-            let mut card = Card::new(BubbleKind::Message).line(b, false);
-            card.title = Some(t);
+            let mut card = Card::new(BubbleKind::Message).line(b.clone(), false);
+            card.title = Some(t.clone());
             card.buttons.push(("I understand".into(), Action::Close, BtnStyle::Primary));
             self.pet.show_bubble(card);
-            self.set_timer(T_BUBBLE, 120_000);
+            // Deliberately no dismiss timer. Every other bubble times out because none of them
+            // matters after the moment it appears; this one says "nothing you do today will be
+            // kept", and it waits for the button. The tray tooltip carries it after that.
+            //
+            // And a bubble on a hidden pet is nobody telling anybody: the same rule the reminders
+            // follow (§4) applies here, so it goes through the notification area instead.
+            if !self.pet.visible {
+                self.tray.balloon(&t, &b);
+            }
         } else if self.first_run {
             let (t, b) = messages::first_run(&self.settings.pet.name);
             let mut card = Card::new(BubbleKind::Message).line(b, false);
@@ -406,6 +414,12 @@ impl App {
         };
         if let Some(t) = self.state.dnd_until.filter(|&t| t > now_unix()) {
             tip.push_str(&format!("\nDo not disturb until {}", hm(t)));
+        }
+        // Saving being off is the most important thing Pip could be telling anyone, so it has to
+        // live somewhere that outlasts a bubble. §54 ran for a week on the strength of a message
+        // shown once, at logon, for two minutes, while nobody was at the machine.
+        if self.store.blocked() {
+            tip.push_str("\nNot saving: Pip cannot read its own files");
         }
         tip
     }

@@ -195,10 +195,12 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
   nothing inside it, and a provider that reports an empty window is worse than silence.
 - Final polish: more animations. *Personality presets dropped (§46).* The burrow — Pip digging in
-  rather than vanishing — is proposed and **parked** behind the save bug below (§54).
-- **Open bug (§54):** in one long-running process Pip stopped saving on its 1.5-second schedule and
-  only wrote state when it exited. Not diagnosed, nothing lost, and invisible to the person using
-  it, which is the worse half. The next step is to see whether it recurs.
+  rather than vanishing — is proposed and not built. It was parked behind §54, which is now fixed,
+  so it waits on nothing but a decision.
+- **Saving stopped at every logon — found and fixed (§54).** A file held for a moment while Windows
+  logged in tripped the §39 "cannot read my own files" valve, which then refused to save for that
+  entire session, for a week, in silence. The read is now retried, a log line that cannot be written
+  is kept instead of dropped, and the warning outlives the moment it appears in.
 
 ## 7. Guiding rules
 
@@ -2054,3 +2056,92 @@ phone also calls. It is polish, it fixes nothing broken, and a save path that ca
 outranks an animation. The proposal is not written down here on purpose: an unbuilt design
 recorded as prose is exactly the "plan written down as a fact" that §51 names as the first way this
 document goes stale.
+
+**Diagnosed and fixed, 2026-10-15.** Two days of being wrong in public, then an ordinary answer.
+
+The correlation is exact. The machine had not rebooted since 8 October — 180 hours of uptime — which
+I first read as "there have been no logons", and it is not what it means: Windows records eight
+*interactive logon sessions* in that window, because Andre signs out rather than restarting. Lined
+up against which Pip processes saved:
+
+| Logon | Pip started | Logged its start | Saved |
+|---|---|---|---|
+| 12 Oct 10:28:51 | 10:28 | no | no |
+| 13 Oct 06:47:47 | 06:48:32 | no | no |
+| 14 Oct 06:36:12 | 06:36 | no | no |
+| 14 Oct 18:36:21 | 18:37:24 | no | no |
+| *(none — started by hand)* | 13 Oct 12:56 | **yes** | **yes, for 17 hours** |
+
+Every Pip that starts in the rush of a logon cannot read its own files, trips the §39 valve, and
+spends that whole session not saving. Every Pip started by hand is fine. `explorer.exe` restarting
+at 18:36:27 is the independent witness that 18:36 really was a fresh logon.
+
+**The second thing I had wrong**, and it is the one that mattered: I told Andre the four days of
+water and experience had been rescued by the save in `shutdown()`. They had not. The data appeared
+42 seconds *after* the replacement process started, which is when it first syncs — **the phone had
+been holding it all along** (§48, doing exactly what it was built for). Had the phone not existed,
+each logon would have silently cost everything since the last manual launch.
+
+**The fix is three things, and none of them needs the exact Win32 error.**
+
+*The read is retried.* Six attempts, 60 ms apart, for anything except "not there" — which returns
+at once, being the ordinary first run on the startup path of every launch. Being cleverer about
+which error codes are transient would mean guessing which one a logon produces, and the price of
+guessing wrong is a day of someone's data, against 300 ms once on a path that ends in a warning
+anyway. A test holds a real `share_mode(0)` lock on `state.json` for 150 ms and asserts that the
+session still saves.
+
+*A log line that cannot be written is kept, not dropped.* The log is the only record of what went
+wrong, and the moment it matters most — a locked file, a logon, a full disk — is exactly the moment
+the write fails. `log()` now buffers in order and flushes the backlog on the next call that opens
+the file, bounded at 200 lines so a permanently broken write cannot grow into a leak. This is why
+the bug was invisible: the one sentence explaining it was being thrown away for a week, which is
+also why `pip.log` showed a four-day gap with no complaint in it.
+
+*The warning outlives the moment.* It used to be a bubble shown once at startup with a 120-second
+dismiss timer, at 06:36, while nobody was at the machine. The bubble now has no timer and waits for
+its button; the tray tooltip carries "Not saving: Pip cannot read its own files" for as long as it
+is true; and if the pet is hidden, the notification area gets it, on the same reasoning §4 gives for
+reminders — a bubble on a hidden pet is nobody telling anybody.
+
+**Declined, having said in the morning that it was part of the fix: re-enabling saving mid-session.**
+It sounds obviously right and it is the §39 disaster with extra steps. When a read fails, what is in
+memory is *defaults*; clearing the flag later and saving would write those defaults over the real
+file, which is precisely the thing the valve exists to prevent. Doing it safely would mean re-reading
+and adopting the file mid-session, merging it against whatever the person has done since — a real
+feature, for a case the retry above should now make rare. Rare and loud beats clever and destructive.
+
+**And the measuring tool had been broken the whole time.** `tools/measure.ps1` launches the release
+binary, which is by definition a loose exe, so Pip put up "Install Pip on this PC?" and waited; the
+script then measured a process sitting on a modal dialog with no window and no log, and reported
+only that it could not find a log file. It has broken silently since the install offer was added
+(§16), through two runs today, and it left a dialog box on Andre's desktop. It now passes
+`--portable`. A tool that fails by measuring the wrong thing is worse than one that fails loudly,
+which is the same complaint as the rest of this section.
+
+**What the repaired tool said the moment it ran, 2026-10-15** (4-minute window, pet forced awake,
+throw-away data folder, no accounts connected — the §8 protocol):
+
+| Metric | Measured | Target | |
+|---|---|---|---|
+| Processes | 1 | 1 | ✅ |
+| Idle private memory | 1.82 MB avg / 1.93 MB max | ≤ 8 MB | ✅ |
+| Idle working set | 2.14 MB avg / 3.69 MB max | ≤ 15 MB | ✅ |
+| Private working set | 0.49 MB avg / 0.83 MB max | — | |
+| **Idle CPU** | **1.76 s per hour** (cycle-exact, 3.701 GHz) | **≤ 1 s/h** | ❌ |
+| Startup | 38 ms avg, 19–105 | ≤ 150 ms | ✅ |
+| Threads / handles | 3 / 171 max | — | |
+| Executable | 2125 KB | ≤ 3 MB | ✅ |
+
+**Idle CPU has drifted past its target and nobody knew**, because the only instrument that would
+have said so had been quietly measuring a modal dialog. §8 recorded 0.96 s/h under this exact
+protocol on 21 September; it is 1.76 s/h now. Not caused by this section's fix, which adds nothing
+to the idle loop — the retry runs at startup and the log buffer only when something is logged — and
+startup is unchanged at 38 ms because no file was locked. The real-world figure is still under the
+target (0.82 s/h measured over 12.7 hours of ordinary use in §53, where the pet sleeps and is not
+forced awake), so this is a worst-case target missed rather than a promise broken to anyone.
+
+It is left open and unchased, deliberately. Finding 0.8 s/h of drift across five phases of features
+is a bisecting job, and doing it badly — a plausible culprit named after one look — is the mistake
+this section already records twice. What it is not allowed to be is forgotten again: the number is
+written down here, with the date and the protocol, which is the rule §51 arrived at.

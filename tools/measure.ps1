@@ -36,10 +36,15 @@ if ($Awake) { $env:PIP_MEASURE_AWAKE = "1" } else { Remove-Item Env:PIP_MEASURE_
 
 function Stop-Pip { & $Exe --cmd quit | Out-Null; Start-Sleep -Milliseconds 700 }
 
+# `--portable` on every launch, because this exe is by definition a loose one: without it Pip puts
+# up "Install Pip on this PC?" and waits, and the script then measures a process sitting on a modal
+# dialog with no window and no log. That silently broke this tool the day the install offer was
+# added, and cost two measurement runs before anyone noticed what it was.
+
 # --- Startup ------------------------------------------------------------------------------
 $startups = @()
 for ($i = 0; $i -lt $Launches; $i++) {
-    $p = Start-Process $Exe -PassThru
+    $p = Start-Process $Exe -ArgumentList '--portable' -PassThru
     Start-Sleep -Milliseconds 1500
     Stop-Pip
     $line = (Get-Content (Join-Path $data "pip.log") | Select-String "started in (\d+) ms" | Select-Object -Last 1)
@@ -47,7 +52,7 @@ for ($i = 0; $i -lt $Launches; $i++) {
 }
 
 # --- Idle ---------------------------------------------------------------------------------
-$p = Start-Process $Exe -PassThru
+$p = Start-Process $Exe -ArgumentList '--portable' -PassThru
 Start-Sleep -Seconds 75                      # steady state: after pop-in and the 60 s first-run bubble
 & $Exe --cmd "show" | Out-Null               # (dismisses nothing; just proves the channel works)
 $p.Refresh()
