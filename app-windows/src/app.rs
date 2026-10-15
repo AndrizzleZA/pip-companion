@@ -1405,7 +1405,10 @@ impl App {
     /// gone now rather than in two thirds of a second — that path calls `ShowWindow` directly and
     /// never comes through here, which is why there is nothing about it below.
     fn burrow_ok(&self) -> bool {
-        self.settings.pet.liveliness != Liveliness::Calm
+        // Not while it is already asleep in the night's burrow: digging a second hole from inside
+        // the first one snaps the one it is in shut and starts again, which is a lot of commotion
+        // for a companion that is meant to be asleep.
+        self.settings.pet.liveliness != Liveliness::Calm && !self.night_burrow()
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -1431,7 +1434,12 @@ impl App {
         self.schedule_save();
         unsafe { ShowWindow(self.hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
         if visible {
-            self.pet.start_anim(if self.burrow_ok() { AnimKind::Unburrow } else { AnimKind::PopIn });
+            // Nothing at all when it is already asleep in the night's burrow (§56). `Unburrow`
+            // would climb it out of a hole it is supposed to be in, and then the resting pose
+            // would drop it straight back down — the window appearing is the whole transition.
+            if !self.night_burrow() {
+                self.pet.start_anim(if self.burrow_ok() { AnimKind::Unburrow } else { AnimKind::PopIn });
+            }
             self.render();
             if !self.pending.is_empty() {
                 self.set_timer(T_NEXT, 700);

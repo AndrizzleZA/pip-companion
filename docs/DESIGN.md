@@ -2308,3 +2308,14 @@ That is now three readings of the same number under the same protocol: **1.76, t
 and had to take it back; what is actually true is that a four-minute window cannot measure this to
 better than about ±0.5 s/h, and anyone wanting to know whether idle CPU has really moved since the
 0.96 s/h of 21 September needs a longer window, not another four minutes.
+
+**The two of them met, at 22:48 the same night.** Quiet hours had started and the pet was hidden,
+so showing it played `Unburrow` — climbing out of a hole it was supposed to be asleep in, after
+which the resting pose dropped it straight back down. The mirror was worse: hiding while already
+nestled started a fresh `Burrow`, which snapped the hole it was lying in shut and dug another one.
+
+Both are the same mistake. Two features each own the body transform and the hole, and each was
+written as though it were the only one. The fix is one line in each direction — disappearing is
+not dug while it is already in a burrow, and appearing plays nothing at all, because a window that
+appears is already the whole transition. Found by watching the real window rather than by thinking
+about it, which is now three for three in this pair of sections.
