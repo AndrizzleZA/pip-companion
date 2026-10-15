@@ -53,7 +53,13 @@ fn build_stamp() -> String {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PIP_BUILD");
+    // HEAD's *contents* only change when the branch does, so committing on the same branch left
+    // the stamp untouched: a build made after a commit still said `-dirty`, and one made after
+    // committing a fix carried the hash of the commit before it. A stamp that names the wrong
+    // source is worse than no stamp, because §34 reads a crash report by trusting it. The index
+    // changes on every `git add` and every commit, which is exactly when the stamp goes stale.
     println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/index");
     println!("cargo:rustc-env=PIP_BUILD={}", build_stamp());
     let path = std::env::var_os("PIP_GOOGLE_CLIENT_JSON")
         .map(PathBuf::from)
