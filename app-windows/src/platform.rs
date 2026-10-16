@@ -269,6 +269,39 @@ struct Recipe {
     notes: &'static [(f32, f32)],
 }
 
+/// What the companion is saying, as against what it sounds like.
+///
+/// A phrase is a shape — rising, falling, two taps — and the chosen [`Voice`] supplies the timbre,
+/// so every noise comes from the same creature. The alternative was a second palette of unrelated
+/// sounds, which is how a program ends up with a cute chime and a stock beep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phrase {
+    /// The voice exactly as chosen: the original two notes.
+    Plain,
+    /// Up a step and held: a question.
+    Rising,
+    /// Two short dry knocks.
+    Knock,
+    /// Three notes climbing: pleased.
+    Trill,
+    /// Down and softening: end of the day.
+    Falling,
+}
+
+/// Multipliers on the chosen voice's notes, plus how the phrase bends and how long it runs.
+///
+/// Ratios rather than fixed hertz, so a phrase keeps the pitch of whichever voice is set: a Blip
+/// trill and a Bell trill are the same tune in two different instruments.
+fn phrase(p: Phrase) -> (&'static [(f32, f32)], f32, f32) {
+    match p {
+        Phrase::Plain => (&[(1.0, 0.0)], 1.0, 0.0),
+        Phrase::Rising => (&[(1.0, 0.0), (1.26, 0.10)], 1.0, 2.5),
+        Phrase::Knock => (&[(0.72, 0.0), (0.72, 0.085)], 0.55, -1.0),
+        Phrase::Trill => (&[(1.0, 0.0), (1.19, 0.07), (1.5, 0.14)], 1.15, 1.5),
+        Phrase::Falling => (&[(1.0, 0.0), (0.84, 0.12), (0.67, 0.26)], 1.5, -2.0),
+    }
+}
+
 fn recipe(voice: Voice) -> Recipe {
     match voice {
         // The original: A5 then E6.
@@ -284,20 +317,56 @@ fn recipe(voice: Voice) -> Recipe {
 
 impl Chime {
     pub fn new(voice: Voice) -> Self {
+        Chime::say(voice, Phrase::Plain, 1.0, 0)
+    }
+
+    /// Builds one utterance: a phrase in a voice, at a volume, with a per-play wobble.
+    ///
+    /// `seed` detunes the whole thing by up to about a semitone and a half. It is the difference
+    /// between a creature and a doorbell — the same noise to the exact hertz every single time is
+    /// the thing that makes a sound effect wear out, and it costs one multiply.
+    ///
+    /// Built when it is played and dropped when the next one is built: the buffer only has to
+    /// outlive `PlaySound`, so a shelf of cached sounds would be a few hundred kilobytes held for
+    /// nothing. Synthesising half a second of 22 kHz audio is a few thousand multiplies.
+    pub fn say(voice: Voice, ph: Phrase, volume: f32, seed: u64) -> Self {
         const RATE: u32 = 22_050;
         let r = recipe(voice);
-        let len = (RATE as f32 * r.len) as usize;
-        let mut samples = vec![0i16; len];
-        for &(freq, start) in r.notes {
+        let (steps, len_scale, bend) = phrase(ph);
+        // A cheap, stable spread in roughly 0.96..1.04.
+        let wobble = 1.0 + ((seed % 101) as f32 / 100.0 - 0.5) * 0.08;
+        let base = r.notes.first().map(|n| n.0).unwrap_or(880.0) * wobble;
+        let len = (RATE as f32 * r.len * len_scale) as usize;
+        let mut samples = vec![0i16; len.max(1)];
+        let amp = 5200.0 * volume.clamp(0.0, 1.0);
+        for &(ratio, start) in steps {
+            let freq = base * ratio;
             let s0 = (start * RATE as f32) as usize;
             for (i, s) in samples.iter_mut().enumerate().skip(s0) {
                 let t = (i - s0) as f32 / RATE as f32;
                 let env = (1.0 - (-t * 60.0).exp()) * (-t * r.decay).exp();
-                let v = (t * freq * std::f32::consts::TAU).sin() * 0.6
-                    + (t * freq * 2.0 * std::f32::consts::TAU).sin() * r.harmonic;
-                *s = s.saturating_add((v * env * 5200.0) as i16);
+                // The glide: the note slides as it sounds, which is most of what separates a
+                // voice from a tone. Phase is the integral of frequency, not frequency × time.
+                let phase = (freq * t + bend * 0.03 * freq * t * t) * std::f32::consts::TAU;
+                let v = phase.sin() * 0.6 + (phase * 2.0).sin() * r.harmonic;
+                *s = s.saturating_add((v * env * amp) as i16);
             }
         }
+        // Normalise, so that choosing a voice is choosing a character and not a volume.
+        //
+        // The recipes set their own decay, and a fast one spends most of its energy before the
+        // attack has finished rising: Blip peaked at about a fifteenth of full scale where Bell
+        // reached a third, so picking it quietly turned the sound down by four times. Found by
+        // the test below rather than by ear, having been that way since the voices were added.
+        let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+        if peak > 0 {
+            let want = 18_000.0 * volume.clamp(0.0, 1.0);
+            let gain = want / peak as f32;
+            for s in samples.iter_mut() {
+                *s = (*s as f32 * gain).clamp(-32_000.0, 32_000.0) as i16;
+            }
+        }
+
         let data_len = (len * 2) as u32;
         let mut wav = Vec::with_capacity(44 + data_len as usize);
         wav.extend_from_slice(b"RIFF");
@@ -484,4 +553,53 @@ pub fn os_build() -> String {
     let major = if build.parse::<u32>().unwrap_or(0) >= 22000 { "11" } else { "10" };
     let display = read("DisplayVersion").unwrap_or_default();
     format!("Windows {major} {display} (build {build})").replace("  ", " ")
+}
+
+#[cfg(test)]
+mod the_voice {
+    use super::*;
+
+    /// Reads the samples back out of the WAV this built.
+    fn samples(c: &Chime) -> Vec<i16> {
+        c.0[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    }
+
+    /// Whether it *sounds* nice is not something a test can tell me, and I cannot hear it either.
+    /// What a test can tell me is that every combination produces real audio — that no phrase is
+    /// silent, none is clipped into a buzz, and none comes out the wrong length. Those are the
+    /// three ways a synthesised sound goes wrong without anybody noticing until a user does.
+    #[test]
+    fn every_phrase_in_every_voice_is_real_audio() {
+        let phrases = [Phrase::Plain, Phrase::Rising, Phrase::Knock, Phrase::Trill, Phrase::Falling];
+        for voice in Voice::ALL {
+            for ph in phrases {
+                let c = Chime::say(voice, ph, 1.0, 12_345);
+                let s = samples(&c);
+                assert!(s.len() > 2_000, "{voice:?}/{ph:?} is only {} samples long", s.len());
+                let peak = s.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+                assert!(peak > 15_000, "{voice:?}/{ph:?} is inaudible (peak {peak})");
+                assert!(peak < 20_000, "{voice:?}/{ph:?} is louder than the rest (peak {peak})");
+                let clipped = s.iter().filter(|v| v.unsigned_abs() > 32_000).count();
+                assert!(clipped == 0, "{voice:?}/{ph:?} clips on {clipped} samples, which is a buzz");
+            }
+        }
+    }
+
+    /// Volume has to actually be a volume, since the setting rides on it.
+    #[test]
+    fn volume_scales_the_sound() {
+        let loud = samples(&Chime::say(Voice::Chime, Phrase::Plain, 1.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        let soft = samples(&Chime::say(Voice::Chime, Phrase::Plain, 0.3, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        assert!(soft * 2 < loud, "quiet ({soft}) is not meaningfully quieter than loud ({loud})");
+        let off = samples(&Chime::say(Voice::Chime, Phrase::Plain, 0.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        assert_eq!(off, 0, "zero volume should be silence");
+    }
+
+    /// The same noise to the exact sample every time is what makes a sound effect wear out.
+    #[test]
+    fn the_same_phrase_is_never_quite_the_same_twice() {
+        let a = samples(&Chime::say(Voice::Coo, Phrase::Rising, 1.0, 7));
+        let b = samples(&Chime::say(Voice::Coo, Phrase::Rising, 1.0, 64));
+        assert_ne!(a, b, "two plays of the same phrase came out byte-identical");
+    }
 }

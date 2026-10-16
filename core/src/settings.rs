@@ -201,6 +201,51 @@ impl PetSize {
     }
 }
 
+/// How hard the companion tries to be noticed when something is due.
+///
+/// One setting rather than the eight it could have been — repeat or not, how often, which
+/// animations, whether per-reminder behaviour is on. Those are consequences of this choice, not
+/// decisions anybody wants to make one at a time, and a screen of toggles is a control panel
+/// where this is a decision.
+///
+/// The ladder stops. `Insistent` is two further attempts and then quiet, because a companion that
+/// keeps going until it is answered is nagging, and §7 and §28 refuse that four times over. None
+/// of these ever remark on being ignored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Attention {
+    /// The bubble, and nothing else. No animation, no sound, no second try.
+    Still,
+    /// One small gesture, a sound if sounds are on, and it waits.
+    Subtle,
+    /// A gesture that suits the reminder, and one more try if it goes unanswered.
+    Playful,
+    /// The same, bigger, and two further tries. Then it waits like all the others.
+    Insistent,
+}
+
+impl Attention {
+    pub const ALL: [Attention; 4] = [Attention::Still, Attention::Subtle, Attention::Playful, Attention::Insistent];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Attention::Still => "Still",
+            Attention::Subtle => "Subtle",
+            Attention::Playful => "Playful",
+            Attention::Insistent => "Insistent",
+        }
+    }
+
+    /// How many *further* attempts after the first. The ceiling lives here and nowhere else.
+    pub fn retries(self) -> u8 {
+        match self {
+            Attention::Still | Attention::Subtle => 0,
+            Attention::Playful => 1,
+            Attention::Insistent => 2,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Liveliness {
@@ -291,6 +336,9 @@ pub struct PetSettings {
     /// Small clock pill next to the pet (ticks once a minute).
     pub show_clock: bool,
     pub liveliness: Liveliness,
+    /// How hard it tries to be noticed when something is due.
+    #[serde(default = "default_attention")]
+    pub attention: Attention,
     pub theme: Theme,
     pub start_with_system: bool,
 }
@@ -306,6 +354,7 @@ impl Default for PetSettings {
             always_on_top: true,
             show_clock: false,
             liveliness: Liveliness::Normal,
+            attention: default_attention(),
             theme: Theme::System,
             start_with_system: true,
         }
@@ -651,4 +700,12 @@ mod tests {
         assert_eq!(s.pet.name, "Pip");
         assert_eq!(s.water.interval_min, 1);
     }
+}
+
+/// Playful is the default because it is the one that makes the companion feel like something
+/// rather than a notification with a face, and it is still bounded: one further try, then quiet.
+/// Anyone upgrading from a version without the setting gets it, which is a small change in
+/// character and the point of having it.
+fn default_attention() -> Attention {
+    Attention::Playful
 }

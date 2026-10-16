@@ -475,6 +475,10 @@ pub enum AnimKind {
     Shake,
     /// Finds something tiny on the ground, picks it up, admires it — and it is not there.
     Found,
+    /// Leans in and knocks twice, the way you tap on glass to be noticed.
+    Tap,
+    /// A small two-step with a wag at the end. The biggest thing it does that is not a celebration.
+    Dance,
 }
 
 /// How far along the ground an animation wants the creature to be, in design units.
@@ -587,6 +591,8 @@ impl AnimKind {
             AnimKind::Pounce => 2400,
             AnimKind::Shake => 1100,
             AnimKind::Found => 3000,
+            AnimKind::Tap => 1600,
+            AnimKind::Dance => 2000,
         }
     }
 }
@@ -1235,6 +1241,43 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
                 p.mouth = Mouth::Wobble;
                 p.tilt -= 6.0 * (k * PI).sin();
             }
+        }
+        AnimKind::Tap => {
+            // Lean in, knock twice, settle. The knock is a short forward jab rather than a swing:
+            // an arm that travels looks like a wave, and a wave already means something else.
+            let lean = smooth(0.06, 0.26, t) * (1.0 - smooth(0.78, 1.0, t));
+            p.tilt += 9.0 * lean;
+            p.dy -= 2.8 * lean;
+            p.look_x = 0.5 * lean;
+            p.eyes = Eyes::Open;
+            p.mouth = Mouth::Tiny;
+            // Two knocks inside the lean, the second a touch softer.
+            for (start, force) in [(0.30f32, 1.0f32), (0.52, 0.8)] {
+                if (start..start + 0.14).contains(&t) {
+                    let k = (t - start) / 0.14;
+                    let jab = (k * PI).sin();
+                    p.arm_r = (0.55 + 0.45 * jab) * force;
+                    p.tilt += 3.5 * jab * force;
+                    p.sx *= 1.0 + 0.03 * jab;
+                }
+            }
+        }
+        AnimKind::Dance => {
+            // Two steps and a wag. Side to side with a lift on each beat, which on a body with no
+            // legs is the only thing that reads as footwork.
+            let ramp = smooth(0.0, 0.14, t) * (1.0 - smooth(0.82, 1.0, t));
+            let beat = (t * 4.0 * PI).sin();
+            // A dance on the widest body swings a hip at the window edge, so the lift that makes
+            // it look like footwork is also what keeps it inside the frame.
+            p.tilt += 9.5 * beat * ramp;
+            p.dy -= 3.4 * (t * 8.0 * PI).sin().abs() * ramp + 2.2 * beat.abs() * ramp;
+            p.sy *= 1.0 + 0.05 * (t * 8.0 * PI).sin().abs() * ramp;
+            p.arm_l = (0.45 + 0.4 * beat) * ramp;
+            p.arm_r = (0.45 - 0.4 * beat) * ramp;
+            p.leaf += 17.0 * beat * ramp;
+            p.eyes = Eyes::Happy;
+            p.mouth = Mouth::Grin;
+            p.blush = p.blush.max(0.65);
         }
         AnimKind::GetUp => {
             let k = 1.0 - smooth(0.22, 0.78, t);
@@ -1957,7 +2000,7 @@ mod shape_tests {
     }
 
     /// Everything, so a new animation is covered by the checks above without being added to a list.
-    const ALL_ANIMS: [AnimKind; 36] = [
+    const ALL_ANIMS: [AnimKind; 38] = [
         AnimKind::Blink, AnimKind::Hop, AnimKind::Wave, AnimKind::Celebrate, AnimKind::Drink,
         AnimKind::LookAround, AnimKind::Stretch, AnimKind::Wiggle, AnimKind::WakeUp, AnimKind::PopIn,
         AnimKind::Nod, AnimKind::Yawn, AnimKind::Sniff, AnimKind::Scratch, AnimKind::Sneeze,
@@ -1966,6 +2009,7 @@ mod shape_tests {
         AnimKind::GetUp, AnimKind::GetUpSlow, AnimKind::SleepBreath, AnimKind::SleepTwitch,
         AnimKind::SleepRoll, AnimKind::SleepStartle, AnimKind::SleepPeek, AnimKind::Wander,
         AnimKind::Stumble, AnimKind::Curious, AnimKind::Pounce, AnimKind::Shake, AnimKind::Found,
+        AnimKind::Tap, AnimKind::Dance,
     ];
 
     /// Nothing that stays put may quietly acquire a journey.

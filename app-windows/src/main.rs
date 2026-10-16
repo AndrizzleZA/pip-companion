@@ -7,6 +7,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod attention;
 mod behaviour;
 mod app;
 mod crash;

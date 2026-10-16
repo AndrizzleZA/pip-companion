@@ -41,6 +41,9 @@ pub const T_CALSYNC: usize = 11;
 pub const T_MAIL: usize = 14;
 pub const T_SYNC: usize = 15;
 pub const T_HEALTH: usize = 16;
+/// Asking again about something that went unanswered. One timer, killed the moment the item is
+/// dealt with, and never set past the ceiling.
+pub const T_ATTN: usize = 17;
 
 const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
@@ -74,6 +77,9 @@ pub struct Pending {
     pub title: String,
     pub body: String,
     pub shown: bool,
+    /// How many times the companion has already asked about this one. The ceiling is in
+    /// `Attention::retries`; this is only the count.
+    pub attempts: u8,
 }
 
 pub struct App {
@@ -684,6 +690,7 @@ impl App {
                 self.schedule_sync(RETRY_MS);
                 self.sync_now(true);
             }
+            T_ATTN => self.attention_retry(),
             T_HEALTH => self.on_health(),
             T_TRIM => {
                 self.kill_timer(T_TRIM);
@@ -868,7 +875,7 @@ impl App {
                 (messages::brief_title(&name, l.hour()), lines.join("\n"))
             }
         };
-        self.pending.push(Pending { key: d.key, occurrence: d.occurrence, priority: d.priority, title, body, shown: false });
+        self.pending.push(Pending { key: d.key, occurrence: d.occurrence, priority: d.priority, title, body, shown: false, attempts: 0 });
         let showing_notify = self.pet.bubble_kind() == Some(BubbleKind::Notify);
         if !showing_notify {
             self.show_front_pending(sound && d.priority >= Priority::Normal);
@@ -934,6 +941,17 @@ impl App {
         let card = self.notify_card(p);
         let (title, body, prio) = (p.title.clone(), p.body.clone(), p.priority);
         self.pending[0].shown = true;
+        let key = self.pending[0].key.clone();
+        let attempt = self.pending[0].attempts;
+        // One decision, in `attention`: which gesture, which noise, and whether to come back.
+        let act = crate::attention::act(
+            self.settings.pet.attention,
+            &key,
+            prio,
+            attempt,
+            self.settings.notify.sound && sound,
+            self.night,
+        );
         // Mid-burrow the window is still up, but it is on its way out and the bubble would be
         // thrown away with it in half a second. Hidden was asked for and is already recorded, so
         // this goes the way anything for a hidden pet goes: the notification area.
@@ -943,28 +961,79 @@ impl App {
             if self.asleep() {
                 self.wake_until_ms = tick_ms() + 60_000;
             }
-            self.anim(AnimKind::Wave);
+            if let Some(a) = act.anim {
+                self.anim(a);
+            }
             self.arm_clock();
         } else if prio >= Priority::Normal {
             self.tray.balloon(&title, &body);
         }
-        if sound {
-            self.play_chime();
+        if let Some(s) = act.sound {
+            self.play_sfx(s);
+        }
+        // Ask again later, or do not. A retry is only armed while the item is still pending and
+        // only up to the ceiling the style sets; answering it kills the timer.
+        self.kill_timer(T_ATTN);
+        if let Some(mins) = act.again_in {
+            self.set_timer(T_ATTN, mins * 60_000);
+        }
+    }
+
+    /// The second or third attempt at an item nobody has answered.
+    fn attention_retry(&mut self) {
+        self.kill_timer(T_ATTN);
+        let Some(p) = self.pending.first_mut() else { return };
+        p.attempts = p.attempts.saturating_add(1);
+        let (key, prio, attempt) = (p.key.clone(), p.priority, p.attempts);
+        // Not while the screen is locked, nobody is there, a game is in front, or it is the middle
+        // of the night: all of those mean the gesture would be made to an empty room.
+        if self.locked || self.away || self.fullscreen || self.night_burrow() || !self.pet.visible {
+            return;
+        }
+        let act = crate::attention::act(
+            self.settings.pet.attention,
+            &key,
+            prio,
+            attempt,
+            self.settings.notify.sound,
+            self.night,
+        );
+        if let Some(a) = act.anim {
+            self.anim(a);
+        }
+        if let Some(s) = act.sound {
+            self.play_sfx(s);
+        }
+        if let Some(mins) = act.again_in {
+            self.set_timer(T_ATTN, mins * 60_000);
         }
     }
 
     fn play_chime(&mut self) {
+        self.play_sfx(crate::attention::Sfx::Voice);
+    }
+
+    /// Says one thing, in the voice the person chose.
+    ///
+    /// Built at the moment it plays and kept only until the next one: the buffer has to outlive
+    /// `PlaySound` and nothing more, so a cache of five phrases would be a few hundred kilobytes
+    /// held permanently to save a few thousand multiplies. The seed moves every time, so the same
+    /// phrase is never quite the same noise twice.
+    fn play_sfx(&mut self, sfx: crate::attention::Sfx) {
         if !self.settings.notify.sound {
             return;
         }
-        let voice = self.settings.pet.voice;
-        // Built once per voice and kept; changing voice throws the old one away.
-        if self.chime.as_ref().is_none_or(|(v, _)| *v != voice) {
-            self.chime = Some((voice, platform::Chime::new(voice)));
-        }
-        if let Some((_, c)) = &self.chime {
-            c.play();
-        }
+        let ph = match sfx {
+            crate::attention::Sfx::Voice => platform::Phrase::Plain,
+            crate::attention::Sfx::Nudge => platform::Phrase::Rising,
+            crate::attention::Sfx::Tap => platform::Phrase::Knock,
+            crate::attention::Sfx::Trill => platform::Phrase::Trill,
+            crate::attention::Sfx::Sigh => platform::Phrase::Falling,
+        };
+        let seed = self.rand();
+        let c = platform::Chime::say(self.settings.pet.voice, ph, 1.0, seed);
+        c.play();
+        self.chime = Some((self.settings.pet.voice, c));
     }
 
     fn message(&mut self, text: String, secs: u32) {
@@ -996,6 +1065,10 @@ impl App {
             }
             Action::Drink => self.drink(),
             Action::Done | Action::Snooze | Action::Dismiss | Action::Open | Action::AlwaysFrom => {
+                // Answered. Whatever the companion was going to do about it in nine minutes, it
+                // is not doing it: a gesture that arrives after you have dealt with something is
+                // the exact thing that makes a reminder feel like nagging.
+                self.kill_timer(T_ATTN);
                 if action == Action::Open {
                     self.open_mail();
                 }

@@ -2485,3 +2485,58 @@ means it will be right for a creature nobody has drawn yet.
 
 The example declares `required-features = ["png-format"]`, because a plain `cargo test` builds every
 example and must not need a PNG encoder to compile a tool whose entire purpose is writing PNGs.
+
+## 59. Asking to be noticed, and knowing when to stop, 2026-10-16
+
+Every reminder did the same thing: wave once, play one chime, show a bubble, and after three
+minutes fold into a small badge beside the head — after which **nothing else ever happened**. Water,
+an important email and a birthday were identical apart from which icon the badge used.
+
+**The tension, and where the line went.** The brief asked for *persistent* attention: try harder
+when something is ignored. This document refuses guilt-tripping in four places and §7 says the pet
+never grabs focus and never guilt-trips. Both can be true, but only with the line drawn out loud:
+trying again differently is fine; remarking on having been ignored is not. There is no counting at
+the person, no reproach, no sad face aimed at them — and **it stops**. `Attention::retries` is the
+only place the ceiling is written, two further attempts at the most, and a test walks every style
+to prove each one runs out.
+
+**One setting, not eight.** The brief listed eight: whether to repeat, how often, which animations,
+per-reminder behaviour, and so on. Those are consequences, not decisions anybody wants to take one
+at a time — eight toggles is a control panel where this is a choice:
+
+> Getting your attention: **Still · Subtle · Playful · Insistent**
+
+The brief also says not to add settings merely because they are possible, which applies to most of
+its own list. Playful is the default: bounded at one further try, and the one that makes the thing
+feel like a companion rather than a notification with a face. A row of four words is the widest
+control on the page, so a test asserts it fits beside its own label at every scaling rather than
+leaving that to somebody noticing later.
+
+**A gesture that means something.** Water mimes drinking, mail leans in at the screen the mail is
+on, a date is pleased rather than instructive, the morning brief stretches. Only two new animations
+were needed — a knock and a small dance — because the rest already existed, and a new animation per
+reminder type would be four more things to keep working for no more meaning. Second attempts are a
+*different* gesture: the same wave twice reads as a stuck program, where a different one reads as
+the same creature trying again.
+
+**A voice rather than a beep.** The sound was already the right shape — synthesised into memory
+when played, no files and no audio engine, "another voice costs a line, not a sound file". So it
+grew the same way. A *phrase* is a shape (rising, falling, two knocks, a climb) in ratios rather
+than hertz, and the chosen voice supplies the timbre, so a Blip trill and a Bell trill are the same
+tune on two instruments. The alternative — a second palette of unrelated noises — is how a program
+ends up with a cute chime and a stock beep. Each play bends in pitch as it sounds and is detuned by
+a seed, because the identical noise to the exact sample is what makes a sound effect wear out.
+
+Nothing is cached. The buffer only has to outlive `PlaySound`, so a shelf of five phrases would be
+a few hundred kilobytes held permanently to save a few thousand multiplies.
+
+**What the sound tests could and could not do.** Whether it sounds *nice* is not something a test
+can tell me, and I cannot hear it either. What a test can tell me is that every phrase in every
+voice produces real audio — not silent, not clipped into a buzz, not the wrong length — and that is
+three of the ways a synthesised sound goes wrong without anybody noticing until a user does.
+
+It found one immediately. **Blip was about four times quieter than the other voices and had been
+since voices were added.** Its decay is so fast that most of its energy is spent before the attack
+has finished rising, so choosing it quietly turned Pip down. Every sound is now normalised to the
+same peak before the volume is applied, which is what makes choosing a voice a choice of character
+rather than of loudness.

@@ -12,7 +12,7 @@ use pip_core::schedule;
 use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
 use crate::app::SignIn;
 use pip_core::connectors::{self, Connector, ConnectorId};
-use pip_core::settings::{Character, CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme, Voice};
+use pip_core::settings::{Attention, Character, CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme, Voice};
 use pip_core::time::{DaySet, TimeOfDay};
 use tiny_skia::{PixmapMut, Transform};
 use windows_sys::Win32::Foundation::*;
@@ -71,6 +71,7 @@ pub enum UiAct {
     Color(PetColor),
     Size(PetSize),
     Live(Liveliness),
+    Attn(Attention),
     Theme(Theme),
     Top,
     Clock,
@@ -517,6 +518,14 @@ impl App {
         let cy = c.row("Liveliness", Some("How often it blinks, stretches and looks around"));
         let sel = match p.liveliness { Liveliness::Calm => 0, Liveliness::Normal => 1, Liveliness::Lively => 2 };
         c.segmented(cy, &["Calm", "Normal", "Lively"], sel, vec![UiAct::Live(Liveliness::Calm), UiAct::Live(Liveliness::Normal), UiAct::Live(Liveliness::Lively)]);
+        let cy = c.row("Getting your attention", Some("How hard it tries when a reminder is due"));
+        let sel = Attention::ALL.iter().position(|a| *a == p.attention).unwrap_or(2);
+        c.segmented(
+            cy,
+            &Attention::ALL.map(|a| a.label()),
+            sel,
+            Attention::ALL.iter().map(|a| UiAct::Attn(*a)).collect(),
+        );
         let cy = c.row("Theme", Some("Speech bubbles and this window"));
         let sel = match p.theme { Theme::System => 0, Theme::Light => 1, Theme::Dark => 2 };
         c.segmented(cy, &["System", "Light", "Dark"], sel, vec![UiAct::Theme(Theme::System), UiAct::Theme(Theme::Light), UiAct::Theme(Theme::Dark)]);
@@ -1160,6 +1169,10 @@ impl App {
             }
             UiAct::Live(l) => {
                 st.pet.liveliness = l;
+                st.appearance_updated_at = platform::now_unix();
+            }
+            UiAct::Attn(a) => {
+                st.pet.attention = a;
                 st.appearance_updated_at = platform::now_unix();
             }
             UiAct::Theme(t) => {
@@ -2229,5 +2242,33 @@ mod character_row_fits {
             x1 - ui::segmented_width(&labels, 1.0) < hint,
             "they all fit on one line beside the hint now, so the wrapping can go"
         );
+    }
+}
+
+#[cfg(test)]
+mod attention_row_fits {
+    use super::*;
+    use pip_core::settings::Attention;
+
+    /// Four words on one row is the widest control on the Pet page, and it was chosen over eight
+    /// separate toggles. If it does not fit it has to become something else, so this is the test
+    /// that would say so rather than a screenshot somebody notices later.
+    #[test]
+    fn the_attention_choices_fit_beside_their_own_label() {
+        let f = fonts();
+        for s in [1.0f32, 1.25, 1.5] {
+            let x0 = (SIDEBAR_W + 36.0) * s;
+            let x1 = LOGICAL_W as f32 * s - 36.0 * s;
+            let label = text::width(&f.semibold, 13.0 * s, "Getting your attention");
+            let hint = text::width(&f.regular, 12.0 * s, "How hard it tries when a reminder is due");
+            let labels: Vec<&str> = Attention::ALL.iter().map(|a| a.label()).collect();
+            let w = ui::segmented_width(&labels, s);
+            let left = x0 + label.max(hint) + 12.0 * s;
+            assert!(
+                x1 - w >= left,
+                "at {s}x the attention row is {:.0}px too wide and would run back over its own label",
+                left - (x1 - w)
+            );
+        }
     }
 }
