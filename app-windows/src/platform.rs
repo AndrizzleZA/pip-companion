@@ -136,7 +136,7 @@ pub fn user_busy_fullscreen() -> bool {
 }
 
 /// Registers an invisible app bar so Windows tells us (ABN_FULLSCREENAPP) when fullscreen apps
-/// open/close — an event instead of polling. No screen space is reserved (we never ABM_SETPOS).
+/// open/close â€” an event instead of polling. No screen space is reserved (we never ABM_SETPOS).
 pub fn register_appbar(hwnd: HWND, callback_msg: u32) {
     unsafe {
         let mut abd: APPBARDATA = std::mem::zeroed();
@@ -210,7 +210,7 @@ pub fn allow_dark_menus(dark: bool) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Autostart (HKCU Run key — no admin rights, no scheduled task, no service)
+// Autostart (HKCU Run key â€” no admin rights, no scheduled task, no service)
 // ---------------------------------------------------------------------------------------------
 
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -263,14 +263,14 @@ struct Recipe {
     len: f32,
     /// How fast each note dies away; bigger is shorter.
     decay: f32,
-    /// How much of the octave above is mixed in — the difference between woody and bell-like.
+    /// How much of the octave above is mixed in â€” the difference between woody and bell-like.
     harmonic: f32,
     /// (hertz, seconds from the start).
     notes: &'static [(f32, f32)],
     /// How far the pitch wavers, as a fraction. This is the single biggest reason a tone sounds
     /// like a throat rather than a struck object: nothing alive holds a pitch perfectly still.
     vibrato: f32,
-    /// How fast it wavers, in hertz. Around 5–7 is a voice; faster is an insect, slower is a wobble.
+    /// How fast it wavers, in hertz. Around 5â€“7 is a voice; faster is an insect, slower is a wobble.
     vibrato_hz: f32,
     /// A puff of noise under the attack. Tiny amounts read as breath; any more reads as a hiss.
     breath: f32,
@@ -280,7 +280,7 @@ struct Recipe {
 
 /// What the companion is saying, as against what it sounds like.
 ///
-/// A phrase is a shape — rising, falling, two taps — and the chosen [`Voice`] supplies the timbre,
+/// A phrase is a shape â€” rising, falling, two taps â€” and the chosen [`Voice`] supplies the timbre,
 /// so every noise comes from the same creature. The alternative was a second palette of unrelated
 /// sounds, which is how a program ends up with a cute chime and a stock beep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -299,40 +299,48 @@ pub enum Phrase {
     Chirp,
     /// Three quick low notes, swallowed. Water.
     Burble,
-    /// Low, soft and slow — the nearest thing to contentment this can make.
+    /// Low, soft and slow â€” the nearest thing to contentment this can make.
     Purr,
     /// Up and a long way back down. Waking, or giving in to bedtime.
     Yawn,
     /// Falling, wavering, unsure. For when something did not go to plan.
     Whine,
+    /// A single soft touch: the shortest, quietest thing it can say.
+    Touch,
     /// Four notes climbing. The biggest noise it makes, for when something is finished.
     Cheer,
 }
 
-/// Multipliers on the chosen voice's notes, plus how the phrase bends and how long it runs.
+/// Multipliers on the chosen voice: which notes, how long it runs, how it bends, and how fast it
+/// dies away. The decay multiplier is what lets a click stay a click in a voice built to ring —
+/// without it the touch sound was 57 ms in Blip and half a second in Bell, which is two different
+/// sounds wearing one name.
 ///
 /// Ratios rather than fixed hertz, so a phrase keeps the pitch of whichever voice is set: a Blip
 /// trill and a Bell trill are the same tune in two different instruments.
-fn phrase(p: Phrase) -> (&'static [(f32, f32)], f32, f32) {
+fn phrase(p: Phrase) -> (&'static [(f32, f32)], f32, f32, f32) {
     match p {
-        Phrase::Plain => (&[(1.0, 0.0)], 1.0, 0.0),
-        Phrase::Rising => (&[(1.0, 0.0), (1.26, 0.10)], 1.0, 2.5),
-        Phrase::Knock => (&[(0.72, 0.0), (0.72, 0.085)], 0.55, -1.0),
-        Phrase::Trill => (&[(1.0, 0.0), (1.19, 0.07), (1.5, 0.14)], 1.15, 1.5),
-        Phrase::Falling => (&[(1.0, 0.0), (0.84, 0.12), (0.67, 0.26)], 1.5, -2.0),
+        Phrase::Plain => (&[(1.0, 0.0)], 1.0, 0.0, 1.0),
+        Phrase::Rising => (&[(1.0, 0.0), (1.26, 0.10)], 1.0, 2.5, 1.0),
+        Phrase::Knock => (&[(0.72, 0.0), (0.72, 0.085)], 0.55, -1.0, 1.0),
+        Phrase::Trill => (&[(1.0, 0.0), (1.19, 0.07), (1.5, 0.14)], 1.15, 1.5, 1.0),
+        Phrase::Falling => (&[(1.0, 0.0), (0.84, 0.12), (0.67, 0.26)], 1.5, -2.0, 1.0),
         // Small and quick and up: the shape of a surprised noise.
-        Phrase::Chirp => (&[(1.35, 0.0), (1.6, 0.06)], 0.5, 5.0),
+        Phrase::Chirp => (&[(1.35, 0.0), (1.6, 0.06)], 0.5, 5.0, 1.0),
         // Low and tumbling, three of them, like something being swallowed.
-        Phrase::Burble => (&[(0.78, 0.0), (0.7, 0.06), (0.62, 0.12)], 0.7, -3.0),
+        Phrase::Burble => (&[(0.78, 0.0), (0.7, 0.06), (0.62, 0.12)], 0.7, -3.0, 1.0),
         // Barely moving. The slow waver of the voice does most of the work here.
-        Phrase::Purr => (&[(0.52, 0.0), (0.52, 0.18)], 1.6, -0.5),
+        Phrase::Purr => (&[(0.52, 0.0), (0.52, 0.18)], 1.6, -0.5, 1.0),
         // Up, and a long way back down: the whole shape of a yawn is the descent.
-        Phrase::Yawn => (&[(0.85, 0.0), (1.15, 0.14), (0.62, 0.34)], 2.2, -4.0),
+        Phrase::Yawn => (&[(0.85, 0.0), (1.15, 0.14), (0.62, 0.34)], 2.2, -4.0, 1.0),
         // Falling and unsure. Deliberately the only unhappy noise, and it is never aimed at
-        // anybody — it belongs to the companion tripping over, not to anything the person did.
-        Phrase::Whine => (&[(1.1, 0.0), (0.95, 0.10), (0.8, 0.22)], 1.3, -6.0),
+        // anybody â€” it belongs to the companion tripping over, not to anything the person did.
+        Phrase::Whine => (&[(1.1, 0.0), (0.95, 0.10), (0.8, 0.22)], 1.3, -6.0, 1.0),
+        // One short breathy note, barely pitched. Its own sound and nothing else uses it: a click
+        // happens dozens of times a day, so it has to be the least of all of these.
+        Phrase::Touch => (&[(0.58, 0.0)], 0.62, -1.5, 2.8),
         // Four notes climbing, the top one held: the biggest thing it says.
-        Phrase::Cheer => (&[(1.0, 0.0), (1.19, 0.06), (1.5, 0.12), (1.78, 0.19)], 1.5, 2.0),
+        Phrase::Cheer => (&[(1.0, 0.0), (1.19, 0.06), (1.5, 0.12), (1.78, 0.19)], 1.5, 2.0, 1.0),
     }
 }
 
@@ -393,7 +401,7 @@ impl Chime {
     /// Builds one utterance: a phrase in a voice, at a volume, with a per-play wobble.
     ///
     /// `seed` detunes the whole thing by up to about a semitone and a half. It is the difference
-    /// between a creature and a doorbell — the same noise to the exact hertz every single time is
+    /// between a creature and a doorbell â€” the same noise to the exact hertz every single time is
     /// the thing that makes a sound effect wear out, and it costs one multiply.
     ///
     /// Built when it is played and dropped when the next one is built: the buffer only has to
@@ -402,7 +410,7 @@ impl Chime {
     pub fn say(voice: Voice, ph: Phrase, volume: f32, seed: u64) -> Self {
         const RATE: u32 = 22_050;
         let r = recipe(voice);
-        let (steps, len_scale, bend) = phrase(ph);
+        let (steps, len_scale, bend, decay_mul) = phrase(ph);
         // A cheap, stable spread in roughly 0.96..1.04.
         let wobble = 1.0 + ((seed % 101) as f32 / 100.0 - 0.5) * 0.08;
         let base = r.notes.first().map(|n| n.0).unwrap_or(880.0) * wobble;
@@ -423,12 +431,12 @@ impl Chime {
             let s0 = (start * RATE as f32) as usize;
             // Phase is accumulated rather than computed from `t`, which is what lets the pitch
             // move freely: waver it, bend it, do both, and the waveform stays continuous. Working
-            // it out as frequency × time cannot do that without clicking every time the pitch
+            // it out as frequency Ã— time cannot do that without clicking every time the pitch
             // changes, and a click is the one thing that makes a synthesised voice sound synthetic.
             let mut phase = 0.0f32;
             for i in s0..samples.len() {
                 let t = (i - s0) as f32 / RATE as f32;
-                let env = (1.0 - (-t * r.attack).exp()) * (-t * r.decay).exp();
+                let env = (1.0 - (-t * r.attack).exp()) * (-t * r.decay * decay_mul).exp();
 
                 // Nothing alive holds a pitch still. The waver is the single biggest reason this
                 // reads as a throat and not a struck object.
@@ -565,7 +573,7 @@ pub fn acquire_single_instance(name: &str) -> bool {
 }
 
 /// Returns pages that are no longer being touched to the OS (they stay on the standby list and
-/// fault back cheaply if needed). Called once after startup settles and after Settings closes —
+/// fault back cheaply if needed). Called once after startup settles and after Settings closes â€”
 /// never periodically.
 pub fn trim_working_set() {
     unsafe {
@@ -664,7 +672,7 @@ mod the_voice {
     }
 
     /// Whether it *sounds* nice is not something a test can tell me, and I cannot hear it either.
-    /// What a test can tell me is that every combination produces real audio — that no phrase is
+    /// What a test can tell me is that every combination produces real audio â€” that no phrase is
     /// silent, none is clipped into a buzz, and none comes out the wrong length. Those are the
     /// three ways a synthesised sound goes wrong without anybody noticing until a user does.
     #[test]
@@ -672,6 +680,7 @@ mod the_voice {
         let phrases = [
             Phrase::Plain, Phrase::Rising, Phrase::Knock, Phrase::Trill, Phrase::Falling,
             Phrase::Chirp, Phrase::Burble, Phrase::Purr, Phrase::Yawn, Phrase::Whine, Phrase::Cheer,
+            Phrase::Touch,
         ];
         for voice in Voice::ALL {
             for ph in phrases {

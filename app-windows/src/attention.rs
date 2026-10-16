@@ -38,8 +38,10 @@ pub enum Sfx {
     Yawn,
     /// Unhappy, and never about the person: this one belongs to tripping over.
     Whine,
-    /// Low and content, for being petted.
+    /// Low and content, for a reminder put off rather than refused.
     Purr,
+    /// Being touched. Its own sound, used for nothing else — see [`Sfx::level`].
+    Touch,
     /// Four notes climbing, for something finished.
     Cheer,
 }
@@ -249,5 +251,60 @@ mod asking {
         let normal = act(Attention::Insistent, &water(), Priority::Normal, 0, true, false).again_in.expect("a retry");
         assert!(high >= 3, "{high} minutes is not a pause, it is a flicker");
         assert!(high < normal, "an important item should come back sooner than an ordinary one");
+    }
+}
+
+impl Sfx {
+    /// How loud this one is, against the person's own volume.
+    ///
+    /// Not everything deserves the same weight. A click happens dozens of times a day and has to
+    /// sit under the conversation; finishing something happens once and can afford to be heard.
+    /// Getting this wrong in the quiet direction is recoverable — getting it wrong in the loud
+    /// direction is how somebody turns the sound off and never turns it back on.
+    pub fn level(self) -> f32 {
+        match self {
+            // Deliberately the quietest thing in the program.
+            Sfx::Touch => 0.30,
+            Sfx::Purr | Sfx::Burble => 0.55,
+            Sfx::Tap | Sfx::Chirp | Sfx::Whine => 0.65,
+            Sfx::Nudge | Sfx::Sigh | Sfx::Yawn => 0.8,
+            Sfx::Voice | Sfx::Trill => 0.9,
+            // The one noise that marks something finished, and the only one at full weight.
+            Sfx::Cheer => 1.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod loudness {
+    use super::*;
+
+    /// The click is the sound heard most often by a wide margin, so it has to be the smallest.
+    #[test]
+    fn nothing_is_quieter_than_a_touch() {
+        let all = [
+            Sfx::Voice, Sfx::Nudge, Sfx::Tap, Sfx::Trill, Sfx::Sigh, Sfx::Chirp,
+            Sfx::Burble, Sfx::Yawn, Sfx::Whine, Sfx::Purr, Sfx::Cheer,
+        ];
+        for s in all {
+            assert!(
+                s.level() > Sfx::Touch.level(),
+                "{s:?} at {} is no louder than the click at {}",
+                s.level(),
+                Sfx::Touch.level()
+            );
+        }
+    }
+
+    /// And nothing is loud enough to startle: every level leaves headroom.
+    #[test]
+    fn everything_stays_within_its_bounds() {
+        let all = [
+            Sfx::Voice, Sfx::Nudge, Sfx::Tap, Sfx::Trill, Sfx::Sigh, Sfx::Chirp,
+            Sfx::Burble, Sfx::Yawn, Sfx::Whine, Sfx::Purr, Sfx::Cheer, Sfx::Touch,
+        ];
+        for s in all {
+            assert!((0.2..=1.0).contains(&s.level()), "{s:?} is at {}", s.level());
+        }
     }
 }

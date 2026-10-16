@@ -1050,10 +1050,11 @@ impl App {
             crate::attention::Sfx::Yawn => platform::Phrase::Yawn,
             crate::attention::Sfx::Whine => platform::Phrase::Whine,
             crate::attention::Sfx::Purr => platform::Phrase::Purr,
+            crate::attention::Sfx::Touch => platform::Phrase::Touch,
             crate::attention::Sfx::Cheer => platform::Phrase::Cheer,
         };
         let seed = self.rand();
-        let c = platform::Chime::say(self.settings.pet.voice, ph, 1.0, seed);
+        let c = platform::Chime::say(self.settings.pet.voice, ph, sfx.level(), seed);
         c.play();
         self.chime = Some((self.settings.pet.voice, c));
     }
@@ -1160,6 +1161,9 @@ impl App {
                     Action::Snooze => {
                         self.message(format!("Okay! I'll check back in {} minutes.", self.settings.notify.snooze_min), 3);
                         self.anim(AnimKind::Nod);
+                        // Put off rather than refused, and the purr is the sound for that: a
+                        // contented "fine, later" and emphatically not a disappointed noise.
+                        self.play_sfx(crate::attention::Sfx::Purr);
                     }
                     Action::Done => {
                         self.state.bump_affection(3, now);
@@ -1427,7 +1431,7 @@ impl App {
         //
         // Woken rather than greeted gets the yawn instead. A purr from something that was asleep
         // a quarter of a second ago is the wrong animal.
-        self.play_sfx(if was_asleep { crate::attention::Sfx::Yawn } else { crate::attention::Sfx::Purr });
+        self.play_sfx(if was_asleep { crate::attention::Sfx::Yawn } else { crate::attention::Sfx::Touch });
         self.arm_clock();
     }
 

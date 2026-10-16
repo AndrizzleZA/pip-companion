@@ -2596,3 +2596,43 @@ is what should happen: a voice that is six more phrases and four more lines of a
 when it plays and dropped afterwards, adds nothing an idle companion has to carry. The binary did
 not grow by a single kilobyte, because the sounds are not *in* it — they are a page of numbers and
 a loop, the same bargain the creature itself is drawn by.
+
+## 60. A sound of its own, and one page fewer, 2026-10-16
+
+Two asks: a click sound that belongs only to clicking, and a settings window with less in it.
+
+**The click.** It was borrowing the purr, which was wrong twice over — a sound used for two things
+is a sound that means neither, and the purr is a *reaction* where a click is an acknowledgement.
+`Touch` is its own phrase now and nothing else uses it: one short breathy note, pitched low, and
+**the quietest thing the program makes**. A click happens dozens of times a day and has to sit
+under the conversation; getting that wrong in the quiet direction is recoverable, and getting it
+wrong in the loud direction is how somebody switches the sound off and never switches it back on.
+
+That needed two things the synthesiser did not have. A **per-sound level** (`Sfx::level`), because
+a click and a finished reminder do not deserve the same weight, with a test asserting nothing is
+quieter than the click. And a **per-phrase decay**, because a phrase that inherits its voice's
+decay is a different sound in each one: the touch came out at 57 ms in Blip and half a second in
+Bell — two sounds wearing one name — until the phrase could say how fast it dies away.
+
+The purr moved to **snooze**, which wanted a noise and had none: putting something off is not
+refusing it, and a content "fine, later" is the right answer. It is emphatically not a disappointed
+sound, because there is no disappointed sound.
+
+**One page fewer.** The settings had seven pages, and *Quiet & alerts* was the obvious one to lose:
+four of its seven rows were never about quiet hours at all — sound, snooze, how long a bubble
+waits, pausing for fullscreen — and all seven answer the same question as the Reminders page, which
+is when and how you get told things. It is a section there now, and the window has six pages.
+
+**What was left alone, and why.** The honest finding from looking is that **the page count was not
+the clutter**. Calendars is 552 lines against 22 for Quiet and 24 for Connections; it is most of
+the complexity in the window and it is complexity the feature actually has — feeds, accounts,
+keywords, holidays. Folding Email and Calendars under Connections would move several hundred lines
+of layout, hit-testing and keyboard order to make the sidebar shorter, which is the "major
+architectural change where a smaller one achieves the same result" the brief itself says to avoid.
+One page merged, honestly; three pages merged, riskily, for a window nobody has complained about
+the depth of.
+
+**Verified by eye except for one thing.** The window renders, the sidebar has six entries, the
+Reminders page carries its new subtitle. The new section sits below the fold and the settings
+window scrolls by mouse wheel, which is a path no command channel exposes — so the only part not
+confirmed visually is the section itself, and that is said here rather than implied to be checked.

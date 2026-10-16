@@ -36,19 +36,17 @@ pub enum Page {
     Connections,
     Calendars,
     Email,
-    Quiet,
     About,
 }
 
 /// Water lives with the reminders because it is one, and dates live with the calendar because
 /// that is what they are. Fewer pages, nothing hidden.
-const PAGES: [(Page, &str, &str); 7] = [
+const PAGES: [(Page, &str, &str); 6] = [
     (Page::Pet, "Companion", "Name, look and behaviour"),
-    (Page::Reminders, "Reminders", "Your reminders, and water"),
+    (Page::Reminders, "Reminders", "Water, your reminders, and when it speaks up"),
     (Page::Connections, "Connections", "Services Pip keeps an eye on for you"),
     (Page::Calendars, "Calendar", "Dates, holidays and your calendars"),
     (Page::Email, "Email", "A gentle nudge for mail that matters"),
-    (Page::Quiet, "Quiet & alerts", "When and how it speaks up"),
     (Page::About, "About", "Stats, privacy and resource use"),
 ];
 
@@ -392,7 +390,6 @@ impl App {
             Page::Pet => self.page_pet(&mut c, &focus),
 
             Page::Reminders => self.page_reminders(&mut c, &focus),
-            Page::Quiet => self.page_quiet(&mut c),
             Page::Calendars => self.page_calendars(&mut c, &focus, &kw_buf),
             Page::Connections => self.page_connections(&mut c),
             Page::Email => self.page_email(&mut c, &focus, &kw_buf),
@@ -678,9 +675,15 @@ impl App {
             c.hits.push((ir, UiAct::RemImportant(r.id.clone())));
             c.y += card_h;
         }
+        section_label(c, "WHEN IT SPEAKS UP");
+        self.quiet_section(c);
     }
 
-    fn page_quiet(&self, c: &mut Ctx) {
+    /// Quiet hours and how reminders arrive. A section of the Reminders page rather than a page:
+    /// four of its seven rows were never about quiet hours at all — sound, snooze, how long a
+    /// bubble waits, pausing for fullscreen — and all seven answer the same question as the page
+    /// they now live on, which is when and how you get told things.
+    fn quiet_section(&self, c: &mut Ctx) {
         let q = &self.settings.quiet;
         let n = &self.settings.notify;
         let x1 = c.x1;
@@ -692,7 +695,7 @@ impl App {
         c.stepper(cy, x1, 150.0, &q.end.to_string(), UiAct::QuietEnd(-30), UiAct::QuietEnd(30));
         let cy = c.row("Important reminders", Some("Still shown during quiet hours, silently"));
         c.toggle(cy, q.allow_important, UiAct::QuietImportant);
-        let cy = c.row("Sound", Some("A soft two-note chime with reminders"));
+        let cy = c.row("Sound", Some("Pip has a voice; this is whether you hear it"));
         c.toggle(cy, n.sound, UiAct::Sound);
         let cy = c.row("Snooze for", None);
         c.stepper(cy, x1, 150.0, &fmt_minutes(n.snooze_min), UiAct::Snooze(-5), UiAct::Snooze(5));
