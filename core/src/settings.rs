@@ -163,6 +163,9 @@ impl Character {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Voice {
+    /// The companion's own voice: each character sounds like itself. The default, and the only
+    /// one that changes when you change who your companion is.
+    Own,
     /// The original two-note chime.
     Chime,
     Bell,
@@ -171,10 +174,11 @@ pub enum Voice {
 }
 
 impl Voice {
-    pub const ALL: [Voice; 4] = [Voice::Chime, Voice::Bell, Voice::Blip, Voice::Coo];
+    pub const ALL: [Voice; 5] = [Voice::Own, Voice::Chime, Voice::Bell, Voice::Blip, Voice::Coo];
 
     pub fn label(self) -> &'static str {
         match self {
+            Voice::Own => "Its own",
             Voice::Chime => "Chime",
             Voice::Bell => "Bell",
             Voice::Blip => "Blip",
@@ -348,7 +352,7 @@ impl Default for PetSettings {
         PetSettings {
             name: "Pip".into(),
             character: Character::Sprout,
-            voice: Voice::Chime,
+            voice: Voice::Own,
             color: PetColor::Mint,
             size: PetSize::Medium,
             always_on_top: true,

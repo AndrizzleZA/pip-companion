@@ -1054,9 +1054,11 @@ impl App {
             crate::attention::Sfx::Cheer => platform::Phrase::Cheer,
         };
         let seed = self.rand();
-        let c = platform::Chime::say(self.settings.pet.voice, ph, sfx.level(), seed);
+        let who = self.settings.pet.character.shown(self.state.experience);
+        let c = platform::Chime::say(self.settings.pet.voice, who, ph, sfx.level(), seed);
         c.play();
         self.chime = Some((self.settings.pet.voice, c));
+
     }
 
     fn message(&mut self, text: String, secs: u32) {

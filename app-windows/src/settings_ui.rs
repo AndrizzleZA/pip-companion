@@ -497,7 +497,7 @@ impl App {
             c.segmented(cy, &labels, sel, chunk.iter().map(|x| UiAct::Who(*x)).collect());
         }
 
-        let cy = c.row("Voice", Some("Played with reminders; tap one to hear it"));
+        let cy = c.row("Voice", Some("Each companion has its own; tap to hear"));
         let sel = Voice::ALL.iter().position(|x| *x == p.voice).unwrap_or(0);
         let labels: Vec<&str> = Voice::ALL.iter().map(|x| x.label()).collect();
         c.segmented(cy, &labels, sel, Voice::ALL.iter().map(|x| UiAct::Say(*x)).collect());
@@ -1132,6 +1132,9 @@ impl App {
             return;
         }
         let now = platform::now_unix();
+        // Read before the settings are borrowed: the voice preview needs to know which companion
+        // is actually on screen, and `shown` depends on how far it has grown.
+        let xp = self.state.experience;
         let st = &mut self.settings;
         match act {
             UiAct::Page(p) => {
@@ -1174,7 +1177,10 @@ impl App {
                 ];
                 let n = platform::now_unix().unsigned_abs() as usize;
                 let seed = n.wrapping_mul(6_364_136_223_846_793_005) as u64;
-                platform::Chime::say(v, SAMPLER[n % SAMPLER.len()], 1.0, seed).play();
+                // The preview must use the companion actually on screen, or "Its own" would audition
+                // somebody else's voice.
+                let who = st.pet.character.shown(xp);
+                platform::Chime::say(v, who, SAMPLER[n % SAMPLER.len()], 1.0, seed).play();
             }
             UiAct::Color(c) => {
                 st.pet.color = c;
@@ -1309,7 +1315,8 @@ impl App {
                 self.set_timer(crate::app::T_BUBBLE, 15_000);
                 self.anim(crate::render::creature::AnimKind::Wave);
                 if self.settings.notify.sound {
-                    platform::Chime::new(self.settings.pet.voice).play();
+                    let who = self.settings.pet.character.shown(self.state.experience);
+                    platform::Chime::new(self.settings.pet.voice, who).play();
                 }
                 return;
             }
@@ -2284,7 +2291,7 @@ mod attention_row_fits {
             ),
             (
                 "Voice",
-                "Played with reminders; tap one to hear it",
+                "Each companion has its own; tap to hear",
                 Voice::ALL.iter().map(|v| v.label()).collect(),
             ),
         ];

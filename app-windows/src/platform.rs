@@ -1,7 +1,7 @@
 //! Thin wrappers over the Win32 calls the shell needs. Nothing in here keeps state.
 
 use std::ffi::c_void;
-use pip_core::settings::Voice;
+use pip_core::settings::{Character, Voice};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Media::Audio::*;
@@ -344,8 +344,101 @@ fn phrase(p: Phrase) -> (&'static [(f32, f32)], f32, f32, f32) {
     }
 }
 
+/// Each companion's own voice.
+///
+/// Seven timbres, one per character, chosen to match the thing you are looking at: the big round
+/// one is low and slow, the smallest is high and quick, the mushroom is woody and short. It is the
+/// same bargain as the drawing — a creature is eight numbers here, so the eighth creature costs a
+/// line rather than a folder of recordings.
+///
+/// Changing companion changes voice at once, because nothing is cached: the sound is built from
+/// whoever is on screen at the moment it plays.
+fn creature_recipe(who: Character) -> Recipe {
+    match who {
+        // Green and growing: bright, with a light waver, like something young.
+        Character::Sprout => Recipe {
+            len: 0.5,
+            decay: 7.5,
+            harmonic: 0.11,
+            notes: &[(880.0, 0.0), (1174.7, 0.10)],
+            vibrato: 0.016,
+            vibrato_hz: 6.4,
+            breath: 0.06,
+            attack: 42.0,
+        },
+        // Soft, quick and breathy, pitched high. The ears are the giveaway and so is this.
+        Character::Bunny => Recipe {
+            len: 0.42,
+            decay: 10.0,
+            harmonic: 0.07,
+            notes: &[(987.8, 0.0), (1318.5, 0.08)],
+            vibrato: 0.024,
+            vibrato_hz: 7.6,
+            breath: 0.14,
+            attack: 60.0,
+        },
+        // Woody and short, with almost no ring: a mushroom is not a bell.
+        Character::Kit => Recipe {
+            len: 0.38,
+            decay: 13.0,
+            harmonic: 0.22,
+            notes: &[(523.3, 0.0), (659.3, 0.09)],
+            vibrato: 0.012,
+            vibrato_hz: 5.2,
+            breath: 0.08,
+            attack: 90.0,
+        },
+        // Airy and feathered, a fast small flutter.
+        Character::Tuft => Recipe {
+            len: 0.46,
+            decay: 9.0,
+            harmonic: 0.09,
+            notes: &[(783.99, 0.0), (1046.5, 0.09)],
+            vibrato: 0.027,
+            vibrato_hz: 8.2,
+            breath: 0.11,
+            attack: 55.0,
+        },
+        // The widest body in the cast, and the lowest, slowest, least hurried voice.
+        Character::Pebble => Recipe {
+            len: 0.85,
+            decay: 4.0,
+            harmonic: 0.17,
+            notes: &[(392.0, 0.0), (329.6, 0.16)],
+            vibrato: 0.009,
+            vibrato_hz: 4.2,
+            breath: 0.07,
+            attack: 18.0,
+        },
+        // Sweet and ringing, with a flutter on the end, like the petals.
+        Character::Bloom => Recipe {
+            len: 0.72,
+            decay: 5.0,
+            harmonic: 0.26,
+            notes: &[(1046.5, 0.0), (1318.5, 0.11)],
+            vibrato: 0.020,
+            vibrato_hz: 6.8,
+            breath: 0.05,
+            attack: 34.0,
+        },
+        // The smallest of them: very high, very quick, very quiet, and papery.
+        Character::Moth => Recipe {
+            len: 0.3,
+            decay: 16.0,
+            harmonic: 0.04,
+            notes: &[(1318.5, 0.0), (1567.98, 0.06)],
+            vibrato: 0.034,
+            vibrato_hz: 10.5,
+            breath: 0.18,
+            attack: 110.0,
+        },
+    }
+}
+
 fn recipe(voice: Voice) -> Recipe {
     match voice {
+        // Resolved by the caller, which is the only place that knows who the companion is.
+        Voice::Own => creature_recipe(Character::Sprout),
         // The original: A5 then E6. Still the brightest, now with a throat behind it.
         Voice::Chime => Recipe {
             len: 0.55,
@@ -394,8 +487,8 @@ fn recipe(voice: Voice) -> Recipe {
 }
 
 impl Chime {
-    pub fn new(voice: Voice) -> Self {
-        Chime::say(voice, Phrase::Plain, 1.0, 0)
+    pub fn new(voice: Voice, who: Character) -> Self {
+        Chime::say(voice, who, Phrase::Plain, 1.0, 0)
     }
 
     /// Builds one utterance: a phrase in a voice, at a volume, with a per-play wobble.
@@ -407,9 +500,11 @@ impl Chime {
     /// Built when it is played and dropped when the next one is built: the buffer only has to
     /// outlive `PlaySound`, so a shelf of cached sounds would be a few hundred kilobytes held for
     /// nothing. Synthesising half a second of 22 kHz audio is a few thousand multiplies.
-    pub fn say(voice: Voice, ph: Phrase, volume: f32, seed: u64) -> Self {
+    pub fn say(voice: Voice, who: Character, ph: Phrase, volume: f32, seed: u64) -> Self {
         const RATE: u32 = 22_050;
-        let r = recipe(voice);
+        // "Its own" means the companion on screen right now, which is why this is resolved here
+        // and not stored: changing character changes the voice with the next sound it makes.
+        let r = if voice == Voice::Own { creature_recipe(who) } else { recipe(voice) };
         let (steps, len_scale, bend, decay_mul) = phrase(ph);
         // A cheap, stable spread in roughly 0.96..1.04.
         let wobble = 1.0 + ((seed % 101) as f32 / 100.0 - 0.5) * 0.08;
@@ -677,6 +772,7 @@ mod the_voice {
     /// three ways a synthesised sound goes wrong without anybody noticing until a user does.
     #[test]
     fn every_phrase_in_every_voice_is_real_audio() {
+        use pip_core::settings::Character;
         let phrases = [
             Phrase::Plain, Phrase::Rising, Phrase::Knock, Phrase::Trill, Phrase::Falling,
             Phrase::Chirp, Phrase::Burble, Phrase::Purr, Phrase::Yawn, Phrase::Whine, Phrase::Cheer,
@@ -684,7 +780,8 @@ mod the_voice {
         ];
         for voice in Voice::ALL {
             for ph in phrases {
-                let c = Chime::say(voice, ph, 1.0, 12_345);
+                for who in Character::ALL {
+                let c = Chime::say(voice, who, ph, 1.0, 12_345);
                 let s = samples(&c);
                 assert!(s.len() > 2_000, "{voice:?}/{ph:?} is only {} samples long", s.len());
                 let peak = s.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
@@ -692,6 +789,7 @@ mod the_voice {
                 assert!(peak < 20_000, "{voice:?}/{ph:?} is louder than the rest (peak {peak})");
                 let clipped = s.iter().filter(|v| v.unsigned_abs() > 32_000).count();
                 assert!(clipped == 0, "{voice:?}/{ph:?} clips on {clipped} samples, which is a buzz");
+                }
             }
         }
     }
@@ -699,18 +797,67 @@ mod the_voice {
     /// Volume has to actually be a volume, since the setting rides on it.
     #[test]
     fn volume_scales_the_sound() {
-        let loud = samples(&Chime::say(Voice::Chime, Phrase::Plain, 1.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
-        let soft = samples(&Chime::say(Voice::Chime, Phrase::Plain, 0.3, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        let loud = samples(&Chime::say(Voice::Chime, pip_core::settings::Character::Sprout, Phrase::Plain, 1.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        let soft = samples(&Chime::say(Voice::Chime, pip_core::settings::Character::Sprout, Phrase::Plain, 0.3, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
         assert!(soft * 2 < loud, "quiet ({soft}) is not meaningfully quieter than loud ({loud})");
-        let off = samples(&Chime::say(Voice::Chime, Phrase::Plain, 0.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
+        let off = samples(&Chime::say(Voice::Chime, pip_core::settings::Character::Sprout, Phrase::Plain, 0.0, 1)).iter().map(|v| v.unsigned_abs()).max().unwrap();
         assert_eq!(off, 0, "zero volume should be silence");
     }
 
     /// The same noise to the exact sample every time is what makes a sound effect wear out.
     #[test]
     fn the_same_phrase_is_never_quite_the_same_twice() {
-        let a = samples(&Chime::say(Voice::Coo, Phrase::Rising, 1.0, 7));
-        let b = samples(&Chime::say(Voice::Coo, Phrase::Rising, 1.0, 64));
+        let a = samples(&Chime::say(Voice::Coo, pip_core::settings::Character::Sprout, Phrase::Rising, 1.0, 7));
+        let b = samples(&Chime::say(Voice::Coo, pip_core::settings::Character::Sprout, Phrase::Rising, 1.0, 64));
         assert_ne!(a, b, "two plays of the same phrase came out byte-identical");
+    }
+}
+
+#[cfg(test)]
+mod each_creature_its_own {
+    use super::*;
+    use pip_core::settings::Character;
+
+    fn samples(c: &Chime) -> Vec<i16> {
+        c.0[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    }
+
+    /// Seven companions, seven voices. A character that sounded like another would be a table
+    /// entry copied and not edited, which is exactly the kind of mistake nobody hears until they
+    /// have both companions and wonder why changing made no difference.
+    #[test]
+    fn no_two_companions_sound_alike() {
+        let mut seen: Vec<(Character, Vec<i16>)> = Vec::new();
+        for who in Character::ALL {
+            let s = samples(&Chime::say(Voice::Own, who, Phrase::Plain, 1.0, 99));
+            for (other, prev) in &seen {
+                assert_ne!(&s, prev, "{who:?} and {other:?} make exactly the same noise");
+                // Length alone separates most of them, and where it does not the waveform must.
+                assert!(
+                    s.len() != prev.len() || s != *prev,
+                    "{who:?} and {other:?} are indistinguishable"
+                );
+            }
+            seen.push((who, s));
+        }
+    }
+
+    /// And the named voices stay put: picking Bell gets Bell whoever is on screen, because it was
+    /// chosen for being a bell rather than for being the companion.
+    #[test]
+    fn a_named_voice_ignores_the_companion() {
+        for voice in [Voice::Chime, Voice::Bell, Voice::Blip, Voice::Coo] {
+            let a = samples(&Chime::say(voice, Character::Moth, Phrase::Plain, 1.0, 5));
+            let b = samples(&Chime::say(voice, Character::Pebble, Phrase::Plain, 1.0, 5));
+            assert_eq!(a, b, "{voice:?} changed when the companion did");
+        }
+    }
+
+    /// The companion's own voice must follow the companion, which is the whole point of it.
+    #[test]
+    fn its_own_voice_follows_the_companion() {
+        let a = samples(&Chime::say(Voice::Own, Character::Moth, Phrase::Plain, 1.0, 5));
+        let b = samples(&Chime::say(Voice::Own, Character::Pebble, Phrase::Plain, 1.0, 5));
+        assert_ne!(a, b, "the smallest and the largest companion sound identical");
     }
 }

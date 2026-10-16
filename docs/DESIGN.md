@@ -2636,3 +2636,48 @@ the depth of.
 Reminders page carries its new subtitle. The new section sits below the fold and the settings
 window scrolls by mouse wheel, which is a path no command channel exposes — so the only part not
 confirmed visually is the section itself, and that is said here rather than implied to be checked.
+
+## 61. Seven companions, seven voices, 2026-10-16
+
+Each character now sounds like itself. Pebble is the widest body in the cast and has the lowest,
+slowest, least hurried voice; Moth is the smallest and is high, quick, quiet and papery; Kit is
+woody and short because a mushroom is not a bell. Seven timbres, eight numbers each — the same
+bargain the drawing makes, where the eighth creature costs a line rather than a folder of
+recordings.
+
+**The voice setting did not go away**, because somebody who picked Bell picked it for being a bell.
+It gained a fifth option, *Its own*, which is now the default: the named four still sound the same
+whoever is on screen, and `Own` follows the companion. Three tests hold that line — no two
+companions sound alike, a named voice ignores the companion, and `Own` does not.
+
+Nothing is cached, which is what makes changing companion change the voice with the very next
+sound rather than at the next launch. That was free: the sounds have never been cached, because a
+buffer only has to outlive `PlaySound` (§59).
+
+## 62. The brief that asked for something Pip already had, twice over
+
+The same brief asked to rename Quiet Hours to *Do Not Disturb*, and then that Do Not Disturb be
+kept **completely separate** from the night-time sleeping, which it must never prevent, interrupt
+or reschedule. Both halves are reasonable. Together, and against this code, they cannot both be
+done, and the reason is worth writing down before anybody tries again.
+
+**Pip already has a Do Not Disturb.** It is in the right-click menu, it is spelled exactly that,
+and it is `state.dnd_until` — a temporary hold that silences reminders until a time you pick.
+Renaming quiet hours to the same words gives two different features one name, which is worse than
+the name being imperfect.
+
+**Quiet hours *is* the night-time system.** `self.night = schedule::is_quiet(..)` and nothing else
+sets it. That one flag decides whether the companion digs in for the night, whether it is nestled,
+whether `TurnIn` and `GetUp` run, whether the mood is sleepy, and whether reminders are held. Turn
+quiet hours off today and the companion never sleeps at all. So a setting renamed to Do Not Disturb
+would be the very thing that, switched off, prevents it from entering its sleeping state — which is
+the one outcome the brief forbids.
+
+The choice is therefore between three things, and it is not mine to make quietly: leave the name
+and explain it; split one schedule into two settings, which is a second setting where there was one
+and cuts against every other instruction in the same brief; or keep one window and let the
+companion sleep through it whether or not interruptions are being held, which changes behaviour for
+anyone who switched quiet hours off *because* they work at night and want the companion awake.
+
+Recorded here with the per-creature voices, which the same brief asked for and which had no such
+problem, so that the work that could be done was not held up by the question that had to be asked.
