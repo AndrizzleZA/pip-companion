@@ -504,6 +504,15 @@ impl App {
 
     /// Idle life: blinks and the occasional small animation. Nothing at all while asleep/hidden.
     pub fn arm_idle(&mut self) {
+        // Asleep in the burrow is the one kind of sleep that still has a life of its own: a breath,
+        // a twitch, the occasional bad dream. Much slower than waking idling, and it stops dead the
+        // moment nobody is at the machine — `on_idle` hands over to `set_away` first, so none of
+        // this runs for an empty room.
+        if self.pet.visible && !self.fullscreen && self.night_burrow() {
+            let d = self.rand_range(40_000, 110_000) as u32;
+            self.set_timer(T_IDLE, d);
+            return;
+        }
         if !self.pet.visible || self.asleep() || self.fullscreen {
             self.kill_timer(T_IDLE);
             return;
@@ -526,6 +535,19 @@ impl App {
             return;
         }
         let now = tick_ms();
+        // Asleep in its burrow: breathing, dreaming, turning over. Its own table, its own
+        // cooldowns, and liveliness deliberately does not apply — a Calm companion still breathes.
+        if self.night_burrow() {
+            if self.pet.anim.is_none() {
+                let roll = self.rand();
+                if let Some(k) = self.idles.pick_asleep(now, roll) {
+                    self.pet.start_anim(k);
+                    self.render();
+                }
+            }
+            self.arm_idle();
+            return;
+        }
         let (lo, hi) = match self.settings.pet.liveliness {
             Liveliness::Calm => (10 * 60_000, 20 * 60_000),
             Liveliness::Normal => (3 * 60_000, 6 * 60_000),
@@ -720,7 +742,23 @@ impl App {
             // Digging in for the night, and climbing out again in the morning. `GetUp` replaces
             // the old `WakeUp` on this one path only: waking from a nap on open ground is still a
             // stretch and a blink, and that is what every other caller of `WakeUp` means.
-            self.anim(if night { AnimKind::TurnIn } else { AnimKind::GetUp });
+            //
+            // Three ways to bed and two ways up, so the same routine is not the same routine every
+            // night. They all begin or end exactly on the resting pose, so whichever runs, what it
+            // hands over to is identical.
+            let roll = self.rand();
+            let kind = if night {
+                match roll % 10 {
+                    0..=4 => AnimKind::TurnIn,
+                    5..=7 => AnimKind::TurnInFuss,
+                    _ => AnimKind::TurnInTip,
+                }
+            } else if roll % 10 < 6 {
+                AnimKind::GetUp
+            } else {
+                AnimKind::GetUpSlow
+            };
+            self.anim(kind);
             self.arm_idle();
         }
 

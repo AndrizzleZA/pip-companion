@@ -47,74 +47,130 @@ const IDLES: &[Idle] = &[
 /// never grabs attention it was not given.
 const DO_NOTHING_WEIGHT: u16 = 55;
 
+/// What a sleeping companion does, and how rarely.
+///
+/// **There is no continuous breathing, and that was the one real decision here.** A gentle breath
+/// running all night means the 30 fps clock running all night: about 65 seconds of CPU over nine
+/// hours, against a target of one second per hour (§8). It would have been the single most
+/// expensive thing in the program, to animate something nobody is looking at — Pip only idles at
+/// all while somebody is actually at the machine, because going away stops the timer outright.
+///
+/// So sleep moves the way the waking pet does: occasionally, in short pieces, with long gaps. A
+/// breath that arrives every few minutes is also *more* noticeable than one that never stops.
+const SLEEP: &[Idle] = &[
+    Idle { kind: AnimKind::SleepBreath, weight: 24, cooldown_s: 90, floor: 0, sleepy: false },
+    Idle { kind: AnimKind::SleepTwitch, weight: 14, cooldown_s: 180, floor: 0, sleepy: false },
+    Idle { kind: AnimKind::SleepRoll, weight: 10, cooldown_s: 300, floor: 0, sleepy: false },
+    Idle { kind: AnimKind::SleepPeek, weight: 6, cooldown_s: 600, floor: 0, sleepy: false },
+    // The bad dream. Once or twice a night at most, which is the whole joke.
+    Idle { kind: AnimKind::SleepStartle, weight: 2, cooldown_s: 2400, floor: 0, sleepy: false },
+];
+
+/// Sleeping is mostly lying still, more so than being awake is sitting still.
+const SLEEP_NOTHING_WEIGHT: u16 = 40;
+
 pub struct Idles {
-    /// When each behaviour last played, parallel to [`IDLES`].
-    last: [u64; IDLES.len()],
+    /// When each behaviour last played, parallel to [`IDLES`] and [`SLEEP`].
+    awake_last: [u64; IDLES.len()],
+    sleep_last: [u64; SLEEP.len()],
     /// Whatever went last, which never goes twice running however the dice fall.
-    prev: Option<usize>,
+    awake_prev: Option<usize>,
+    sleep_prev: Option<usize>,
     started: bool,
 }
 
 impl Default for Idles {
     fn default() -> Idles {
-        Idles { last: [0; IDLES.len()], prev: None, started: false }
+        Idles {
+            awake_last: [0; IDLES.len()],
+            sleep_last: [0; SLEEP.len()],
+            awake_prev: None,
+            sleep_prev: None,
+            started: false,
+        }
     }
 }
 
+/// Weighted pick from one table, or `None` for "do nothing".
+///
+/// `roll` is a single random number and every decision is made from it, which is what makes this
+/// testable at all: the same roll always gives the same answer.
+fn choose(
+    table: &[Idle],
+    last: &mut [u64],
+    prev: &mut Option<usize>,
+    nothing: u16,
+    now_ms: u64,
+    level: Level,
+    evening: bool,
+    roll: u64,
+) -> Option<AnimKind> {
+    let mut total = u32::from(nothing);
+    let mut eligible = [0u16; 16];
+    for (i, idle) in table.iter().enumerate() {
+        if idle.floor > level || *prev == Some(i) {
+            continue;
+        }
+        if now_ms.saturating_sub(last[i]) < idle.cooldown_s * 1000 {
+            continue;
+        }
+        // A yawn means something at bedtime and nothing at ten in the morning.
+        let w = if idle.sleepy {
+            if evening {
+                idle.weight * 5
+            } else {
+                1
+            }
+        } else {
+            idle.weight
+        };
+        eligible[i] = w;
+        total += u32::from(w);
+    }
+
+    let mut target = (roll % u64::from(total)) as u32;
+    for (i, w) in eligible.iter().take(table.len()).enumerate() {
+        let w = u32::from(*w);
+        if w == 0 {
+            continue;
+        }
+        if target < w {
+            last[i] = now_ms;
+            *prev = Some(i);
+            return Some(table[i].kind);
+        }
+        target -= w;
+    }
+    // Fell through to the do-nothing share. The previous pick is cleared so that sitting still
+    // does not block whatever went before it from coming round again.
+    *prev = None;
+    None
+}
+
 impl Idles {
-    /// Picks the next idle, or `None` for "sit there".
-    ///
-    /// `roll` is a single random number, and every decision below is made from it, which is what
-    /// makes this testable: the same roll always gives the same answer.
-    pub fn pick(&mut self, now_ms: u64, level: Level, evening: bool, roll: u64) -> Option<AnimKind> {
-        // A cooldown measured from zero would make everything eligible at the first tick after a
-        // launch, including the rare one. The clock starts when the pet does.
+    /// A cooldown measured from zero would make everything eligible at the first tick after a
+    /// launch, including the rare ones. The clock starts when the pet does.
+    fn start(&mut self, now_ms: u64) {
         if !self.started {
             self.started = true;
-            for slot in self.last.iter_mut() {
-                *slot = now_ms;
-            }
+            self.awake_last = [now_ms; IDLES.len()];
+            self.sleep_last = [now_ms; SLEEP.len()];
         }
-        let mut total = u32::from(DO_NOTHING_WEIGHT);
-        let mut eligible = [0u16; IDLES.len()];
-        for (i, idle) in IDLES.iter().enumerate() {
-            if idle.floor > level || self.prev == Some(i) {
-                continue;
-            }
-            if now_ms.saturating_sub(self.last[i]) < idle.cooldown_s * 1000 {
-                continue;
-            }
-            // A yawn means something at bedtime and nothing at ten in the morning.
-            let w = if idle.sleepy {
-                if evening {
-                    idle.weight * 5
-                } else {
-                    1
-                }
-            } else {
-                idle.weight
-            };
-            eligible[i] = w;
-            total += u32::from(w);
-        }
+    }
 
-        let mut target = (roll % u64::from(total)) as u32;
-        for (i, w) in eligible.iter().enumerate() {
-            let w = u32::from(*w);
-            if w == 0 {
-                continue;
-            }
-            if target < w {
-                self.last[i] = now_ms;
-                self.prev = Some(i);
-                return Some(IDLES[i].kind);
-            }
-            target -= w;
-        }
-        // Fell through to the do-nothing share. The previous pick is cleared so that sitting still
-        // does not block whatever went before it from coming round again.
-        self.prev = None;
-        None
+    /// Picks the next idle for a pet that is awake, or `None` for "sit there".
+    pub fn pick(&mut self, now_ms: u64, level: Level, evening: bool, roll: u64) -> Option<AnimKind> {
+        self.start(now_ms);
+        let Idles { awake_last, awake_prev, .. } = self;
+        choose(IDLES, awake_last, awake_prev, DO_NOTHING_WEIGHT, now_ms, level, evening, roll)
+    }
+
+    /// And for one curled up asleep in its burrow. Liveliness does not apply: a Calm companion
+    /// still breathes, and a Lively one does not have livelier dreams.
+    pub fn pick_asleep(&mut self, now_ms: u64, roll: u64) -> Option<AnimKind> {
+        self.start(now_ms);
+        let Idles { sleep_last, sleep_prev, .. } = self;
+        choose(SLEEP, sleep_last, sleep_prev, SLEEP_NOTHING_WEIGHT, now_ms, 0, false, roll)
     }
 }
 
@@ -220,5 +276,72 @@ mod picking {
         let day = counts(1, false, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
         let eve = counts(1, true, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
         assert!(eve > day * 4, "{eve} yawns in the evening against {day} in the day is not a difference");
+    }
+}
+
+#[cfg(test)]
+mod sleeping {
+    use super::*;
+
+    fn nights(rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
+        let mut idles = Idles::default();
+        let mut nothing = 0;
+        let mut seen: Vec<(AnimKind, usize)> = Vec::new();
+        for r in 0..rolls {
+            // An hour of pretend time per roll, so cooldowns do not mask the weights.
+            let now = 50_000_000 + r * 3_600_000;
+            match idles.pick_asleep(now, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(23)) {
+                None => nothing += 1,
+                Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
+                    Some((_, n)) => *n += 1,
+                    None => seen.push((k, 1)),
+                },
+            }
+        }
+        (nothing, seen)
+    }
+
+    /// Everything a sleeping companion does has to be something a sleeping companion would do.
+    #[test]
+    fn a_sleeping_pet_only_does_sleeping_things() {
+        let (_, seen) = nights(2_000);
+        assert!(!seen.is_empty(), "it should do something now and then");
+        for (kind, _) in seen {
+            assert!(kind.is_sleep_talk(), "{kind:?} is not something to do while asleep");
+        }
+    }
+
+    /// Mostly it just lies there, which is the point of being asleep.
+    #[test]
+    fn sleep_is_mostly_lying_still() {
+        let (nothing, _) = nights(2_000);
+        let share = nothing as f32 / 2_000.0;
+        assert!((0.25..0.55).contains(&share), "it lay still {:.0}% of the time", share * 100.0);
+    }
+
+    /// A nightmare you saw every night would stop being funny on the second one.
+    #[test]
+    fn the_nightmare_is_rare() {
+        let (_, seen) = nights(2_000);
+        let bad = seen.iter().find(|(k, _)| *k == AnimKind::SleepStartle).map_or(0, |(_, n)| *n);
+        let breath = seen.iter().find(|(k, _)| *k == AnimKind::SleepBreath).map_or(0, |(_, n)| *n);
+        assert!(bad > 0, "it should still happen");
+        assert!(bad * 6 < breath, "{bad} nightmares against {breath} breaths is not rare");
+    }
+
+    /// The two tables are separate: being awake all day must not use up the night's cooldowns.
+    #[test]
+    fn the_waking_day_does_not_eat_the_nights_cooldowns() {
+        let mut idles = Idles::default();
+        for r in 0..500u64 {
+            idles.pick(60_000_000 + r * 60_000, 2, false, r * 7_919 + 1);
+        }
+        let mut slept = 0;
+        for r in 0..60u64 {
+            if idles.pick_asleep(60_000_000 + 500 * 60_000 + r * 120_000, r * 104_729 + 7).is_some() {
+                slept += 1;
+            }
+        }
+        assert!(slept > 5, "only {slept} sleep behaviours in an hour of night");
     }
 }

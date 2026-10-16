@@ -445,8 +445,48 @@ pub enum AnimKind {
     /// Digs in for the night and settles down in there. Ends exactly on [`nestled`], which is the
     /// resting pose it hands over to.
     TurnIn,
+    /// Sits on the edge dozing, head dipping lower, until it slumps in.
+    TurnInTip,
+    /// Gets in, cannot get comfortable, shuffles about, finally settles.
+    TurnInFuss,
     /// Climbs out of the night's burrow in the morning. Starts from [`nestled`].
     GetUp,
+    /// The slow version: rubs its eyes first, and yawns on the way out.
+    GetUpSlow,
+    /// One long breath, in and out.
+    SleepBreath,
+    /// A dream: a small jerk and a kick of the feet.
+    SleepTwitch,
+    /// Turning over to the other side.
+    SleepRoll,
+    /// A bad dream. Up, wide awake, nothing there, back down.
+    SleepStartle,
+    /// Half an eye open to check the room, then gone again.
+    SleepPeek,
+}
+
+impl AnimKind {
+    /// True for the handful that *set* the body transform rather than adding to it, because they
+    /// begin or end at [`nestled`], which sets it too. The caller leaves `nestled` off while one
+    /// of these is playing; everything else is applied on top of the resting pose as usual.
+    pub fn owns_the_body(self) -> bool {
+        matches!(
+            self,
+            AnimKind::TurnIn | AnimKind::TurnInTip | AnimKind::TurnInFuss | AnimKind::GetUp | AnimKind::GetUpSlow
+        )
+    }
+
+    /// The ones that only make sense while curled up asleep in the burrow.
+    pub fn is_sleep_talk(self) -> bool {
+        matches!(
+            self,
+            AnimKind::SleepBreath
+                | AnimKind::SleepTwitch
+                | AnimKind::SleepRoll
+                | AnimKind::SleepStartle
+                | AnimKind::SleepPeek
+        )
+    }
 }
 
 /// Curled up asleep in the burrow: the resting pose for quiet hours.
@@ -494,7 +534,15 @@ impl AnimKind {
             AnimKind::Unburrow => 1200,
             // Bedtime can afford to be slower than hiding: nobody is waiting for it to finish.
             AnimKind::TurnIn => 2200,
+            AnimKind::TurnInTip => 2800,
+            AnimKind::TurnInFuss => 3100,
             AnimKind::GetUp => 1800,
+            AnimKind::GetUpSlow => 2600,
+            AnimKind::SleepBreath => 2600,
+            AnimKind::SleepTwitch => 700,
+            AnimKind::SleepRoll => 1800,
+            AnimKind::SleepStartle => 2400,
+            AnimKind::SleepPeek => 1900,
         }
     }
 }
@@ -815,6 +863,171 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
                 p.eyes = Eyes::Closed;
                 p.mouth = Mouth::Tiny;
                 p.acc = Acc::Zzz;
+            }
+        }
+        AnimKind::TurnInTip => {
+            // Sits down on the edge meaning to rest for a moment, and loses the argument. The
+            // head goes down, jerks back up, goes down further — then the whole thing slumps in.
+            let perch = 0.28;
+            let sink = if t < 0.24 {
+                0.0
+            } else if t < 0.38 {
+                perch * smooth(0.24, 0.38, t)
+            } else if t < 0.78 {
+                perch
+            } else {
+                perch + (1.0 - perch) * smooth(0.78, 0.95, t)
+            };
+            p.burrow = smooth(0.0, 0.22, t);
+            p.sx = 1.0 - 0.34 * sink;
+            p.sy = 1.0 - 0.38 * sink;
+            p.dy = 4.5 * sink;
+            if t < 0.24 {
+                dig_beat(t / 0.24, p);
+            } else if t < 0.78 {
+                // Three nods, each one lower and slower to come back than the last.
+                let k = (t - 0.38) / 0.40;
+                let nod = (k * 3.0 * PI).sin().max(0.0);
+                let deepening = 0.4 + 0.6 * k;
+                // Thirty degrees, not twenty: these are round bodies with no shoulders to read a
+                // lean off, so a dignified nod is indistinguishable from standing up straight.
+                p.tilt = 30.0 * nod * deepening;
+                p.dy += 4.0 * nod * deepening;
+                p.look_y = 0.8 * nod;
+                p.eyes = if nod > 0.45 { Eyes::Closed } else { Eyes::Sleepy };
+                p.mouth = Mouth::Tiny;
+            } else {
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                p.tilt = 22.0 * (1.0 - smooth(0.78, 0.97, t));
+                if t > 0.9 {
+                    p.acc = Acc::Zzz;
+                }
+            }
+        }
+        AnimKind::TurnInFuss => {
+            // In, then cannot get comfortable: three goes at arranging itself before it gives in.
+            let sink = smooth(0.26, 0.48, t);
+            p.burrow = smooth(0.0, 0.22, t);
+            p.sx = 1.0 - 0.34 * sink;
+            p.sy = 1.0 - 0.38 * sink;
+            p.dy = 4.5 * sink;
+            if t < 0.26 {
+                dig_beat(t / 0.26, p);
+            } else if t < 0.86 {
+                let k = ((t - 0.48) / 0.38).clamp(0.0, 1.0);
+                let fuss = (k * 3.0 * PI).sin();
+                p.tilt = 16.0 * fuss;
+                p.sx *= 1.0 + 0.09 * fuss.abs();
+                p.sy *= 1.0 - 0.05 * fuss.abs();
+                p.dy -= 1.4 * (k * 6.0 * PI).sin().abs();
+                p.eyes = Eyes::Sleepy;
+                p.mouth = Mouth::Tiny;
+            } else {
+                let k = (t - 0.86) / 0.14;
+                p.tilt = 6.0 * (1.0 - k);
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                p.acc = Acc::Zzz;
+            }
+        }
+        AnimKind::GetUpSlow => {
+            // Rubs its eyes before it will admit it is morning.
+            let k = 1.0 - smooth(0.42, 0.84, t);
+            p.burrow = 1.0 - smooth(0.76, 1.0, t);
+            p.sx = 1.0 - 0.34 * k;
+            p.sy = 1.0 - 0.38 * k;
+            p.dy = 4.5 * k;
+            if t < 0.40 {
+                let r = smooth(0.06, 0.18, t) * (1.0 - smooth(0.30, 0.40, t));
+                p.arm_l = 0.95 * r;
+                p.arm_r = 0.95 * r;
+                p.tilt = 5.0 * (t * 9.0 * PI).sin() * r;
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Tiny;
+                if t < 0.1 {
+                    p.acc = Acc::Zzz;
+                }
+            } else if t < 0.80 {
+                let y = smooth(0.46, 0.62, t) * (1.0 - smooth(0.68, 0.80, t));
+                p.mouth = if y > 0.35 { Mouth::O } else { Mouth::Smile };
+                p.eyes = if y > 0.25 { Eyes::Closed } else { Eyes::Sleepy };
+                p.arm_l = y;
+                p.arm_r = y;
+                p.sy *= 1.0 + 0.08 * y;
+            } else {
+                let w = (t - 0.80) / 0.20;
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Smile;
+                p.tilt = 8.0 * (w * 3.0 * PI).sin() * (1.0 - w);
+            }
+        }
+        // The five below run *on top of* `nestled` rather than replacing it, so they add and
+        // multiply. Each one starts and ends at nothing, which is what lets them drop into a
+        // night's sleep without a seam at either end.
+        AnimKind::SleepBreath => {
+            let b = (t * PI).sin();
+            p.sy *= 1.0 + 0.08 * b;
+            p.sx *= 1.0 - 0.035 * b;
+            p.dy -= 1.1 * b;
+        }
+        AnimKind::SleepTwitch => {
+            let fade = (1.0 - t).powi(2);
+            p.tilt += 10.0 * (t * 6.0 * PI).sin() * fade;
+            p.dy -= 1.6 * (t * 6.0 * PI).sin().abs() * fade;
+            p.feet_drop += 2.6 * fade;
+        }
+        AnimKind::SleepRoll => {
+            // Over and down on the other side. The bodies are symmetric, so what sells this is the
+            // squash at the far end rather than the rotation getting there.
+            let s = (t * PI).sin();
+            p.tilt += 24.0 * (t * PI).sin() * if t < 0.5 { 1.0 } else { -1.0 };
+            p.sx *= 1.0 + 0.11 * s;
+            p.sy *= 1.0 - 0.07 * s;
+            p.dy -= 0.8 * s;
+        }
+        AnimKind::SleepStartle => {
+            if t < 0.14 {
+                // Straight up. Nothing gradual about waking from a bad one.
+                let k = smooth(0.0, 0.14, t);
+                p.sx *= 1.0 + 0.48 * k;
+                p.sy *= 1.0 + 0.58 * k;
+                p.dy -= 7.0 * k;
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::O;
+                p.acc = Acc::None;
+            } else if t < 0.62 {
+                // Looking for whatever it was. There is nothing there.
+                let k = (t - 0.14) / 0.48;
+                p.sx *= 1.48;
+                p.sy *= 1.58;
+                p.dy -= 7.0;
+                p.look_x = (k * 2.0 * PI).sin();
+                p.tilt += 7.0 * (k * 2.0 * PI).sin();
+                p.eyes = Eyes::Wide;
+                p.mouth = if k > 0.6 { Mouth::Tiny } else { Mouth::O };
+                p.acc = Acc::None;
+            } else {
+                // Oh. Back down.
+                let k = 1.0 - smooth(0.62, 0.92, t);
+                p.sx *= 1.0 + 0.48 * k;
+                p.sy *= 1.0 + 0.58 * k;
+                p.dy -= 7.0 * k;
+                p.eyes = if k > 0.35 { Eyes::Sleepy } else { Eyes::Closed };
+                p.mouth = Mouth::Tiny;
+                if k < 0.2 {
+                    p.acc = Acc::Zzz;
+                }
+            }
+        }
+        AnimKind::SleepPeek => {
+            let up = smooth(0.1, 0.3, t) * (1.0 - smooth(0.72, 0.9, t));
+            p.dy -= 2.2 * up;
+            p.sy *= 1.0 + 0.09 * up;
+            p.eyes = if up > 0.4 { Eyes::Sleepy } else { Eyes::Closed };
+            if up > 0.4 {
+                p.look_x = ((t - 0.3) / 0.42 * PI).sin() * 0.9;
+                p.acc = Acc::None;
             }
         }
         AnimKind::GetUp => {

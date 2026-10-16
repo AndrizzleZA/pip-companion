@@ -205,7 +205,7 @@ impl Pet {
         // Asleep in the burrow for the night. Applied before the animation, and skipped while the
         // two transitions are running, because `nestled` and those two both *set* the body
         // transform: applying both would put the companion down a well.
-        if nestled && !matches!(self.anim.map(|(k, _)| k), Some(AnimKind::TurnIn | AnimKind::GetUp)) {
+        if nestled && !self.anim.is_some_and(|(k, _)| k.owns_the_body()) {
             creature::nestled(&mut pose);
         }
         if self.eyes_shut {

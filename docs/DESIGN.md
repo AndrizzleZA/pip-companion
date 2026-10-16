@@ -2371,3 +2371,41 @@ for every character and every variant.
 The struggle needed rebuilding once. Rocking side to side was the obvious way to show being gripped
 and at this size thirteen degrees of tilt is about two pixels of lean. Losing and regaining a tenth
 of the descent moves the whole creature, and that is what reads.
+
+**Sleep, and the one decision that mattered.** The ask was breathing, dreaming, twitching feet,
+rolling over, a nightmare, waking slowly — a night with a shape to it rather than a still frame
+held for nine hours.
+
+*There is no continuous breathing, on purpose.* A gentle breath that never stops means the 30 fps
+clock never stops: roughly 65 seconds of CPU over a nine-hour night, against a target of one second
+per hour (§8). It would have been the most expensive thing in the program by an order of magnitude,
+spent animating something nobody is looking at — Pip stops idling entirely once you leave the
+machine, so the only audience for all-night breathing is an empty room. Sleep instead moves the way
+the waking pet does: short pieces, long gaps, chosen from a table. A breath that arrives every few
+minutes is also *more* noticeable than one that never stops.
+
+Five things it does while under: a long breath, a twitch with a kick of the feet, turning over, half
+an eye open to check the room, and — twice a night at most — a bad dream, which bolts it upright
+wide awake, looks around, finds nothing, and sinks back. They run on top of the resting pose rather
+than replacing it, each starting and ending at nothing, which is what lets them drop into a night's
+sleep without a seam at either end. The transitions do the opposite and *set* the body, because
+they begin or end at the resting pose, and `AnimKind::owns_the_body` is the one place that
+distinction is written down rather than restated at each call.
+
+Three ways to bed — straight in; in and then unable to get comfortable, shuffling about; or sitting
+on the edge nodding off, head dipping lower each time until it slumps in — and two ways up: a
+stretch and a climb, or rubbing its eyes first and yawning on the way out. Liveliness does not
+apply to any of it. A Calm companion still breathes, and a Lively one does not have livelier dreams.
+
+The nodding needed doubling before it read at all. These are round bodies with no shoulders to
+measure a lean against, so twenty degrees of dignified nod is indistinguishable from sitting up
+straight; thirty is a creature falling asleep.
+
+**Measured** (§8 protocol): 1.77 MB private memory, 1.89 MB working set, 38 ms startup, 4 threads,
+171 handles, 2142 KB binary, **idle CPU 0.69 s/h** — the lowest of the four readings this number
+has had (1.76, 1.02, 0.89, 0.69), taken on the build with by far the most animations in it.
+
+Not a coincidence and not only the noise of §54: giving "do nothing" a real weight means **fewer**
+animations actually play per hour than when the old pool picked one every single time its timer
+fired. More behaviours, less movement, less CPU. That is worth stating plainly because the intuition
+runs the other way, and the intuition is what would have led to building the breathing.
