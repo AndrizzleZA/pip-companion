@@ -2578,3 +2578,21 @@ why the purr went to being petted rather than to sleeping: a sleeping sound is a
 
 The whine is the only unhappy noise in the set and it is never aimed at anybody. It belongs to the
 companion tripping over its own feet, not to anything the person did or failed to do.
+
+**Measured either side of the sound work**, which is the comparison the brief asked for and the
+only honest way to answer "does this make it heavier":
+
+| | Before | After |
+|---|---|---|
+| Idle private memory | 1.78 MB | 1.77 MB |
+| Idle working set | 1.90 MB | 1.99 MB |
+| Idle CPU | 0.74 s/h | 0.26 s/h |
+| Startup | 34 ms | 29 ms |
+| Threads / handles | 4 / 171 | 4 / 171 |
+| Executable | 2154 KB | 2154 KB |
+
+Unchanged, to within the half-second of spread §54 established this four-minute window has. Which
+is what should happen: a voice that is six more phrases and four more lines of arithmetic, built
+when it plays and dropped afterwards, adds nothing an idle companion has to carry. The binary did
+not grow by a single kilobyte, because the sounds are not *in* it — they are a page of numbers and
+a loop, the same bargain the creature itself is drawn by.
