@@ -2540,3 +2540,41 @@ since voices were added.** Its decay is so fast that most of its energy is spent
 has finished rising, so choosing it quietly turned Pip down. Every sound is now normalised to the
 same peak before the volume is applied, which is what makes choosing a voice a choice of character
 rather than of loudness.
+
+**A throat rather than a bell, later the same day.** Andre asked for more creature in the sounds,
+and more of them. The old synthesiser was a sine, one harmonic and an exponential decay, which is
+physically a *struck object* — the reason it read as a chime was that it was one. Four changes make
+it a voice, none of them a dependency:
+
+*Pitch waver.* Nothing alive holds a pitch still. A slow wobble, five to nine hertz depending on
+the voice, is the single biggest reason a tone reads as a throat.
+
+*Accumulated phase.* The waveform was computed from elapsed time, which cannot move in pitch
+without clicking at every change — and a click is the one thing that makes a synthesised voice
+sound synthetic. Building the phase up sample by sample lets the pitch waver and slide freely and
+stay continuous. This is the change the other three depend on.
+
+*A detuned partial.* Two tones an almost-identical distance apart beat slowly against one another.
+That is body, and it is what a voice has and a sine does not.
+
+*Breath.* A puff of noise under the attack, gone in a fortieth of a second. Any more is a hiss.
+
+The four voices keep their characters through their own settings: Coo is now the most animal of
+them — deep waver, soft arrival, audible breath — Blip is chattery and quick like something very
+small, and Bell stays the least alive on purpose, because somebody chose it for being a bell.
+
+Six more phrases, eleven in all: a chirp, a burble, a purr, a yawn, a whine and a cheer.
+
+**Where they are allowed to happen, which is the part that needed deciding.** Water logged burbles,
+the glass that finishes the day cheers, finishing a reminder cheers, morning yawns, being petted
+purrs, being woken yawns, a sneeze chirps and a stumble whines.
+
+**Ordinary idle behaviour stays silent**, and that is the whole restraint. A companion that comments
+on its own fidgeting is one whose sound gets switched off, and a companion with the sound switched
+off has no voice for the things that matter. Every noise above belongs either to a moment the
+person caused — a click, a glass, a reminder answered — or to one of the two rare idles that are
+funnier with sound than without. Quiet hours remain silent throughout, including the purr, which is
+why the purr went to being petted rather than to sleeping: a sleeping sound is a sound at night.
+
+The whine is the only unhappy noise in the set and it is never aimed at anybody. It belongs to the
+companion tripping over its own feet, not to anything the person did or failed to do.

@@ -592,6 +592,16 @@ impl App {
                 let size = self.size();
                 self.pet.aim_walk(size, coin);
             }
+            // Two idle behaviours make a noise, and only these two. Both are rare by their own
+            // cooldowns — a quarter of an hour and twenty minutes — and both are funnier with
+            // sound than without. Everything else the companion does while idling is silent,
+            // because a pet that comments on its own fidgeting is one you mute, and a muted pet
+            // has no voice left for the things that matter.
+            match kind {
+                AnimKind::Sneeze => self.play_sfx(crate::attention::Sfx::Chirp),
+                AnimKind::Stumble => self.play_sfx(crate::attention::Sfx::Whine),
+                _ => {}
+            }
             if kind == AnimKind::Blink {
                 // A blink is two frames (shut, then open 110 ms later) instead of running the
                 // 30 fps animation clock — the single biggest idle-CPU saving.
@@ -775,6 +785,12 @@ impl App {
                 AnimKind::GetUpSlow
             };
             self.anim(kind);
+            // The two ends of the day each get one noise, and a yawn is the obvious one for both.
+            // Twice a day is a long way from chatty, and these are the moments a person is most
+            // likely to look over at it.
+            if !night {
+                self.play_sfx(crate::attention::Sfx::Yawn);
+            }
             self.arm_idle();
         }
 
@@ -1029,6 +1045,12 @@ impl App {
             crate::attention::Sfx::Tap => platform::Phrase::Knock,
             crate::attention::Sfx::Trill => platform::Phrase::Trill,
             crate::attention::Sfx::Sigh => platform::Phrase::Falling,
+            crate::attention::Sfx::Chirp => platform::Phrase::Chirp,
+            crate::attention::Sfx::Burble => platform::Phrase::Burble,
+            crate::attention::Sfx::Yawn => platform::Phrase::Yawn,
+            crate::attention::Sfx::Whine => platform::Phrase::Whine,
+            crate::attention::Sfx::Purr => platform::Phrase::Purr,
+            crate::attention::Sfx::Cheer => platform::Phrase::Cheer,
         };
         let seed = self.rand();
         let c = platform::Chime::say(self.settings.pet.voice, ph, 1.0, seed);
@@ -1144,6 +1166,9 @@ impl App {
                         let seq = self.state.next_msg();
                         self.message(messages::done_cheer(seq).to_string(), 3);
                         self.anim(AnimKind::Celebrate);
+                        // Finishing something is the moment most worth a noise, and the only one
+                        // the person caused on purpose.
+                        self.play_sfx(crate::attention::Sfx::Cheer);
                     }
                     _ => {
                         self.pet.bubble = None;
@@ -1214,7 +1239,17 @@ impl App {
             self.set_timer(T_BUBBLE, 3_500);
         }
         self.wake_until_ms = tick_ms() + 20_000;
-        self.anim(if count == goal { AnimKind::Celebrate } else { AnimKind::Drink });
+        // A glass logged gets a swallow; the glass that finishes the day gets the big noise.
+        // Both are answers to something the person just did, which is the only kind of moment
+        // worth making a sound at — a companion that chirps at its own idle fidgeting is one
+        // you turn the sound off for, and then it has no voice at all.
+        if count == goal {
+            self.anim(AnimKind::Celebrate);
+            self.play_sfx(crate::attention::Sfx::Cheer);
+        } else {
+            self.anim(AnimKind::Drink);
+            self.play_sfx(crate::attention::Sfx::Burble);
+        }
         self.reschedule();
     }
 
@@ -1386,6 +1421,13 @@ impl App {
             (false, true) => AnimKind::WakeUp,
             (false, false) => AnimKind::Hop,
         });
+        // Being petted answers back. This is the one sound the person asks for directly by
+        // touching the thing, which is why it can happen every time without wearing out — the
+        // rule everywhere else is that noises belong to moments, and a click is a moment.
+        //
+        // Woken rather than greeted gets the yawn instead. A purr from something that was asleep
+        // a quarter of a second ago is the wrong animal.
+        self.play_sfx(if was_asleep { crate::attention::Sfx::Yawn } else { crate::attention::Sfx::Purr });
         self.arm_clock();
     }
 

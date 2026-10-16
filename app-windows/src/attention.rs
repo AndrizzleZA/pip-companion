@@ -30,6 +30,18 @@ pub enum Sfx {
     Trill,
     /// Falling and soft, for the end of the day.
     Sigh,
+    /// A short surprised squeak.
+    Chirp,
+    /// Three low notes, swallowed. Water going down.
+    Burble,
+    /// Up and a long way back down. Waking, or giving in to bedtime.
+    Yawn,
+    /// Unhappy, and never about the person: this one belongs to tripping over.
+    Whine,
+    /// Low and content, for being petted.
+    Purr,
+    /// Four notes climbing, for something finished.
+    Cheer,
 }
 
 /// What the companion does about one due item, once.

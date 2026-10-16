@@ -267,6 +267,15 @@ struct Recipe {
     harmonic: f32,
     /// (hertz, seconds from the start).
     notes: &'static [(f32, f32)],
+    /// How far the pitch wavers, as a fraction. This is the single biggest reason a tone sounds
+    /// like a throat rather than a struck object: nothing alive holds a pitch perfectly still.
+    vibrato: f32,
+    /// How fast it wavers, in hertz. Around 5–7 is a voice; faster is an insect, slower is a wobble.
+    vibrato_hz: f32,
+    /// A puff of noise under the attack. Tiny amounts read as breath; any more reads as a hiss.
+    breath: f32,
+    /// How quickly the note arrives. Slower is sung, faster is struck.
+    attack: f32,
 }
 
 /// What the companion is saying, as against what it sounds like.
@@ -286,6 +295,18 @@ pub enum Phrase {
     Trill,
     /// Down and softening: end of the day.
     Falling,
+    /// Two very short rising squeaks. Surprise, or something noticed.
+    Chirp,
+    /// Three quick low notes, swallowed. Water.
+    Burble,
+    /// Low, soft and slow — the nearest thing to contentment this can make.
+    Purr,
+    /// Up and a long way back down. Waking, or giving in to bedtime.
+    Yawn,
+    /// Falling, wavering, unsure. For when something did not go to plan.
+    Whine,
+    /// Four notes climbing. The biggest noise it makes, for when something is finished.
+    Cheer,
 }
 
 /// Multipliers on the chosen voice's notes, plus how the phrase bends and how long it runs.
@@ -299,19 +320,68 @@ fn phrase(p: Phrase) -> (&'static [(f32, f32)], f32, f32) {
         Phrase::Knock => (&[(0.72, 0.0), (0.72, 0.085)], 0.55, -1.0),
         Phrase::Trill => (&[(1.0, 0.0), (1.19, 0.07), (1.5, 0.14)], 1.15, 1.5),
         Phrase::Falling => (&[(1.0, 0.0), (0.84, 0.12), (0.67, 0.26)], 1.5, -2.0),
+        // Small and quick and up: the shape of a surprised noise.
+        Phrase::Chirp => (&[(1.35, 0.0), (1.6, 0.06)], 0.5, 5.0),
+        // Low and tumbling, three of them, like something being swallowed.
+        Phrase::Burble => (&[(0.78, 0.0), (0.7, 0.06), (0.62, 0.12)], 0.7, -3.0),
+        // Barely moving. The slow waver of the voice does most of the work here.
+        Phrase::Purr => (&[(0.52, 0.0), (0.52, 0.18)], 1.6, -0.5),
+        // Up, and a long way back down: the whole shape of a yawn is the descent.
+        Phrase::Yawn => (&[(0.85, 0.0), (1.15, 0.14), (0.62, 0.34)], 2.2, -4.0),
+        // Falling and unsure. Deliberately the only unhappy noise, and it is never aimed at
+        // anybody — it belongs to the companion tripping over, not to anything the person did.
+        Phrase::Whine => (&[(1.1, 0.0), (0.95, 0.10), (0.8, 0.22)], 1.3, -6.0),
+        // Four notes climbing, the top one held: the biggest thing it says.
+        Phrase::Cheer => (&[(1.0, 0.0), (1.19, 0.06), (1.5, 0.12), (1.78, 0.19)], 1.5, 2.0),
     }
 }
 
 fn recipe(voice: Voice) -> Recipe {
     match voice {
-        // The original: A5 then E6.
-        Voice::Chime => Recipe { len: 0.55, decay: 7.0, harmonic: 0.12, notes: &[(880.0, 0.0), (1318.5, 0.11)] },
-        // One note, left to ring.
-        Voice::Bell => Recipe { len: 0.95, decay: 3.2, harmonic: 0.3, notes: &[(1046.5, 0.0)] },
-        // Two quick blips, almost spoken.
-        Voice::Blip => Recipe { len: 0.26, decay: 20.0, harmonic: 0.05, notes: &[(659.3, 0.0), (880.0, 0.07)] },
-        // Soft and falling, more of a hum than a ring.
-        Voice::Coo => Recipe { len: 0.7, decay: 5.5, harmonic: 0.04, notes: &[(659.3, 0.0), (523.3, 0.13)] },
+        // The original: A5 then E6. Still the brightest, now with a throat behind it.
+        Voice::Chime => Recipe {
+            len: 0.55,
+            decay: 7.0,
+            harmonic: 0.12,
+            notes: &[(880.0, 0.0), (1318.5, 0.11)],
+            vibrato: 0.013,
+            vibrato_hz: 6.2,
+            breath: 0.05,
+            attack: 45.0,
+        },
+        // One note, left to ring. The least animal of the four and meant to stay that way.
+        Voice::Bell => Recipe {
+            len: 0.95,
+            decay: 3.2,
+            harmonic: 0.3,
+            notes: &[(1046.5, 0.0)],
+            vibrato: 0.006,
+            vibrato_hz: 5.0,
+            breath: 0.02,
+            attack: 70.0,
+        },
+        // Quick and chattery: a fast flutter and a hard attack, like something very small.
+        Voice::Blip => Recipe {
+            len: 0.26,
+            decay: 20.0,
+            harmonic: 0.05,
+            notes: &[(659.3, 0.0), (880.0, 0.07)],
+            vibrato: 0.022,
+            vibrato_hz: 9.5,
+            breath: 0.09,
+            attack: 120.0,
+        },
+        // The most creature of them: deep waver, soft arrival, audible breath.
+        Voice::Coo => Recipe {
+            len: 0.7,
+            decay: 5.5,
+            harmonic: 0.04,
+            notes: &[(659.3, 0.0), (523.3, 0.13)],
+            vibrato: 0.030,
+            vibrato_hz: 5.4,
+            breath: 0.13,
+            attack: 22.0,
+        },
     }
 }
 
@@ -339,17 +409,46 @@ impl Chime {
         let len = (RATE as f32 * r.len * len_scale) as usize;
         let mut samples = vec![0i16; len.max(1)];
         let amp = 5200.0 * volume.clamp(0.0, 1.0);
+        let tau = std::f32::consts::TAU;
+        // Noise for the breath, from the same seed, so a sound is still the same sound twice.
+        let mut rng = seed | 1;
+        let mut noise = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 40) as f32 / 8_388_608.0 - 1.0
+        };
         for &(ratio, start) in steps {
             let freq = base * ratio;
             let s0 = (start * RATE as f32) as usize;
-            for (i, s) in samples.iter_mut().enumerate().skip(s0) {
+            // Phase is accumulated rather than computed from `t`, which is what lets the pitch
+            // move freely: waver it, bend it, do both, and the waveform stays continuous. Working
+            // it out as frequency × time cannot do that without clicking every time the pitch
+            // changes, and a click is the one thing that makes a synthesised voice sound synthetic.
+            let mut phase = 0.0f32;
+            for i in s0..samples.len() {
                 let t = (i - s0) as f32 / RATE as f32;
-                let env = (1.0 - (-t * 60.0).exp()) * (-t * r.decay).exp();
-                // The glide: the note slides as it sounds, which is most of what separates a
-                // voice from a tone. Phase is the integral of frequency, not frequency × time.
-                let phase = (freq * t + bend * 0.03 * freq * t * t) * std::f32::consts::TAU;
-                let v = phase.sin() * 0.6 + (phase * 2.0).sin() * r.harmonic;
-                *s = s.saturating_add((v * env * amp) as i16);
+                let env = (1.0 - (-t * r.attack).exp()) * (-t * r.decay).exp();
+
+                // Nothing alive holds a pitch still. The waver is the single biggest reason this
+                // reads as a throat and not a struck object.
+                let waver = 1.0 + r.vibrato * (tau * r.vibrato_hz * t).sin();
+                // And the note itself slides while it sounds, settling as it goes.
+                let glide = 1.0 + bend * 0.07 * (1.0 - (-t * 7.0).exp());
+                phase += tau * freq * waver * glide / RATE as f32;
+
+                // A small stack of partials rather than a pure tone. The detuned one is what
+                // gives it a body: two things an almost-identical distance apart beat against
+                // each other slowly, which is what a voice does and a sine wave does not.
+                let v = phase.sin() * 0.62
+                    + (phase * 2.0).sin() * r.harmonic
+                    + (phase * 3.0).sin() * r.harmonic * 0.4
+                    + (phase * 2.01).sin() * r.harmonic * 0.35;
+
+                // Breath, only under the attack, gone almost at once.
+                let b = noise() * r.breath * (-t * 26.0).exp();
+
+                samples[i] = samples[i].saturating_add(((v + b) * env * amp) as i16);
             }
         }
         // Normalise, so that choosing a voice is choosing a character and not a volume.
@@ -570,7 +669,10 @@ mod the_voice {
     /// three ways a synthesised sound goes wrong without anybody noticing until a user does.
     #[test]
     fn every_phrase_in_every_voice_is_real_audio() {
-        let phrases = [Phrase::Plain, Phrase::Rising, Phrase::Knock, Phrase::Trill, Phrase::Falling];
+        let phrases = [
+            Phrase::Plain, Phrase::Rising, Phrase::Knock, Phrase::Trill, Phrase::Falling,
+            Phrase::Chirp, Phrase::Burble, Phrase::Purr, Phrase::Yawn, Phrase::Whine, Phrase::Cheer,
+        ];
         for voice in Voice::ALL {
             for ph in phrases {
                 let c = Chime::say(voice, ph, 1.0, 12_345);
