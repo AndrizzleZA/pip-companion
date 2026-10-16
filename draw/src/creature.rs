@@ -463,6 +463,44 @@ pub enum AnimKind {
     SleepStartle,
     /// Half an eye open to check the room, then gone again.
     SleepPeek,
+    /// Sets off somewhere, stops, thinks better of it, and comes back.
+    Wander,
+    /// Sets off, trips over nothing, sprawls, picks itself up and returns.
+    Stumble,
+    /// Leans in at the screen, head on one side, holds the look, settles back.
+    Curious,
+    /// Crouches at something only it can see, pounces, lands on nothing.
+    Pounce,
+    /// A whole-body shake, nose to feet.
+    Shake,
+    /// Finds something tiny on the ground, picks it up, admires it — and it is not there.
+    Found,
+}
+
+/// How far along the ground an animation wants the creature to be, in design units.
+///
+/// Zero for everything that stays put, and **zero at both ends** for everything that moves: the
+/// place the companion sits is a place the person dragged it to and it is saved to disk (§8), so
+/// an animation may borrow that position for a few seconds and must hand it back exactly. The
+/// curve lives here, next to the animation it belongs to, rather than in a table on the other side
+/// of the window code that would have to be kept in step with it.
+pub fn walk_offset(kind: AnimKind, t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match kind {
+        AnimKind::Wander => {
+            // Out, a long pause of second thoughts, back.
+            22.0 * (smooth(0.12, 0.42, t) - smooth(0.58, 0.88, t))
+        }
+        AnimKind::Stumble => {
+            // Out, down in a heap, and a shorter walk back than it managed on the way out.
+            14.0 * smooth(0.04, 0.26, t) + 4.0 * smooth(0.26, 0.36, t) - 18.0 * smooth(0.60, 0.92, t)
+        }
+        AnimKind::Pounce => {
+            // The pounce itself carries it forward, and it walks back looking puzzled.
+            9.0 * smooth(0.30, 0.42, t) - 9.0 * smooth(0.62, 0.90, t)
+        }
+        _ => 0.0,
+    }
 }
 
 impl AnimKind {
@@ -543,6 +581,12 @@ impl AnimKind {
             AnimKind::SleepRoll => 1800,
             AnimKind::SleepStartle => 2400,
             AnimKind::SleepPeek => 1900,
+            AnimKind::Wander => 3400,
+            AnimKind::Stumble => 2600,
+            AnimKind::Curious => 2200,
+            AnimKind::Pounce => 2400,
+            AnimKind::Shake => 1100,
+            AnimKind::Found => 3000,
         }
     }
 }
@@ -691,8 +735,8 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
         AnimKind::Sniff => {
             // Three quick dips towards the ground, nose first.
             let d = ((t * 3.0 * PI).sin().max(0.0)) * (1.0 - smooth(0.75, 1.0, t));
-            p.dy += 3.2 * d;
-            p.tilt += 5.0 * d;
+            p.dy += 2.0 * d;
+            p.tilt += 4.0 * d;
             p.look_y = 0.7 * d;
             p.mouth = Mouth::Tiny;
             p.leaf -= 6.0 * d;
@@ -723,8 +767,8 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
                 // And out. Fast, then a wobble.
                 let k = (t - 0.55) / 0.45;
                 let snap = (1.0 - k).powi(2);
-                p.dy += 4.0 * snap;
-                p.tilt += 13.0 * snap * (k * 4.0 * PI).cos();
+                p.dy += 2.2 * snap;
+                p.tilt += 10.0 * snap * (k * 4.0 * PI).cos();
                 p.sy *= 1.0 - 0.10 * snap;
                 p.sx *= 1.0 + 0.09 * snap;
                 p.eyes = Eyes::Closed;
@@ -1030,6 +1074,168 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
                 p.acc = Acc::None;
             }
         }
+        AnimKind::Wander => {
+            // The walking is carried by `walk_offset`; what happens here is the gait on top of it,
+            // plus the moment of doubt in the middle that makes it a decision rather than a lap.
+            if (0.10..0.46).contains(&t) || (0.56..0.90).contains(&t) {
+                step_gait(t, p);
+            }
+            if (0.42..0.60).contains(&t) {
+                let k = (t - 0.42) / 0.18;
+                p.look_x = -(k * PI).sin();
+                p.tilt += 5.0 * (k * PI).sin();
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Tiny;
+            }
+            if t > 0.90 {
+                let k = (t - 0.90) / 0.10;
+                p.sy *= 1.0 - 0.06 * (1.0 - k);
+                p.sx *= 1.0 + 0.05 * (1.0 - k);
+            }
+        }
+        AnimKind::Stumble => {
+            if t < 0.26 {
+                step_gait(t, p);
+            } else if t < 0.40 {
+                // Over it goes. Pitching forward and dropping at the same time is what makes this
+                // a trip rather than a bow.
+                let k = (t - 0.26) / 0.14;
+                // The sprawl is sideways and squashed rather than *down*: the window has four
+                // design units of floor under the feet, so a creature that drops seven of them to
+                // land is a creature with its chin sawn off by the bottom of its own window.
+                p.tilt += 14.0 * smooth(0.0, 0.6, k);
+                // Pivoting on its feet lifts the body a little; that is also what keeps the far
+                // hip from swinging down through the bottom of the window.
+                p.dy -= 2.8 * smooth(0.2, 1.0, k);
+                p.sy *= 1.0 - 0.22 * smooth(0.4, 1.0, k);
+                p.sx *= 1.0 + 0.11 * smooth(0.4, 1.0, k);
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::O;
+                p.arm_l = 0.9;
+                p.arm_r = 0.9;
+                p.acc = Acc::Dirt;
+                p.acc_t = k * 0.5;
+            } else if t < 0.56 {
+                // In a heap, working out what happened.
+                p.tilt += 14.0 - 3.0 * ((t - 0.40) * 8.0 * PI).sin();
+                p.dy -= 2.8;
+                p.sy *= 0.78;
+                p.sx *= 1.10;
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Wobble;
+            } else if t < 0.64 {
+                // Up, and a quick shake, and nothing happened.
+                let k = (t - 0.56) / 0.08;
+                p.tilt += 14.0 * (1.0 - smooth(0.0, 0.7, k)) + 6.0 * (k * 4.0 * PI).sin();
+                p.dy -= 2.8 * (1.0 - k);
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Smile;
+            } else {
+                step_gait(t, p);
+                p.mouth = Mouth::Smile;
+            }
+        }
+        AnimKind::Curious => {
+            // Leans in at whatever is on the screen and stays there a beat too long.
+            let lean = smooth(0.08, 0.30, t) * (1.0 - smooth(0.74, 0.95, t));
+            p.tilt += 13.0 * lean;
+            p.dy -= 2.0 * lean;
+            p.sy *= 1.0 + 0.05 * lean;
+            p.look_y = -0.5 * lean;
+            p.look_x = 0.35 * lean;
+            p.eyes = if lean > 0.5 { Eyes::Wide } else { Eyes::Open };
+            p.mouth = Mouth::Tiny;
+            p.leaf += 11.0 * lean;
+        }
+        AnimKind::Pounce => {
+            if t < 0.30 {
+                // Crouch. All the information is in the anticipation.
+                let k = smooth(0.0, 0.30, t);
+                p.sy *= 1.0 - 0.16 * k;
+                p.sx *= 1.0 + 0.13 * k;
+                p.dy += 2.4 * k;
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::Tiny;
+                p.look_y = 0.7 * k;
+                p.feet_drop -= 1.0 * k;
+            } else if t < 0.46 {
+                // And go.
+                let k = (t - 0.30) / 0.16;
+                p.dy -= 12.0 * (k * PI).sin();
+                p.sy *= 1.0 + 0.12 * (k * PI).sin();
+                p.sx *= 1.0 - 0.08 * (k * PI).sin();
+                p.arm_l = 0.9;
+                p.arm_r = 0.9;
+                p.eyes = Eyes::Happy;
+                p.mouth = Mouth::Grin;
+            } else if t < 0.62 {
+                // Landed on nothing at all.
+                let k = (t - 0.46) / 0.16;
+                p.sy *= 1.0 - 0.12 * (1.0 - k);
+                p.sx *= 1.0 + 0.10 * (1.0 - k);
+                p.look_y = 0.8;
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Wobble;
+            } else {
+                step_gait(t, p);
+                p.look_x = 0.4 * ((t - 0.62) * 3.0 * PI).sin();
+                p.mouth = Mouth::Tiny;
+            }
+        }
+        AnimKind::Shake => {
+            // Nose to feet, fast, and over quickly — a long shake looks like a malfunction.
+            let ramp = smooth(0.0, 0.12, t) * (1.0 - smooth(0.70, 1.0, t));
+            let w = (t * 13.0 * PI).sin();
+            p.tilt += 9.0 * w * ramp;
+            // The widest body tilting on the spot swings a hip at the window edge; a shake is a
+            // creature coming up off its feet anyway.
+            p.dy -= 1.2 * w.abs() * ramp;
+            p.sx *= 1.0 + 0.07 * w.abs() * ramp;
+            p.sy *= 1.0 - 0.05 * w.abs() * ramp;
+            p.leaf += 26.0 * w * ramp;
+            p.feet_drop += 1.4 * w.abs() * ramp;
+            p.eyes = if ramp > 0.4 { Eyes::Closed } else { Eyes::Open };
+            p.mouth = Mouth::Tiny;
+        }
+        AnimKind::Found => {
+            // Notices something by its feet, picks it up, holds it out to look at — nothing there.
+            if t < 0.22 {
+                let k = smooth(0.0, 0.22, t);
+                p.look_y = 0.9 * k;
+                p.tilt += 8.0 * k;
+                p.dy += 0.6 * k;
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::Tiny;
+            } else if t < 0.40 {
+                // Picking it up.
+                let k = (t - 0.22) / 0.18;
+                p.tilt += 8.0 - 5.0 * k;
+                p.dy += 0.6 + 1.0 * (k * PI).sin();
+                p.arm_l = 0.5 + 0.5 * (k * PI).sin();
+                p.look_y = 0.9 - 0.4 * k;
+                p.eyes = Eyes::Open;
+            } else if t < 0.72 {
+                // Holding it up and admiring it.
+                let k = (t - 0.40) / 0.32;
+                p.arm_l = 1.0;
+                p.look_y = -0.6;
+                p.look_x = 0.4 * (k * 2.0 * PI).sin();
+                p.tilt += 4.0 * (k * 2.0 * PI).sin();
+                p.eyes = Eyes::Happy;
+                p.mouth = Mouth::Grin;
+                p.acc = Acc::Sparkles;
+                p.acc_t = k;
+                p.blush = p.blush.max(0.7);
+            } else {
+                // It was never there.
+                let k = (t - 0.72) / 0.28;
+                p.arm_l = 1.0 - k;
+                p.look_y = -0.6 + 0.6 * k;
+                p.eyes = if k > 0.4 { Eyes::Open } else { Eyes::Wide };
+                p.mouth = Mouth::Wobble;
+                p.tilt -= 6.0 * (k * PI).sin();
+            }
+        }
         AnimKind::GetUp => {
             let k = 1.0 - smooth(0.22, 0.78, t);
             p.burrow = 1.0 - smooth(0.70, 1.0, t);
@@ -1064,6 +1270,18 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
 /// the hole, so there is nothing beside the hole left to hide. Clipping would mean a clip parameter
 /// on [`draw`], which is the one function the phone also calls (§50), to support something the
 /// phone will never do.
+/// A walking bob: up on each step, feet alternating under it.
+///
+/// Shared by everything that travels, so the gait is one definition rather than one per journey —
+/// and these bodies have no legs to swing, so the bounce *is* the walk.
+fn step_gait(t: f32, p: &mut Pose) {
+    let step = t * 26.0 * PI;
+    p.dy -= 2.2 * step.sin().abs();
+    p.tilt += 3.0 * step.cos();
+    p.feet_drop += 1.2 * step.sin();
+    p.sy *= 1.0 + 0.03 * step.sin().abs();
+}
+
 /// The scrabbling that opens a hole: paws going, rocking forward, earth coming out. Shared by all
 /// three ways of going down, so a change to what digging looks like is one edit rather than three.
 fn dig_beat(k: f32, p: &mut Pose) {
@@ -1671,4 +1889,92 @@ mod shape_tests {
     /// hides once the animation reports done, so one that ends mid-dig would leave the pet on
     /// screen for ever — which is what §55's loop felt like from the outside.
     const DIGS: [AnimKind; 3] = [AnimKind::Burrow, AnimKind::BurrowStuck, AnimKind::BurrowPeek];
+
+    /// Where the companion sits is a place the person dragged it to, and it is on disk. An
+    /// animation may borrow that position and must hand back exactly what it took: anything that
+    /// ends a pixel out would walk the pet across the desk over a morning, one trip at a time.
+    #[test]
+    fn everything_that_walks_comes_back_to_where_it_started() {
+        for kind in [AnimKind::Wander, AnimKind::Stumble, AnimKind::Pounce] {
+            assert_eq!(walk_offset(kind, 0.0), 0.0, "{kind:?} does not start where it stands");
+            assert_eq!(walk_offset(kind, 1.0), 0.0, "{kind:?} does not finish where it started");
+            // And it must stay on the desk on the way: the window clamps to the monitor, so a
+            // journey wider than the margin would stop dead against the edge and jump back.
+            for i in 0..=50 {
+                let d = walk_offset(kind, i as f32 / 50.0).abs();
+                assert!(d <= 30.0, "{kind:?} wanders {d:.0} units away, which is off the window");
+            }
+        }
+    }
+
+    /// No animation may push the creature off the bottom of its own window.
+    ///
+    /// `every_creature_fits_the_window` checks the shapes standing still, and an animation can
+    /// move them anywhere. The stumble landed with a drop of seven design units into four units of
+    /// floor, and sprawled with its chin sawn off by the window edge — visible the moment it was
+    /// rendered and invisible to every test that existed. Digging is excluded: going below the
+    /// floor is the entire point of it.
+    #[test]
+    fn no_animation_pushes_the_creature_through_the_floor() {
+        const BOX_W: u32 = 112;
+        const BOX_H: u32 = 104;
+        const UNIT: f32 = 0.92;
+        let digs_or_sleeps = |k: AnimKind| {
+            DIGS.contains(&k) || k.owns_the_body() || k.is_sleep_talk() || k == AnimKind::Unburrow
+        };
+        let _ = (BOX_W, BOX_H, UNIT);
+        for kind in ALL_ANIMS {
+            if digs_or_sleeps(kind) {
+                continue;
+            }
+            for who in Character::ALL {
+                let s = shape_of(who);
+                let path = s.body.path().expect("a body");
+                for i in 0..=24 {
+                    let t = i as f32 / 24.0;
+                    let mut p = Pose::base(Expr::Content);
+                    animate(kind, t, &mut p);
+                    // The same transform `draw` builds, at full growth.
+                    let m = Transform::from_translate(CX, GROUND_Y + p.dy)
+                        .pre_concat(Transform::from_rotate(p.tilt))
+                        .pre_scale(p.sx, p.sy)
+                        .pre_translate(-CX, -GROUND_Y);
+                    let b = path.clone().transform(m).expect("a transformed body").bounds();
+                    assert!(
+                        b.bottom() <= 98.3,
+                        "{who:?} {kind:?} at t={t:.2} reaches {:.1}, below the window's 98.3",
+                        b.bottom()
+                    );
+                    assert!(
+                        (-10.9..=110.9).contains(&b.left()) && (-10.9..=110.9).contains(&b.right()),
+                        "{who:?} {kind:?} at t={t:.2} spans {:.1}..{:.1}, outside the window",
+                        b.left(),
+                        b.right()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Everything, so a new animation is covered by the checks above without being added to a list.
+    const ALL_ANIMS: [AnimKind; 36] = [
+        AnimKind::Blink, AnimKind::Hop, AnimKind::Wave, AnimKind::Celebrate, AnimKind::Drink,
+        AnimKind::LookAround, AnimKind::Stretch, AnimKind::Wiggle, AnimKind::WakeUp, AnimKind::PopIn,
+        AnimKind::Nod, AnimKind::Yawn, AnimKind::Sniff, AnimKind::Scratch, AnimKind::Sneeze,
+        AnimKind::Settle, AnimKind::Burrow, AnimKind::BurrowStuck, AnimKind::BurrowPeek,
+        AnimKind::Unburrow, AnimKind::TurnIn, AnimKind::TurnInTip, AnimKind::TurnInFuss,
+        AnimKind::GetUp, AnimKind::GetUpSlow, AnimKind::SleepBreath, AnimKind::SleepTwitch,
+        AnimKind::SleepRoll, AnimKind::SleepStartle, AnimKind::SleepPeek, AnimKind::Wander,
+        AnimKind::Stumble, AnimKind::Curious, AnimKind::Pounce, AnimKind::Shake, AnimKind::Found,
+    ];
+
+    /// Nothing that stays put may quietly acquire a journey.
+    #[test]
+    fn everything_else_stays_where_it_is() {
+        for kind in [AnimKind::Blink, AnimKind::Yawn, AnimKind::SleepBreath, AnimKind::Burrow, AnimKind::TurnIn] {
+            for i in 0..=20 {
+                assert_eq!(walk_offset(kind, i as f32 / 20.0), 0.0, "{kind:?} moved");
+            }
+        }
+    }
 }

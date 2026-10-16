@@ -2409,3 +2409,50 @@ Not a coincidence and not only the noise of §54: giving "do nothing" a real wei
 animations actually play per hour than when the old pool picked one every single time its timer
 fired. More behaviours, less movement, less CPU. That is worth stating plainly because the intuition
 runs the other way, and the intuition is what would have led to building the breathing.
+
+**The everyday library, and the first time Pip leaves the spot it was put in.** Six more behaviours:
+leaning in at the screen and holding the look a beat too long; a whole-body shake; crouching and
+pouncing on something only it can see and landing on nothing; wandering off a little way, stopping,
+thinking better of it and coming back; tripping over nothing, sprawling, picking itself up as
+though nothing happened; and — rarest of the set, once every forty-five minutes at the very most —
+finding something tiny by its feet, picking it up, holding it out to admire, and discovering it was
+never there.
+
+*Travelling.* Three of those move the window. The rule they are built around is that **where the
+companion sits is a place the person dragged it to and it is saved to disk**, so an animation may
+borrow that position and must hand back exactly what it took. The curve lives in `walk_offset`,
+next to the animation it belongs to rather than in a table across the window code, and the window
+offsets where it draws without ever touching the saved anchor. A test asserts every journey starts
+and ends at zero and never goes further than the window can carry — a walk that ended a pixel out
+would carry the pet across the desk over a morning, one trip at a time. The direction is chosen
+per journey from whichever side has room, so it never shuffles up against a screen edge.
+
+*Mood.* Thirsty is the one mood that changes what the companion feels like doing: the bouncy
+behaviours — hop, pounce, stumble — simply stop being candidates. It never says anything about it,
+per §28. It just has less bounce, which is how a mood reads on anything alive.
+
+**A test that paid for itself five times before it was finished.** Animations can put the body
+anywhere, and `every_creature_fits_the_window` only ever checked the shapes standing still. The
+stumble landed with a drop of seven design units into four units of floor and sprawled with its
+chin sawn off by the bottom of its own window — obvious the moment it was rendered, invisible to
+every test that existed. `no_animation_pushes_the_creature_through_the_floor` walks every
+animation, every character and twenty-five points in time, transforms the body the way `draw` does,
+and checks the bounds against the window.
+
+Written to catch the stumble, it immediately caught four more: the sniff, the sneeze, the shake and
+the find, all of them tilting a wide body about a point near the floor and swinging a hip through
+the bottom edge. **Two of those shipped the night before and are on Andre's desktop now.** The
+general fix is the same each time and is a real thing about these bodies rather than a fudge: a
+body pivoting on its feet rises, so a lean needs a lift under it, and the widest character in the
+cast is the one that decides how much.
+
+**Measured** (§8 protocol): 1.78 MB private memory, 1.92 MB working set, 30 ms startup, 4 threads,
+171 handles, 2148 KB binary, **idle CPU 0.32 s/h** — a third of the target, and the lowest of the
+five readings this number has had (1.76, 1.02, 0.89, 0.69, 0.32), on the build with twenty-two
+more animations than the one that started the sequence.
+
+The trend is now too consistent to be the noise of §54 alone. Giving "do nothing" a real weight and
+putting cooldowns on everything means the companion moves *less often* than it did when a shorter
+list picked something every time its timer fired. Twenty-two more things it can do, a third of the
+CPU, and it is the cooldowns rather than the drawing that did it — which is worth remembering the
+next time the obvious way to make something feel more alive is to make it move more.

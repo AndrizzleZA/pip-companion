@@ -102,6 +102,8 @@ pub struct Pet {
     pub frames: u64,
     /// Idle blink: eyes shut for one frame.
     pub eyes_shut: bool,
+    /// Which way a walking animation is travelling: +1 right, -1 left.
+    walk_sign: f32,
     /// Total time spent rendering (diagnostics).
     pub render_us: u64,
 }
@@ -139,6 +141,7 @@ impl Pet {
             frames: 0,
             eyes_shut: false,
             render_us: 0,
+            walk_sign: 1.0,
         }
     }
 
@@ -183,12 +186,50 @@ impl Pet {
         self.anim = Some((kind, tick_ms()));
     }
 
+    /// Points the next journey at whichever side has room for it.
+    ///
+    /// Walking into the edge of the screen would not fall off — the window simply stops — but it
+    /// would look like the pet bumping an invisible wall and then sliding home, so it goes the
+    /// other way instead. `coin` breaks the tie when both sides are fine.
+    pub fn aim_walk(&mut self, size: f32, coin: bool) {
+        const REACH: f32 = 30.0; // the widest any walk goes, from `walk_offset`
+        let s = self.compute_scale(size);
+        let (bw, bh) = Pet::box_size(s);
+        let m = platform::monitor_at(self.anchor.0 + bw / 2, self.anchor.1 + bh / 2, false)
+            .unwrap_or_else(platform::primary_monitor);
+        let need = (REACH * UNIT * s) as i32;
+        let room_right = self.anchor.0 + bw + need <= m.work.r;
+        let room_left = self.anchor.0 - need >= m.work.l;
+        self.walk_sign = match (room_right, room_left) {
+            (true, false) => 1.0,
+            (false, true) => -1.0,
+            _ => {
+                if coin {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+        };
+    }
+
     /// True while something is moving (the frame timer should run).
     pub fn animating(&self) -> bool {
         let now = tick_ms();
         let a = self.anim.is_some_and(|(k, t0)| now.saturating_sub(t0) < k.duration_ms());
         let b = self.bubble.as_ref().is_some_and(|b| now.saturating_sub(b.born_ms) < 160);
         a || b
+    }
+
+    /// How far the running animation has walked, in screen pixels. `walk_sign` is picked once when
+    /// the animation starts, so a journey does not change its mind about which way it is going.
+    fn walk_dx(&self, scale: f32) -> i32 {
+        let Some((kind, t0)) = self.anim else { return 0 };
+        let t = tick_ms().saturating_sub(t0) as f32 / kind.duration_ms() as f32;
+        if t >= 1.0 {
+            return 0;
+        }
+        (creature::walk_offset(kind, t) * self.walk_sign * UNIT * scale) as i32
     }
 
     pub fn finish_anim_if_done(&mut self) {
@@ -261,7 +302,11 @@ impl Pet {
         let s = self.compute_scale(v.size);
         self.scale = s;
         let (bw, bh) = Pet::box_size(s);
-        let boxr = IRect::xywh(self.anchor.0, self.anchor.1, bw, bh);
+        // A walk shifts where the window is drawn without touching `anchor`, which is the position
+        // the person dragged the pet to and the one that gets saved. Borrowed per frame, handed
+        // back when the animation ends, and never written anywhere.
+        let walk = self.walk_dx(s);
+        let boxr = IRect::xywh(self.anchor.0 + walk, self.anchor.1, bw, bh);
         let mon = platform::monitor_at(boxr.l + bw / 2, boxr.t + bh / 2, false).unwrap_or_else(platform::primary_monitor);
 
         // Bubble placement (screen space)

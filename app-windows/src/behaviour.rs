@@ -24,20 +24,32 @@ struct Idle {
     floor: Level,
     /// Worth more in the hour before bed, and skipped when the pet should be settling down.
     sleepy: bool,
+    /// Needs some energy behind it. Skipped when the companion is thirsty or flat, on the same
+    /// reasoning §28 gives for never guilt-tripping: the mood shows in what it does, not in a
+    /// message about what it is not doing.
+    perky: bool,
 }
 
 const IDLES: &[Idle] = &[
-    Idle { kind: AnimKind::LookAround, weight: 20, cooldown_s: 45, floor: 0, sleepy: false },
-    Idle { kind: AnimKind::Settle, weight: 18, cooldown_s: 50, floor: 0, sleepy: false },
-    Idle { kind: AnimKind::Yawn, weight: 6, cooldown_s: 240, floor: 0, sleepy: true },
-    Idle { kind: AnimKind::Stretch, weight: 14, cooldown_s: 90, floor: 1, sleepy: false },
-    Idle { kind: AnimKind::Wiggle, weight: 12, cooldown_s: 90, floor: 1, sleepy: false },
-    Idle { kind: AnimKind::Sniff, weight: 12, cooldown_s: 120, floor: 1, sleepy: false },
-    Idle { kind: AnimKind::Scratch, weight: 10, cooldown_s: 150, floor: 1, sleepy: false },
-    Idle { kind: AnimKind::Hop, weight: 10, cooldown_s: 120, floor: 2, sleepy: false },
-    // Genuinely rare: a weight of one against ~a hundred, and a quarter of an hour before it is
-    // even a candidate again. Something you notice three or four times a day and tell someone about.
-    Idle { kind: AnimKind::Sneeze, weight: 1, cooldown_s: 900, floor: 1, sleepy: false },
+    Idle { kind: AnimKind::LookAround, weight: 20, cooldown_s: 45, floor: 0, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Settle, weight: 18, cooldown_s: 50, floor: 0, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Yawn, weight: 6, cooldown_s: 240, floor: 0, sleepy: true, perky: false },
+    Idle { kind: AnimKind::Stretch, weight: 14, cooldown_s: 90, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Wiggle, weight: 12, cooldown_s: 90, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Sniff, weight: 12, cooldown_s: 120, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Scratch, weight: 10, cooldown_s: 150, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Hop, weight: 10, cooldown_s: 120, floor: 2, sleepy: false, perky: true },
+    Idle { kind: AnimKind::Curious, weight: 12, cooldown_s: 150, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Shake, weight: 9, cooldown_s: 200, floor: 1, sleepy: false, perky: false },
+    // The ones that leave the spot they were put in. Rarer than the rest on purpose: a companion
+    // that is forever off somewhere is one you have to look for.
+    Idle { kind: AnimKind::Wander, weight: 5, cooldown_s: 420, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Pounce, weight: 5, cooldown_s: 360, floor: 2, sleepy: false, perky: true },
+    // Genuinely rare: a weight of one or two against ~a hundred, and a quarter of an hour or more
+    // before they are candidates again. Things you notice a few times a day and mention to someone.
+    Idle { kind: AnimKind::Sneeze, weight: 1, cooldown_s: 900, floor: 1, sleepy: false, perky: false },
+    Idle { kind: AnimKind::Stumble, weight: 2, cooldown_s: 1200, floor: 2, sleepy: false, perky: true },
+    Idle { kind: AnimKind::Found, weight: 1, cooldown_s: 2700, floor: 1, sleepy: false, perky: false },
 ];
 
 /// How much of the time the pet simply sits there, as a weight against all the rest.
@@ -58,12 +70,12 @@ const DO_NOTHING_WEIGHT: u16 = 55;
 /// So sleep moves the way the waking pet does: occasionally, in short pieces, with long gaps. A
 /// breath that arrives every few minutes is also *more* noticeable than one that never stops.
 const SLEEP: &[Idle] = &[
-    Idle { kind: AnimKind::SleepBreath, weight: 24, cooldown_s: 90, floor: 0, sleepy: false },
-    Idle { kind: AnimKind::SleepTwitch, weight: 14, cooldown_s: 180, floor: 0, sleepy: false },
-    Idle { kind: AnimKind::SleepRoll, weight: 10, cooldown_s: 300, floor: 0, sleepy: false },
-    Idle { kind: AnimKind::SleepPeek, weight: 6, cooldown_s: 600, floor: 0, sleepy: false },
+    Idle { kind: AnimKind::SleepBreath, weight: 24, cooldown_s: 90, floor: 0, sleepy: false, perky: false },
+    Idle { kind: AnimKind::SleepTwitch, weight: 14, cooldown_s: 180, floor: 0, sleepy: false, perky: false },
+    Idle { kind: AnimKind::SleepRoll, weight: 10, cooldown_s: 300, floor: 0, sleepy: false, perky: false },
+    Idle { kind: AnimKind::SleepPeek, weight: 6, cooldown_s: 600, floor: 0, sleepy: false, perky: false },
     // The bad dream. Once or twice a night at most, which is the whole joke.
-    Idle { kind: AnimKind::SleepStartle, weight: 2, cooldown_s: 2400, floor: 0, sleepy: false },
+    Idle { kind: AnimKind::SleepStartle, weight: 2, cooldown_s: 2400, floor: 0, sleepy: false, perky: false },
 ];
 
 /// Sleeping is mostly lying still, more so than being awake is sitting still.
@@ -103,12 +115,13 @@ fn choose(
     now_ms: u64,
     level: Level,
     evening: bool,
+    flat: bool,
     roll: u64,
 ) -> Option<AnimKind> {
     let mut total = u32::from(nothing);
-    let mut eligible = [0u16; 16];
+    let mut eligible = [0u16; 20];
     for (i, idle) in table.iter().enumerate() {
-        if idle.floor > level || *prev == Some(i) {
+        if idle.floor > level || *prev == Some(i) || (idle.perky && flat) {
             continue;
         }
         if now_ms.saturating_sub(last[i]) < idle.cooldown_s * 1000 {
@@ -159,10 +172,10 @@ impl Idles {
     }
 
     /// Picks the next idle for a pet that is awake, or `None` for "sit there".
-    pub fn pick(&mut self, now_ms: u64, level: Level, evening: bool, roll: u64) -> Option<AnimKind> {
+    pub fn pick(&mut self, now_ms: u64, level: Level, evening: bool, flat: bool, roll: u64) -> Option<AnimKind> {
         self.start(now_ms);
         let Idles { awake_last, awake_prev, .. } = self;
-        choose(IDLES, awake_last, awake_prev, DO_NOTHING_WEIGHT, now_ms, level, evening, roll)
+        choose(IDLES, awake_last, awake_prev, DO_NOTHING_WEIGHT, now_ms, level, evening, flat, roll)
     }
 
     /// And for one curled up asleep in its burrow. Liveliness does not apply: a Calm companion
@@ -170,7 +183,7 @@ impl Idles {
     pub fn pick_asleep(&mut self, now_ms: u64, roll: u64) -> Option<AnimKind> {
         self.start(now_ms);
         let Idles { sleep_last, sleep_prev, .. } = self;
-        choose(SLEEP, sleep_last, sleep_prev, SLEEP_NOTHING_WEIGHT, now_ms, 0, false, roll)
+        choose(SLEEP, sleep_last, sleep_prev, SLEEP_NOTHING_WEIGHT, now_ms, 0, false, false, roll)
     }
 }
 
@@ -185,7 +198,7 @@ mod picking {
         // An hour of pretend time per roll, so cooldowns never mask the weights being tested.
         for r in 0..rolls {
             let now = 10_000_000 + r * 3_600_000;
-            match idles.pick(now, level, evening, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(17)) {
+            match idles.pick(now, level, evening, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(17)) {
                 None => nothing += 1,
                 Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
                     Some((_, n)) => *n += 1,
@@ -233,7 +246,7 @@ mod picking {
         let mut prev = None;
         for r in 0..2_000u64 {
             let now = 10_000_000 + r * 3_600_000;
-            let got = idles.pick(now, 2, false, r.wrapping_mul(2_862_933_555_777_941_757).rotate_left(29));
+            let got = idles.pick(now, 2, false, false, r.wrapping_mul(2_862_933_555_777_941_757).rotate_left(29));
             if let (Some(a), Some(b)) = (got, prev) {
                 assert_ne!(a, b, "{a:?} played twice running");
             }
@@ -247,12 +260,12 @@ mod picking {
         let mut idles = Idles::default();
         // The first call only starts the clock — everything is on cooldown from the moment the
         // pet launches, so that a rare animation cannot land in the first minute.
-        assert_eq!(idles.pick(10_000_000, 2, false, 7), None, "nothing is eligible on the first tick");
+        assert_eq!(idles.pick(10_000_000, 2, false, false, 7), None, "nothing is eligible on the first tick");
 
         let t = 10_000_000 + 20 * 60_000;
         let mut first = None;
         for r in 0..40u64 {
-            if let Some(k) = idles.pick(t + r, 2, false, r * 7_919 + 3) {
+            if let Some(k) = idles.pick(t + r, 2, false, false, r * 7_919 + 3) {
                 first = Some(k);
                 break;
             }
@@ -263,7 +276,7 @@ mod picking {
         // inside every cooldown in the table.
         let mut seen_again = false;
         for r in 0..200u64 {
-            if idles.pick(t + 1_000 + r, 2, false, r * 97 + 13) == Some(first) {
+            if idles.pick(t + 1_000 + r, 2, false, false, r * 97 + 13) == Some(first) {
                 seen_again = true;
             }
         }
@@ -334,7 +347,7 @@ mod sleeping {
     fn the_waking_day_does_not_eat_the_nights_cooldowns() {
         let mut idles = Idles::default();
         for r in 0..500u64 {
-            idles.pick(60_000_000 + r * 60_000, 2, false, r * 7_919 + 1);
+            idles.pick(60_000_000 + r * 60_000, 2, false, false, r * 7_919 + 1);
         }
         let mut slept = 0;
         for r in 0..60u64 {
@@ -343,5 +356,49 @@ mod sleeping {
             }
         }
         assert!(slept > 5, "only {slept} sleep behaviours in an hour of night");
+    }
+}
+
+#[cfg(test)]
+mod mood {
+    use super::*;
+
+    /// A thirsty companion has less bounce in it. It never says so — it just does the quieter
+    /// things, which is how a mood reads on anything alive.
+    #[test]
+    fn a_flat_mood_takes_the_bounce_out() {
+        let mut idles = Idles::default();
+        let mut seen = Vec::new();
+        for r in 0..3_000u64 {
+            let now = 90_000_000 + r * 3_600_000;
+            if let Some(k) = idles.pick(now, 2, false, true, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
+                if !seen.contains(&k) {
+                    seen.push(k);
+                }
+            }
+        }
+        assert!(!seen.is_empty(), "it should still do things, just quieter ones");
+        for kind in seen {
+            assert!(
+                !matches!(kind, AnimKind::Hop | AnimKind::Pounce | AnimKind::Stumble),
+                "{kind:?} is too bouncy for a flat mood"
+            );
+        }
+    }
+
+    /// And the bouncy ones do come back once it is feeling better.
+    #[test]
+    fn a_good_mood_gets_them_back() {
+        let mut idles = Idles::default();
+        let mut bouncy = 0;
+        for r in 0..3_000u64 {
+            let now = 90_000_000 + r * 3_600_000;
+            if let Some(k) = idles.pick(now, 2, false, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
+                if matches!(k, AnimKind::Hop | AnimKind::Pounce | AnimKind::Stumble) {
+                    bouncy += 1;
+                }
+            }
+        }
+        assert!(bouncy > 50, "only {bouncy} bouncy behaviours in 3000 picks");
     }
 }

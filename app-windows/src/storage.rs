@@ -273,12 +273,26 @@ mod unreadable_is_not_absent {
         use std::os::windows::fs::OpenOptionsExt;
         let (tx, rx) = std::sync::mpsc::channel();
         let h = std::thread::spawn(move || {
-            let f = std::fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&path);
+            // Keep trying until it really is held. The first version signalled whether or not the
+            // open had succeeded, so when something else had the file for a moment the test went
+            // on believing it was locked and failed for the wrong reason — rarely, and only under
+            // a full parallel run, which is the worst kind of test to own.
+            let mut held = None;
+            for _ in 0..50 {
+                match std::fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&path) {
+                    Ok(f) => {
+                        held = Some(f);
+                        break;
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            }
+            let f = held.expect("could not take an exclusive lock to test against");
             tx.send(()).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(ms));
             drop(f);
         });
-        rx.recv().unwrap(); // the lock is held before the test goes on
+        rx.recv().unwrap(); // the lock is genuinely held before the test goes on
         h
     }
 

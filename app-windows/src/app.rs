@@ -565,7 +565,10 @@ impl App {
                 Liveliness::Lively => 2,
             };
             let roll = self.rand();
-            match self.idles.pick(now, level, self.nearly_bedtime(), roll) {
+            // Thirsty is the one mood that changes what the pet feels like doing. It never says so
+            // — §28 — it just has less bounce, which is how it would read on anything alive.
+            let flat = self.expr() == Expr::Thirsty;
+            match self.idles.pick(now, level, self.nearly_bedtime(), flat, roll) {
                 Some(k) => k,
                 // It decided to sit there, which it is allowed to do.
                 None => {
@@ -577,6 +580,12 @@ impl App {
             AnimKind::Blink
         };
         if self.pet.anim.is_none() {
+            // Anything that travels gets pointed at the side with room before it sets off.
+            if crate::render::creature::walk_offset(kind, 0.5) != 0.0 {
+                let coin = self.rand() % 2 == 0;
+                let size = self.size();
+                self.pet.aim_walk(size, coin);
+            }
             if kind == AnimKind::Blink {
                 // A blink is two frames (shut, then open 110 ms later) instead of running the
                 // 30 fps animation clock — the single biggest idle-CPU saving.
