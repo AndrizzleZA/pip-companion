@@ -263,7 +263,7 @@ impl App {
         };
         self.pet.clamp_anchor(self.size());
         self.pet.visible = !self.state.pet_hidden;
-        self.night = schedule::is_quiet(&self.settings, now, &Local);
+        self.night = schedule::is_night(&self.settings, now, &Local);
         platform::allow_dark_menus(self.palette().dark);
         self.apply_topmost();
         if self.pet.visible {
@@ -379,7 +379,17 @@ impl App {
         self.locked || self.away || (self.night && tick_ms() > self.wake_until_ms)
     }
 
-    /// Within the hour before quiet hours start, which is when a yawn means something.
+    /// Whether interruptions are being held right now.
+    ///
+    /// Not the same as `self.night`, and the difference is the whole of §62: the night is when
+    /// the companion sleeps, this is when you asked not to be bothered. A sound suppressed by
+    /// the wrong one of those would either chime through a held evening or go silent for someone
+    /// who turned the holding off.
+    fn holding_interruptions(&self) -> bool {
+        schedule::is_quiet(&self.settings, now_unix(), &Local)
+    }
+
+    /// Within the hour before the night starts, which is when a yawn means something.
     fn nearly_bedtime(&self) -> bool {
         if !self.settings.quiet.enabled {
             return false;
@@ -445,7 +455,7 @@ impl App {
             name.clone()
         };
         if let Some(t) = self.state.dnd_until.filter(|&t| t > now_unix()) {
-            tip.push_str(&format!("\nDo not disturb until {}", hm(t)));
+            tip.push_str(&format!("\nReminders paused until {}", hm(t)));
         }
         // Saving being off is the most important thing Pip could be telling anyone, so it has to
         // live somewhere that outlasts a bubble. §54 ran for a week on the strength of a message
@@ -762,7 +772,7 @@ impl App {
         }
 
         // Night (quiet hours) naps.
-        let night = schedule::is_quiet(&self.settings, now, &tz);
+        let night = schedule::is_night(&self.settings, now, &tz);
         if night != self.night {
             self.night = night;
             // Digging in for the night, and climbing out again in the morning. `GetUp` replaces
@@ -966,7 +976,7 @@ impl App {
             prio,
             attempt,
             self.settings.notify.sound && sound,
-            self.night,
+            self.holding_interruptions(),
         );
         // Mid-burrow the window is still up, but it is on its way out and the bubble would be
         // thrown away with it in half a second. Hidden was asked for and is already recorded, so
@@ -1012,7 +1022,7 @@ impl App {
             prio,
             attempt,
             self.settings.notify.sound,
-            self.night,
+            self.holding_interruptions(),
         );
         if let Some(a) = act.anim {
             self.anim(a);
@@ -1278,9 +1288,9 @@ impl App {
             card.water = Some((self.water_today(), s.water.daily_goal));
         }
         if let Some(t) = self.state.dnd_until.filter(|&t| t > now) {
-            card = card.line(format!("Do not disturb until {}", hm(t)), false);
+            card = card.line(format!("Reminders paused until {}", hm(t)), false);
         } else if schedule::is_quiet(s, now, &Local) {
-            card = card.line(format!("Quiet hours until {}", s.quiet.end), false);
+            card = card.line(format!("Not disturbing you until {}", s.quiet.end), false);
         } else if s.water.enabled {
             match schedule::water_next(s, &self.state, now, &Local) {
                 Some(t) if t <= now => card = card.line("Water is due now", false),
@@ -1495,6 +1505,9 @@ impl App {
             }
             let dnd = CreatePopupMenu();
             let active = self.state.dnd_active(now_unix());
+            // "Pause reminders" rather than "Do not disturb": the scheduled window owns that name
+            // now, and two different features called the same thing is worse than a plainer word.
+            // This one is the temporary hold; that one is the nightly one (§62).
             AppendMenuW(dnd, MF_STRING, Self::ID_DND_1H as usize, w("For 1 hour").as_ptr());
             AppendMenuW(dnd, MF_STRING, Self::ID_DND_MORNING as usize, w("Until tomorrow morning").as_ptr());
             if active {
@@ -1502,8 +1515,8 @@ impl App {
                 AppendMenuW(dnd, MF_STRING, Self::ID_DND_OFF as usize, w("Turn off").as_ptr());
             }
             let dnd_label = match self.state.dnd_until.filter(|&t| t > now_unix()) {
-                Some(t) => format!("Do not disturb (until {})", hm(t)),
-                None => "Do not disturb".into(),
+                Some(t) => format!("Pause reminders (until {})", hm(t)),
+                None => "Pause reminders".into(),
             };
             AppendMenuW(m, MF_POPUP | if active { MF_CHECKED } else { 0 }, dnd as usize, w(&dnd_label).as_ptr());
             AppendMenuW(

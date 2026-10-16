@@ -2681,3 +2681,39 @@ anyone who switched quiet hours off *because* they work at night and want the co
 
 Recorded here with the per-creature voices, which the same brief asked for and which had no such
 problem, so that the work that could be done was not held up by the question that had to be asked.
+
+## 63. Do Not Disturb, and the night it no longer owns, 2026-10-16
+
+Andre picked the third option from §62. The window now means two things that can be told apart:
+**the window decides when the companion sleeps, and the switch decides whether you are
+interrupted during it.** Turn it off and the companion still digs in at ten and climbs out at
+seven; the reminders simply come through.
+
+That is one line in `schedule`: `is_night` is the window, `is_quiet` is the window *and* the
+switch, and everything that was asking one question now asks the one it meant. Sleeping, the
+burrow, the bedtime and morning animations and the sleepy mood follow `is_night`. Holding
+reminders, suppressing sounds and the attention system follow `is_quiet`. Two tests pin the
+difference, because a sound suppressed by the wrong one of those would either chime through a
+held evening or go silent for somebody who turned the holding off.
+
+**The off switch for sleeping is still there and is now the honest one:** a window whose start
+equals its end is no window, so the companion keeps ordinary hours. Somebody who works nights sets
+the window to *their* night rather than to nobody's. A test holds that too.
+
+**The name collision was resolved the other way round.** Pip already had a "Do not disturb" — the
+temporary hold in the right-click menu — and the scheduled window has the better claim to the
+words, so the menu item became **Pause reminders**. Two different features sharing one name is
+worse than one of them having a plainer one.
+
+**And a mistake worth recording, because it was mine and it was committed.** Two of these edits
+were made by reading a file into PowerShell and writing it back. `Get-Content -Raw` decodes using
+the system codepage rather than UTF-8, so every em dash and curly quote in two files came back as
+mojibake — and one of those files was committed that way. It surfaced as a test failing on a
+string containing curly quotes, which is the only reason it was caught at all; the other twenty
+occurrences were in comments, where nothing would ever have failed.
+
+The damage was exactly reversible — the bytes were UTF-8 read as cp1252 and re-encoded, so
+decoding as cp1252 and re-reading as UTF-8 restored them, verified by diff. The lesson is older
+than this project and this is the second time this session it has cost something (§38 was a BOM
+written the same way): **PowerShell is not a text editor, and round-tripping source through it
+corrupts anything that is not ASCII.** Use the editing tools, or `sed`, which does not transcode.

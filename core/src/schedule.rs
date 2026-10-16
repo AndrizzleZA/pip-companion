@@ -63,10 +63,23 @@ pub enum Delivery {
 // Quiet hours / DND
 // ---------------------------------------------------------------------------------------------
 
+/// The companion's night: the window itself, whether or not interruptions are being held.
+///
+/// Split from [`is_quiet`] so that the two things one window does can be told apart. The *window*
+/// decides when the companion sleeps; the *switch* decides whether you are interrupted during it.
+/// Before this they were the same question, and turning the switch off meant a companion that
+/// never slept at all — which is a strange thing for "do not disturb" to do (§62).
+///
+/// There is still an off switch for the sleeping, and it is the honest one: a window with the same
+/// start and end is no window, so the companion keeps ordinary hours. Somebody who works nights
+/// sets the window to their own night rather than to nobody's.
+pub fn is_night<Tz: TimeZone>(s: &Settings, now: i64, tz: &Tz) -> bool {
+    s.quiet.start != s.quiet.end && in_window(TimeOfDay::of(local(tz, now)), s.quiet.start, s.quiet.end)
+}
+
+/// Whether interruptions are being held: the night, *and* the switch being on.
 pub fn is_quiet<Tz: TimeZone>(s: &Settings, now: i64, tz: &Tz) -> bool {
-    s.quiet.enabled
-        && s.quiet.start != s.quiet.end
-        && in_window(TimeOfDay::of(local(tz, now)), s.quiet.start, s.quiet.end)
+    s.quiet.enabled && is_night(s, now, tz)
 }
 
 /// Next time the local clock reads `t` strictly after `now`.
@@ -798,5 +811,44 @@ mod tests {
         st.water.anchor = Some(at(12, 0));
         let d = due_items(&s, &st, at(13, 0), &tz());
         assert_eq!(d[0].priority, Priority::Low);
+    }
+
+    /// The night and the holding of interruptions are two things one window does, and �62 is the
+    /// whole argument for telling them apart. The companion sleeps because it is night; you are
+    /// left alone because you asked to be. Switching the asking off must not keep it awake.
+    #[test]
+    fn the_night_is_not_the_same_as_being_left_alone() {
+        let mut s = Settings::default();
+        s.quiet.start = TimeOfDay::hm(22, 0);
+        s.quiet.end = TimeOfDay::hm(7, 0);
+
+        s.quiet.enabled = true;
+        assert!(is_night(&s, on(21, 23, 0), &tz()), "it is night inside the window");
+        assert!(is_quiet(&s, on(21, 23, 0), &tz()), "and interruptions are held");
+
+        s.quiet.enabled = false;
+        assert!(is_night(&s, on(21, 23, 0), &tz()), "still night with the holding switched off");
+        assert!(!is_quiet(&s, on(21, 23, 0), &tz()), "but nothing is being held");
+
+        // Outside the window it is neither, either way.
+        for enabled in [true, false] {
+            s.quiet.enabled = enabled;
+            assert!(!is_night(&s, on(21, 12, 0), &tz()), "noon is not night");
+            assert!(!is_quiet(&s, on(21, 12, 0), &tz()), "and noon holds nothing");
+        }
+    }
+
+    /// And the off switch for the sleeping is an empty window, which has to keep working or there
+    /// is no way to have a companion that never sleeps.
+    #[test]
+    fn an_empty_window_is_no_night_at_all() {
+        let mut s = Settings::default();
+        s.quiet.enabled = true;
+        s.quiet.start = TimeOfDay::hm(22, 0);
+        s.quiet.end = TimeOfDay::hm(22, 0);
+        for h in [0, 6, 12, 22, 23] {
+            assert!(!is_night(&s, on(21, h, 0), &tz()), "{h}:00 counted as night with no window");
+            assert!(!is_quiet(&s, on(21, h, 0), &tz()), "{h}:00 held interruptions with no window");
+        }
     }
 }

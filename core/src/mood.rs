@@ -1,7 +1,7 @@
 //! How the creature feels. Deliberately simple and forgiving: the pet can get a little thirsty,
 //! but it never sulks, never dies and never guilt-trips.
 
-use crate::schedule::is_quiet;
+use crate::schedule::is_night;
 use crate::settings::Settings;
 use crate::state::State;
 use crate::time::{in_window, local, to_ts, TimeOfDay};
@@ -36,7 +36,7 @@ pub fn water_expected<Tz: TimeZone>(s: &Settings, now: i64, since: Option<i64>, 
 }
 
 pub fn mood<Tz: TimeZone>(s: &Settings, st: &State, now: i64, tz: &Tz) -> Mood {
-    if is_quiet(s, now, tz) {
+    if is_night(s, now, tz) {
         return Mood::Sleepy;
     }
     let today = local(tz, now).date();

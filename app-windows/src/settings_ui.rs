@@ -578,7 +578,7 @@ impl App {
             let msg = "No reminders yet.";
             text::draw(c.pm, &f.semibold, 15.0 * s, c.x0, c.y, c.pal.text, 1.0, msg);
             c.y += 24.0 * s;
-            for line in text::wrap(&f.regular, 13.0 * s, "Add one for stand-ups, medication, stretching, calling someone — anything with a time. Mark it important and it can gently break through quiet hours.", c.x1 - c.x0) {
+            for line in text::wrap(&f.regular, 13.0 * s, "Add one for stand-ups, medication, stretching, calling someone — anything with a time. Mark it important and it can gently break through do not disturb.", c.x1 - c.x0) {
                 text::draw(c.pm, &f.regular, 13.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
                 c.y += 19.0 * s;
             }
@@ -687,13 +687,13 @@ impl App {
         let q = &self.settings.quiet;
         let n = &self.settings.notify;
         let x1 = c.x1;
-        let cy = c.row("Quiet hours", Some("Your pet naps and holds reminders"));
+        let cy = c.row("Do not disturb", Some("Reminders wait. Your companion sleeps through it either way"));
         c.toggle(cy, q.enabled, UiAct::QuietOn);
         let cy = c.row("From", None);
         c.stepper(cy, x1, 150.0, &q.start.to_string(), UiAct::QuietStart(-30), UiAct::QuietStart(30));
         let cy = c.row("Until", None);
         c.stepper(cy, x1, 150.0, &q.end.to_string(), UiAct::QuietEnd(-30), UiAct::QuietEnd(30));
-        let cy = c.row("Important reminders", Some("Still shown during quiet hours, silently"));
+        let cy = c.row("Important reminders", Some("Still shown while you are not being disturbed, silently"));
         c.toggle(cy, q.allow_important, UiAct::QuietImportant);
         let cy = c.row("Sound", Some("Pip has a voice; this is whether you hear it"));
         c.toggle(cy, n.sound, UiAct::Sound);
