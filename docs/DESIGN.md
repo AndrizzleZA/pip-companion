@@ -2319,3 +2319,55 @@ written as though it were the only one. The fix is one line in each direction �
 not dug while it is already in a burrow, and appearing plays nothing at all, because a window that
 appears is already the whole transition. Found by watching the real window rather than by thinking
 about it, which is now three for three in this pair of sections.
+
+## 57. A creature rather than a slideshow, 2026-10-16
+
+A long brief: redesign the digging, give the companion real sleeping routines, many more idle
+behaviours, and a selection system so none of it repeats mechanically — while staying extremely
+light. Being done in stages; this section grows with them.
+
+**What the system already had, and why the digging looked thin.** Animations are pure functions of
+`(kind, t)` that tweak a resting `Pose`, the window only renders frames while one is actually
+playing, and an idle timer picks one every few minutes. That is a good shape and nothing here
+rewrites it. The digging looked thin for two unrelated reasons: it was one continuous slide with no
+beats (fixed in §56), and there was only ever *one* of it, so the second time you saw it you had
+seen it.
+
+**Three things asked for that Pip cannot honestly do, said now rather than quietly skipped.**
+
+*Hiding behind desktop icons and files.* Pip is a layered window that knows nothing about the
+desktop; finding where icons sit means reaching into another process's list view and reading its
+memory. That is fragile, it breaks on every shell change, and a pet that enumerates your desktop
+contents is a privacy story this project does not want to have to explain (§4). **Declined.**
+
+*Playing with his tail.* No character in the cast has one — they are mochi bodies with feet and a
+crown (§41). A tail is a new body part for seven creatures, not an animation. **Not now**, and it
+belongs in a character design rather than here.
+
+*Popping out somewhere else.* Possible — the window moves, and dragging already proves moving it
+per frame is cheap. But where Pip sits is a position *you* chose and it is saved; moving it and
+staying there would be the app rearranging your desktop. Worth doing only as "pops up a short way
+off, realises, comes back", which is a walking animation, and walking is its own stage.
+
+**The selection system** (`behaviour.rs`) replaces `options[rand % len]`. Each behaviour carries a
+weight, a cooldown and the quietest liveliness it is allowed at, and **doing nothing has its own
+weight** — about a third of the time, because a companion that acts every time its timer fires is
+one you watch instead of work (§7). Nothing repeats back to back. Cooldowns start at launch, so a
+rare animation cannot land in the first minute of the first run.
+
+It owns no timers and starts nothing. It answers one question when the existing idle timer asks,
+and that timer's cadence is untouched — which is the whole performance story, and the thing it
+would be easy to get wrong by reaching for frequency when the ask was variety. Six tests cover
+what is otherwise untestable about randomness: Calm never gets a lively behaviour, sitting still
+happens 20–45 % of the time, the rare one stays at least eight times rarer than a common one,
+nothing plays twice running, cooldowns hold, and a yawn is an evening thing.
+
+**Three ways down the hole**, weighted 7/2/1: the plain dig, *peek* — in, then straight back up to
+check whether anybody saw, then gone — and *stuck*, which wedges halfway, heaves and slides back
+twice, and pops through. All three end identically, gone with the hole shut, which is what lets the
+window keep hiding on "the animation finished" without knowing which one ran; a test asserts that
+for every character and every variant.
+
+The struggle needed rebuilding once. Rocking side to side was the obvious way to show being gripped
+and at this size thirteen degrees of tilt is about two pixels of lean. Losing and regaining a tenth
+of the descent moves the whole creature, and that is what reads.

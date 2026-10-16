@@ -28,7 +28,7 @@ service, and then only to Google, as you — see [What leaves your machine](#lay
 
 ### The design document is the interesting part
 
-[**docs/DESIGN.md**](docs/DESIGN.md) is 56 sections of *why*, written as the thing was built. It is
+[**docs/DESIGN.md**](docs/DESIGN.md) is 57 sections of *why*, written as the thing was built. It is
 not a feature list: it is the reasoning, including the parts that did not work.
 
 - Why Rust and a hand-drawn Win32 window instead of Electron or Tauri, with the RAM numbers that

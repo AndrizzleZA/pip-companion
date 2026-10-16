@@ -436,6 +436,10 @@ pub enum AnimKind {
     Settle,
     /// Digs a hole and climbs into it, instead of simply vanishing when hidden.
     Burrow,
+    /// The same errand, gone wrong: wedged halfway in, a struggle, then it pops through.
+    BurrowStuck,
+    /// In, then straight back up to check whether anybody saw, then gone for good.
+    BurrowPeek,
     /// Climbs back out, and the hole closes behind it.
     Unburrow,
     /// Digs in for the night and settles down in there. Ends exactly on [`nestled`], which is the
@@ -485,6 +489,8 @@ impl AnimKind {
             // there it was a closed hole. Most of the extra time is the digging, which is the part
             // that says what is happening.
             AnimKind::Burrow => 1500,
+            AnimKind::BurrowStuck => 2500,
+            AnimKind::BurrowPeek => 2700,
             AnimKind::Unburrow => 1200,
             // Bedtime can afford to be slower than hiding: nobody is waiting for it to finish.
             AnimKind::TurnIn => 2200,
@@ -696,22 +702,80 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
             // starting, not only slow enough to be seen once you are watching.
             burrow_pose(smooth(0.0, 0.22, t) * (1.0 - smooth(0.88, 1.0, t)), smooth(0.52, 0.86, t), p);
             if t < 0.40 {
-                // Digging: rocking on the spot, paws going, earth coming out.
-                let k = t / 0.40;
-                let dig = (k * 7.0 * PI).sin();
-                p.arm_l = 0.45 + 0.45 * dig;
-                p.arm_r = 0.45 - 0.45 * dig;
-                p.tilt += 7.0 * dig;
-                p.dy -= 1.6 * (k * 7.0 * PI).cos().abs();
-                p.acc = Acc::Dirt;
-                p.acc_t = k;
-                p.mouth = Mouth::O;
+                dig_beat(t / 0.40, p);
             } else if t < 0.52 {
                 // A beat of looking into it, which is what sells the next bit as deliberate.
                 p.look_y = 0.9;
                 p.eyes = Eyes::Wide;
                 p.mouth = Mouth::Smile;
                 p.tilt += 4.0;
+            }
+        }
+        AnimKind::BurrowStuck => {
+            // Wedged. Digs, drops half a creature in, sticks, fights it, pops through.
+            //
+            // The struggle is the point and it has to be *lateral*: rocking side to side reads as
+            // being gripped by something, where bouncing up and down just reads as a smaller hop.
+            let stick = 0.55;
+            let sink = if t < 0.30 {
+                0.0
+            } else if t < 0.46 {
+                stick * smooth(0.30, 0.46, t)
+            } else if t < 0.72 {
+                // Heaving upward and sliding back. Rotation alone was not enough: at this size a
+                // tilt of thirteen degrees is two pixels of lean, where losing and regaining a
+                // tenth of the descent is the whole creature moving.
+                stick - 0.13 * ((t - 0.46) * 5.0 * PI).sin().max(0.0)
+            } else {
+                stick + (1.0 - stick) * smooth(0.72, 0.88, t)
+            };
+            burrow_pose(smooth(0.0, 0.20, t) * (1.0 - smooth(0.90, 1.0, t)), sink, p);
+            if t < 0.30 {
+                dig_beat(t / 0.30, p);
+            } else if (0.46..0.72).contains(&t) {
+                let k = (t - 0.46) / 0.26;
+                p.tilt += 17.0 * (k * 5.0 * PI).sin();
+                p.sx *= 1.0 + 0.10 * (k * 5.0 * PI).cos();
+                p.sy *= 1.0 - 0.06 * (k * 5.0 * PI).cos();
+                p.arm_l = 0.95;
+                p.arm_r = 0.95;
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::O;
+                p.acc = Acc::Dirt;
+                p.acc_t = k * 0.6;
+            } else if t < 0.80 {
+                // Through, suddenly.
+                p.tilt += 9.0;
+                p.eyes = Eyes::Closed;
+                p.mouth = Mouth::Grin;
+            }
+        }
+        AnimKind::BurrowPeek => {
+            // In, out again to see whether anybody noticed, then gone.
+            let sink = if t < 0.26 {
+                0.0
+            } else if t < 0.44 {
+                smooth(0.26, 0.44, t)
+            } else if t < 0.60 {
+                1.0
+            } else if t < 0.70 {
+                1.0 - 0.52 * smooth(0.60, 0.70, t) // back up, just the head
+            } else if t < 0.84 {
+                0.48
+            } else {
+                0.48 + 0.52 * smooth(0.84, 0.94, t)
+            };
+            burrow_pose(smooth(0.0, 0.18, t) * (1.0 - smooth(0.94, 1.0, t)), sink, p);
+            if t < 0.26 {
+                dig_beat(t / 0.26, p);
+            } else if (0.68..0.86).contains(&t) {
+                // The look round. Slow, and all the way to both sides, because a glance this
+                // small is only legible if it is a long one.
+                let k = (t - 0.68) / 0.18;
+                p.look_x = (k * 2.0 * PI).sin();
+                p.tilt += 6.0 * (k * 2.0 * PI).sin();
+                p.eyes = Eyes::Wide;
+                p.mouth = Mouth::Tiny;
             }
         }
         AnimKind::Unburrow => {
@@ -787,6 +851,19 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
 /// the hole, so there is nothing beside the hole left to hide. Clipping would mean a clip parameter
 /// on [`draw`], which is the one function the phone also calls (§50), to support something the
 /// phone will never do.
+/// The scrabbling that opens a hole: paws going, rocking forward, earth coming out. Shared by all
+/// three ways of going down, so a change to what digging looks like is one edit rather than three.
+fn dig_beat(k: f32, p: &mut Pose) {
+    let d = (k * 7.0 * PI).sin();
+    p.arm_l = 0.45 + 0.45 * d;
+    p.arm_r = 0.45 - 0.45 * d;
+    p.tilt += 7.0 * d;
+    p.dy -= 1.6 * (k * 7.0 * PI).cos().abs();
+    p.acc = Acc::Dirt;
+    p.acc_t = k;
+    p.mouth = Mouth::O;
+}
+
 fn burrow_pose(open: f32, sink: f32, p: &mut Pose) {
     p.burrow = open.clamp(0.0, 1.0);
     // All the way to nothing, not to a tenth: a five per cent creature is still three pixels, and
@@ -1343,17 +1420,19 @@ mod shape_tests {
     fn no_creature_is_wider_than_the_hole_once_it_is_inside() {
         for who in Character::ALL {
             let s = shape_of(who);
-            for i in 0..=40 {
-                let t = i as f32 / 40.0;
+            for kind in DIGS {
+            for i in 0..=60 {
+                let t = i as f32 / 60.0;
                 let mut p = Pose::base(Expr::Content);
-                animate(AnimKind::Burrow, t, &mut p);
+                animate(kind, t, &mut p);
                 let top = GROUND_Y + p.dy + p.sy * (s.body.top - GROUND_Y);
                 if top < HOLE_Y - HOLE_RY * p.burrow {
                     continue; // still standing above ground, where being wide is fine
                 }
                 let half = s.body.half * p.sx;
                 let hole = HOLE_RX * p.burrow;
-                assert!(half <= hole, "{who:?} at t={t:.2} is {half:.1} wide inside a {hole:.1} hole");
+                assert!(half <= hole, "{who:?} {kind:?} at t={t:.2} is {half:.1} wide inside a {hole:.1} hole");
+            }
             }
         }
     }
@@ -1364,12 +1443,19 @@ mod shape_tests {
     #[test]
     fn the_burrow_ends_with_an_empty_window() {
         for who in Character::ALL {
-            let mut pm = Pixmap::new(140, 130).expect("a pixmap");
-            let mut p = Pose::base(Expr::Content);
-            animate(AnimKind::Burrow, 1.0, &mut p);
-            draw(&mut pm.as_mut(), &p, 0x8FD3A6, who, Transform::from_translate(20.0, 20.0));
-            let painted = pm.pixels().iter().filter(|px| px.alpha() > 0).count();
-            assert_eq!(painted, 0, "{who:?} left {painted} pixels behind after burrowing");
+            for kind in DIGS {
+                let mut pm = Pixmap::new(140, 130).expect("a pixmap");
+                let mut p = Pose::base(Expr::Content);
+                animate(kind, 1.0, &mut p);
+                draw(&mut pm.as_mut(), &p, 0x8FD3A6, who, Transform::from_translate(20.0, 20.0));
+                let painted = pm.pixels().iter().filter(|px| px.alpha() > 0).count();
+                assert_eq!(painted, 0, "{who:?} left {painted} pixels behind after {kind:?}");
+            }
         }
     }
+
+    /// Every way of going down the hole must end the same way: gone, hole shut. The window only
+    /// hides once the animation reports done, so one that ends mid-dig would leave the pet on
+    /// screen for ever — which is what §55's loop felt like from the outside.
+    const DIGS: [AnimKind; 3] = [AnimKind::Burrow, AnimKind::BurrowStuck, AnimKind::BurrowPeek];
 }

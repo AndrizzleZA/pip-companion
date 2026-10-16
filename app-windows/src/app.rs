@@ -102,6 +102,8 @@ pub struct App {
     last_mood: Option<Mood>,
     settings_dirty: bool,
     state_dirty: bool,
+    /// Picks the next idle behaviour and remembers what it has played lately.
+    idles: crate::behaviour::Idles,
     /// Digging in: the window is still up, still drawing, and hides when the hole closes.
     burrowing_out: bool,
     chime: Option<(Voice, platform::Chime)>,
@@ -204,6 +206,7 @@ impl App {
             last_mood: None,
             settings_dirty: false,
             state_dirty: false,
+            idles: crate::behaviour::Idles::default(),
             burrowing_out: false,
             chime: None,
             rng: tick_ms() ^ 0x9E37_79B9_7F4A_7C15,
@@ -370,6 +373,17 @@ impl App {
         self.locked || self.away || (self.night && tick_ms() > self.wake_until_ms)
     }
 
+    /// Within the hour before quiet hours start, which is when a yawn means something.
+    fn nearly_bedtime(&self) -> bool {
+        if !self.settings.quiet.enabled {
+            return false;
+        }
+        let now = TimeOfDay::of(local(&Local, now_unix()));
+        let mins = |t: TimeOfDay| t.hour() as i32 * 60 + t.minute() as i32;
+        // Modular, because an hour before 00:30 is 23:30 the day before.
+        (mins(self.settings.quiet.start) - mins(now)).rem_euclid(24 * 60) <= 60
+    }
+
     /// Curled up in the burrow for the night.
     ///
     /// Quiet hours only — not "you walked away" and not a locked screen. Those are both states Pip
@@ -521,33 +535,22 @@ impl App {
         let kind = if due_micro && self.pet.bubble.is_none() {
             self.last_micro_ms = now;
             // Variety is the cheap half of liveliness. How *often* an idle animation plays is what
-            // costs CPU, and that is the timer above, unchanged; how many different ones there are
-            // to choose from costs a match arm that runs only while one is playing. So the pools
-            // grew and the cadence did not.
-            let options: &[AnimKind] = match self.settings.pet.liveliness {
-                Liveliness::Calm => &[AnimKind::LookAround, AnimKind::Settle, AnimKind::Yawn],
-                Liveliness::Normal => &[
-                    AnimKind::LookAround,
-                    AnimKind::Stretch,
-                    AnimKind::Wiggle,
-                    AnimKind::Settle,
-                    AnimKind::Sniff,
-                    AnimKind::Yawn,
-                    AnimKind::Scratch,
-                ],
-                Liveliness::Lively => &[
-                    AnimKind::LookAround,
-                    AnimKind::Stretch,
-                    AnimKind::Wiggle,
-                    AnimKind::Hop,
-                    AnimKind::Settle,
-                    AnimKind::Sniff,
-                    AnimKind::Scratch,
-                    AnimKind::Sneeze,
-                    AnimKind::Yawn,
-                ],
+            // costs CPU, and that is the timer above, unchanged; which one it is costs a match arm
+            // that runs only while one is already playing. The choosing lives in `behaviour`.
+            let level = match self.settings.pet.liveliness {
+                Liveliness::Calm => 0,
+                Liveliness::Normal => 1,
+                Liveliness::Lively => 2,
             };
-            options[(self.rand() % options.len() as u64) as usize]
+            let roll = self.rand();
+            match self.idles.pick(now, level, self.nearly_bedtime(), roll) {
+                Some(k) => k,
+                // It decided to sit there, which it is allowed to do.
+                None => {
+                    self.arm_idle();
+                    return;
+                }
+            }
         } else {
             AnimKind::Blink
         };
@@ -1423,7 +1426,15 @@ impl App {
             self.burrowing_out = true;
             self.pet.bubble = None;
             self.pet.press = None;
-            self.pet.start_anim(AnimKind::Burrow);
+            // Three ways down, weighted so the plain one is usual and the other two are a small
+            // surprise. They all end the same way — gone, hole shut — which is what lets the
+            // window hide on "the animation finished" without caring which one ran.
+            let dig = match self.rand() % 10 {
+                0..=6 => AnimKind::Burrow,
+                7 | 8 => AnimKind::BurrowPeek,
+                _ => AnimKind::BurrowStuck,
+            };
+            self.pet.start_anim(dig);
             self.render();
             return;
         }
