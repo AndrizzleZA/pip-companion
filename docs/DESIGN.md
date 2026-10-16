@@ -1105,9 +1105,10 @@ and a Gmail account connected — and read back from the screenshots.
 overwritten by the next build, and a `.pdb` only matches the exact binary it was built with, so
 every build handed to anyone was already unreadable by the time the next `cargo build` finished.
 
-Archiving alone would not have fixed it, because nothing identified a build. The version has been
-0.1.0 since the first commit and will be for a while yet, so every crash report named the same
-thing and a shelf of symbol files would have had nothing to key them by. So builds are now stamped:
+Archiving alone would not have fixed it, because nothing identified a build. The version was 0.1.0
+from the first commit until 0.2.0 on 2026-10-16, so every crash report named the same thing and a
+shelf of symbol files would have had nothing to key them by — and a version number that moves twice
+a year would not have helped either, which is the point: the stamp is the commit, not the version. So builds are now stamped:
 `build.rs` resolves the commit, bakes it in as `PIP_BUILD`, and it appears on the first line of
 every crash report and in the startup line of the log. `tools/archive-symbols.ps1` builds release
 with that stamp and copies the executable, its symbols and a manifest — commit, subject, date, size

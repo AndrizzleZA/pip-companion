@@ -500,7 +500,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pip"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "pip-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2",
  "chacha20poly1305",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "pip-draw"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pip-core",
  "tiny-skia",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "pip-jni"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "jni",
