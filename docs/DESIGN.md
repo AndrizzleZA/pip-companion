@@ -194,9 +194,11 @@ The gate between "it works on my machine" and "I can hand this to a person who i
   control, a visible focus ring and scroll-to-follow, all without a mouse. The screen reader is
   **not** done and is its own milestone, argued in §45: a custom-drawn window is one `HWND` with
   nothing inside it, and a provider that reports an empty window is worse than silence.
-- Final polish: more animations — **done for now (§55, §56)**. The burrow (Pip digs a hole and
-  climbs into it instead of vanishing), a burrow it sleeps in through quiet hours, and five more
-  idle animations: yawn, sniff, scratch, sneeze, settle. *Personality presets dropped (§46).*
+- Final polish: more animations — **done (§55, §56, §57)**. Three ways to dig, three ways to bed
+  and five things it does while asleep, a dozen more idle behaviours including three that walk,
+  and a chooser with weights, cooldowns and a real chance of sitting still. The count is left out
+  on purpose: §51 is about numbers restated in four places, and the sections themselves are the
+  list. *Personality presets dropped (§46).*
 - **Saving stopped at every logon — found and fixed (§54).** A file held for a moment while Windows
   logged in tripped the §39 "cannot read my own files" valve, which then refused to save for that
   entire session, for a week, in silence. The read is now retried, a log line that cannot be written
@@ -2456,3 +2458,29 @@ putting cooldowns on everything means the companion moves *less often* than it d
 list picked something every time its timer fired. Twenty-two more things it can do, a third of the
 CPU, and it is the cooldowns rather than the drawing that did it — which is worth remembering the
 next time the obvious way to make something feel more alive is to make it move more.
+
+## 58. Pictures that cannot drift, 2026-10-16
+
+The repository has been public for four days and contained no picture of the creature. A desktop pet
+described only in prose, behind an unsigned download: there is no version of that which a stranger
+installs.
+
+They are **generated, not captured** — `cargo run -p pip-draw --example shots --features png-format`
+writes every image in the README out of the same `creature::draw` the desktop and the phone call.
+That is the whole reason to trust them. A screenshot is a claim about what the program looks like,
+and this document has had to correct four claims-kept-by-hand in a fortnight (§51, §53, §54, §57).
+A generated one cannot be wrong without the program being wrong, which is the only kind of wrong
+worth having. It also means the next character, or a change to how anything is drawn, updates the
+pictures by being run rather than by being remembered.
+
+Four of them: the whole cast in seven colours, one companion at its three stages of growing up, the
+dig from first scratch to closed hole, and one asleep in its burrow. 120 KB in total, which is the
+budget a repository this size can afford without thinking about it.
+
+The crop is found rather than fixed. Each creature stands on the bottom of its window and the space
+above belongs to whatever crown it has — a sprout, long ears, a mushroom cap — so a fixed margin is
+wrong for every character but one. The tool finds the drawn pixels and trims to them, which also
+means it will be right for a creature nobody has drawn yet.
+
+The example declares `required-features = ["png-format"]`, because a plain `cargo test` builds every
+example and must not need a PNG encoder to compile a tool whose entire purpose is writing PNGs.

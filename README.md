@@ -5,6 +5,11 @@ things humans forget: water, stand-ups, vitamins, calling someone back. It is bu
 noticeable as software — one process, a few megabytes of memory, and nothing happening at all
 when nothing needs to happen.**
 
+![The seven companions: Sprout, Bunny, Toadstool, Tuft, Pebble, Bloom and Moth](docs/cast.png)
+
+*Seven companions, seven colours. Every one of them is drawn by code — there are no image files in
+this program, which is why it is two megabytes and crisp on any screen.*
+
 Measured on the machine it was written on. The right-hand column is the one that matters: the
 installed build, mail, calendar and phone sync all connected, twelve hours into a working day.
 
@@ -28,7 +33,7 @@ service, and then only to Google, as you — see [What leaves your machine](#lay
 
 ### The design document is the interesting part
 
-[**docs/DESIGN.md**](docs/DESIGN.md) is 57 sections of *why*, written as the thing was built. It is
+[**docs/DESIGN.md**](docs/DESIGN.md) is 58 sections of *why*, written as the thing was built. It is
 not a feature list: it is the reasoning, including the parts that did not work.
 
 - Why Rust and a hand-drawn Win32 window instead of Electron or Tauri, with the RAM numbers that
@@ -68,7 +73,8 @@ file; it is what Windows says about anything it has not seen signed before.
 - **Hover** to see the time. **Click** for today's card (time, date, water, next reminder).
 - **Double-click** to log a glass of water.
 - **Right-click** (pet or tray icon) for: log water / undo, Do not disturb, Always on top, Settings, Quit.
-- **Tray icon** click shows/hides the pet. When hidden, reminders arrive as Windows notifications.
+- **Tray icon** click shows/hides the pet. When hidden, reminders arrive as Windows notifications —
+  and the pet digs itself a hole and climbs in rather than simply vanishing.
 - Reminders appear as a speech bubble: **Done / Snooze / Dismiss**. Ignored bubbles fold into a
   small badge on the pet after a few minutes; click the pet to bring it back.
 
@@ -83,10 +89,27 @@ stage at 15 good days and is fully grown at 45. The count never goes down, a qui
 mentioned, and time away costs nothing: a fortnight with the computer off leaves it exactly where
 it was. There is no streak to break here.
 
+![One companion at three stages: newly arrived, half grown, fully grown](docs/growing-up.png)
+
+*Newly arrived, growing up, grown. Size is the least of it — the eyes shrink relative to the face
+and the sprout comes in, because "drawn slightly smaller" is not something anybody reads as young.*
+
 **Three more arrive.** **Pebble**, **Bloom** and **Moth** turn up at 7, 21 and 45 good days. They
 are gifts rather than unlocks: nothing counts down to them, nothing is shown greyed out, and the
 only thing that happens is that one day your companion mentions a visitor. If you never look at the
 settings, nothing nags you about it.
+
+**It has a life of its own.** Left alone it looks around, stretches, scratches, sniffs at something,
+occasionally sneezes, wanders a little way off and thinks better of it, or trips over nothing and
+picks itself up — and it sits perfectly still about a third of the time, which matters more than
+any of the rest. Hiding it is a dig rather than a disappearance:
+
+![Pip digging a hole, looking into it, and climbing in](docs/burrow.png)
+
+During quiet hours it sleeps in that burrow instead of beside it, breathing, turning over, and once
+in a while having a bad dream it recovers from — then stretches and climbs out in the morning.
+
+<img src="docs/night.png" alt="A companion curled up asleep in its burrow" width="112">
 
 **Keyboard.** The settings window works without a mouse: **Tab** and **Shift+Tab** move through
 everything including the page list, **Enter** or **Space** activates, **←/→** move within a row of
@@ -129,7 +152,16 @@ Requires Rust (stable) and the MSVC build tools.
 cargo test -p pip-core              # core logic tests
 cargo build --release               # target/release/pip.exe (~2.1 MB, no dependencies)
 cargo build --features devtools     # dev build with the automation/snapshot command channel
+
+# Regenerates every picture in this file from the drawing code itself
+cargo run -p pip-draw --example shots --features png-format
 ```
+
+The pictures above are generated rather than captured, which is the only reason to trust them: a
+screenshot is a claim about what the program looks like, and a claim kept by hand is one this
+project has had to correct four times in a fortnight (§51). These come out of the same
+`creature::draw` the desktop and the phone call, so a picture that is wrong means the program is
+wrong.
 
 Run tools against a throw-away profile by setting `PIP_DATA_DIR`; the app then never touches your
 real settings or the Windows startup entry.

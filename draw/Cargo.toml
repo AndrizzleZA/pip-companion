@@ -12,3 +12,9 @@ tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "
 [features]
 # Lets a caller save what was drawn, for the desktop's snapshot command.
 png-format = ["tiny-skia/png-format"]
+
+# Only builds when asked: a plain `cargo test` must not need the PNG encoder to compile an example
+# that exists to write PNGs.
+[[example]]
+name = "shots"
+required-features = ["png-format"]
