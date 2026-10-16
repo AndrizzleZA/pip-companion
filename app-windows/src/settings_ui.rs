@@ -1157,7 +1157,21 @@ impl App {
                 st.appearance_updated_at = platform::now_unix();
                 // Choosing a voice plays it, whether or not reminder sounds are on: the tap is
                 // the request, and a silent answer would look broken.
-                platform::Chime::new(v).play();
+                //
+                // A different phrase each tap, because the plain chime is now one of five things
+                // this voice can say (§59) and a preview that only ever plays one of them is a
+                // preview of the wrong thing. Tapping the same voice twice is meant to sound
+                // slightly different; that is the point being demonstrated.
+                const SAMPLER: [platform::Phrase; 5] = [
+                    platform::Phrase::Plain,
+                    platform::Phrase::Rising,
+                    platform::Phrase::Trill,
+                    platform::Phrase::Knock,
+                    platform::Phrase::Falling,
+                ];
+                let n = platform::now_unix().unsigned_abs() as usize;
+                let seed = n.wrapping_mul(6_364_136_223_846_793_005) as u64;
+                platform::Chime::say(v, SAMPLER[n % SAMPLER.len()], 1.0, seed).play();
             }
             UiAct::Color(c) => {
                 st.pet.color = c;
@@ -2253,22 +2267,38 @@ mod attention_row_fits {
     /// Four words on one row is the widest control on the Pet page, and it was chosen over eight
     /// separate toggles. If it does not fit it has to become something else, so this is the test
     /// that would say so rather than a screenshot somebody notices later.
+    ///
+    /// The voice row is checked with it: a hint that grows is the usual way one of these stops
+    /// fitting, and the longer wording I first tried for the preview failed this immediately.
     #[test]
-    fn the_attention_choices_fit_beside_their_own_label() {
+    fn the_choices_fit_beside_their_own_labels() {
         let f = fonts();
+        let rows: [(&str, &str, Vec<&str>); 2] = [
+            (
+                "Getting your attention",
+                "How hard it tries when a reminder is due",
+                Attention::ALL.iter().map(|a| a.label()).collect(),
+            ),
+            (
+                "Voice",
+                "Played with reminders; tap one to hear it",
+                Voice::ALL.iter().map(|v| v.label()).collect(),
+            ),
+        ];
         for s in [1.0f32, 1.25, 1.5] {
             let x0 = (SIDEBAR_W + 36.0) * s;
             let x1 = LOGICAL_W as f32 * s - 36.0 * s;
-            let label = text::width(&f.semibold, 13.0 * s, "Getting your attention");
-            let hint = text::width(&f.regular, 12.0 * s, "How hard it tries when a reminder is due");
-            let labels: Vec<&str> = Attention::ALL.iter().map(|a| a.label()).collect();
-            let w = ui::segmented_width(&labels, s);
-            let left = x0 + label.max(hint) + 12.0 * s;
-            assert!(
-                x1 - w >= left,
-                "at {s}x the attention row is {:.0}px too wide and would run back over its own label",
-                left - (x1 - w)
-            );
+            for (label, hint, labels) in &rows {
+                let lw = text::width(&f.semibold, 13.0 * s, label);
+                let hw = text::width(&f.regular, 12.0 * s, hint);
+                let w = ui::segmented_width(labels, s);
+                let left = x0 + lw.max(hw) + 12.0 * s;
+                assert!(
+                    x1 - w >= left,
+                    "at {s}x the {label:?} row is {:.0}px too wide and would run back over its own text",
+                    left - (x1 - w)
+                );
+            }
         }
     }
 }
