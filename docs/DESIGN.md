@@ -2745,3 +2745,87 @@ spread rather than at either end. §54's "idle CPU has drifted past its target" 
 was wrong in the way single samples are usually wrong: it was one draw from a distribution, read as
 a trend. The number to trust is the order of magnitude — **under a second an hour, and nearer half
 of one** — not any one reading's decimal.
+
+## 64. Seven creatures that behave like seven creatures, 2026-10-17
+
+The brief's third part: *"more creative behaviours and animations per creature"*. Seven companions
+that all moved identically was the last place where choosing one was purely a change of hat.
+
+**The obvious implementation is the one that would have broken §24.** Seven private animation sets
+means seven times the drawing, seven times the floor and window tests, and six chances to add one
+to the desktop and forget the phone — which is exactly how "the desktop and phone must not end up
+with two versions of the creature" stops being true. It would also have been the first change in
+this project to make a character cost something at runtime rather than a few lines of drawing.
+
+**So personality is odds, not vocabulary.** Every creature keeps the same ~38 animations and
+differs in how often it reaches for each one, through one function: `taste(who, kind)` returns a
+multiplier in tenths, 10 being the common temperament, and the chooser multiplies the weight it
+already had. That is one table lookup inside a decision that only happens when an idle is already
+due — nothing on any clock, nothing new running, nothing drawn twice.
+
+It is also closer to how two animals actually differ. A rabbit and a tortoise both sit, both look
+around, both turn over in their sleep; what tells them apart is the proportion. Watching is the
+only way Pip communicates anything (§7, §28), so the proportion is the whole character:
+
+| | does much more of | hardly ever |
+|---|---|---|
+| **Sprout** | — the baseline, unchanged | — |
+| **Bunny** | hopping, pouncing, wiggling | settling down |
+| **Toadstool** | settling, watching, curiosity | hopping, pouncing, wandering off |
+| **Tuft** | shaking out its coat, scratching, sneezing | hopping |
+| **Pebble** | settling, watching, yawning | **never** hops, pounces or stumbles |
+| **Bloom** | stretching open, sneezing, wiggling | pouncing, wandering |
+| **Moth** | wandering, hopping, curiosity, sniffing | settling down |
+
+**Sprout does not move, and a test says so.** It is the creature the drawing was tuned on and the
+one in every screenshot; a Sprout that changed the day the others got personalities would be a
+regression wearing a feature's clothes. `taste(Sprout, _)` is 10 for every entry in both tables,
+asserted rather than assumed.
+
+**Pebble's three zeroes are a real never, not a long cooldown.** A creature shaped like a stone
+that pounces reads as a bug rather than as a surprise. A zero drops out of the eligible set
+entirely, which is a different thing from a weight of one.
+
+**The floors are untouched, and that is the important boundary.** A taste of 30 cannot drag a
+Lively-only behaviour down to a Calm companion: character changes the odds, never the setting.
+Somebody who asked for calm asked for calm whichever creature they picked, and a test holds that
+for all seven. Two more hold that no taste table can leave a creature with nothing to do, and that
+every creature still has at least eight different things it does and still sits still between a
+sixth and a half of the time — personality must not read as "broken".
+
+**Sleep got the same treatment**, because how an animal sleeps is as much itself as how it moves.
+A Pebble sleeps like a stone; a Moth twitches, rolls and peeks all night. Both still breathe: a
+sleeping companion that never moved at all would look switched off rather than asleep.
+
+And the companion behaves as whatever it is *drawn* as. A settings file naming a character that has
+not arrived yet shows Sprout (§31) and now acts like Sprout too, rather than borrowing a
+temperament nobody can see. Eight new tests, 182 in total.
+
+## 65. The hundred and twenty kilobytes, found at last, 2026-10-17
+
+An open question since the v0.2.0 release: a `cargo build --release` and `archive-symbols.ps1`'s
+build of the *same commit* produced executables 122 KB apart. The standing hypothesis was two Rust
+toolchains — a different `rustc` on the PATH of one shell than the other.
+
+**That is not it.** Both shells are `rustc 1.98.1 (48a229cea)` from the same
+`C:\Users\kruse\.cargo\bin`, with the same `.cargo/config.toml`, the same `+crt-static`, no
+`CARGO_INCREMENTAL` and no `RUSTFLAGS` anywhere.
+
+What actually happened, reproduced twice on one machine in one afternoon: **two builds of commit
+`ce491c839b`, same toolchain, same environment, same `PIP_BUILD` stamp, produced 2,084,352 bytes
+and 2,206,208 bytes.** Different SHA-256, 121,856 bytes apart. The release build is not
+byte-reproducible, and the cause is still unknown — it is not the toolchain, the config, the
+feature set or the build stamp, and `lto = "fat"` with `codegen-units = 1` is supposed to be
+deterministic.
+
+**The consequence is nil, and that is only because the archive was already designed for it.**
+`archive-symbols.ps1` copies the executable *and* its `.pdb` into the same folder and records the
+exe's SHA-256 in the manifest. A `.pdb` only matches the exact binary it was built with, so an
+archive holding the pdb alone would have been quietly worthless — there would have been no way to
+tell which of the two builds it belonged to. Keeping the pair together makes the question academic:
+whatever a crash report names, the matching pair is in the folder.
+
+**What it does mean is that a build and an install are one step, not two.** The binary running on
+a machine has archived symbols only if that machine was given the archived build. Rebuilding the
+"same" commit to install it afterwards is not the same commit's binary in any way a debugger cares
+about.

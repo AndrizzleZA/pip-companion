@@ -11,6 +11,7 @@
 //! (§56).
 
 use crate::render::creature::AnimKind;
+use pip_core::settings::Character;
 
 /// The quietest setting a behaviour is allowed at: 0 everywhere, 1 Normal and up, 2 Lively only.
 type Level = u8;
@@ -81,6 +82,131 @@ const SLEEP: &[Idle] = &[
 /// Sleeping is mostly lying still, more so than being awake is sitting still.
 const SLEEP_NOTHING_WEIGHT: u16 = 40;
 
+/// How much more or less likely *this* creature is to do that, in tenths: 10 is the common
+/// temperament, 30 is three times as likely, 0 is never.
+///
+/// **Personality here is odds, not new drawings**, and that is the whole design. §24 says the
+/// desktop and the phone must never end up with two versions of the creature, and seven creatures
+/// with seven private animation sets is exactly how that rule dies — seven times the drawing, seven
+/// times the floor tests, and six chances to forget one of them. So every creature keeps the same
+/// vocabulary and differs in how often it reaches for each word, which is most of what tells two
+/// animals apart when you watch them anyway: a rabbit and a tortoise both sit, hop and look round.
+///
+/// It costs one table lookup inside a choice that only happens when an idle is already due, which
+/// is to say nothing measurable (§63 measured the idle loop at half a second an hour and this adds
+/// a multiply to it).
+///
+/// The floors are deliberately *not* touched: a taste of 30 cannot drag a Lively-only behaviour
+/// down to a Calm companion, because somebody who asked for calm asked for calm and no amount of
+/// character gets to overrule it.
+fn taste(who: Character, kind: AnimKind) -> u16 {
+    use AnimKind as A;
+    match who {
+        // The baseline every other temperament is measured against, and it does not move. Sprout
+        // is the creature this project's drawing was tuned on and the one every screenshot shows;
+        // a Sprout that changed the day characters got personalities would be a regression wearing
+        // a feature's clothes.
+        Character::Sprout => 10,
+
+        // All spring. The one creature where hopping is the first idea rather than the last.
+        Character::Bunny => match kind {
+            A::Hop => 30,
+            A::Pounce => 20,
+            A::Wiggle => 16,
+            A::Wander => 15,
+            A::Sniff => 13,
+            A::Settle => 7,
+            A::SleepTwitch => 15,
+            A::SleepPeek => 14,
+            _ => 10,
+        },
+
+        // A toadstool. Things rooted to the spot watch, and they are the better watchers for it.
+        Character::Kit => match kind {
+            A::Settle => 18,
+            A::Curious => 15,
+            A::LookAround => 14,
+            A::Sniff => 13,
+            A::Stretch => 8,
+            A::Wander => 5,
+            A::Hop => 4,
+            A::Pounce => 3,
+            A::SleepPeek => 13,
+            _ => 10,
+        },
+
+        // Shaggy, so it is forever dealing with its own coat.
+        Character::Tuft => match kind {
+            A::Shake => 30,
+            A::Scratch => 25,
+            A::Sneeze => 18,
+            A::Stretch => 14,
+            A::Sniff => 12,
+            A::Hop => 8,
+            A::SleepRoll => 15,
+            A::SleepTwitch => 13,
+            _ => 10,
+        },
+
+        // Broad, low and bald: the outline is the whole character, so the outline mostly stays
+        // where it is. The three it never does are not rarity, they are a flat zero — a creature
+        // shaped like a stone that pounces reads as a bug, not as a surprise.
+        Character::Pebble => match kind {
+            A::Hop | A::Pounce | A::Stumble => 0,
+            A::Settle => 22,
+            A::LookAround => 15,
+            A::Yawn => 15,
+            A::Wiggle => 4,
+            A::Wander => 3,
+            A::Shake => 5,
+            A::Scratch => 6,
+            A::Stretch => 6,
+            A::Sniff => 8,
+            A::SleepBreath => 13,
+            A::SleepTwitch => 4,
+            A::SleepRoll => 3,
+            A::SleepStartle => 3,
+            A::SleepPeek => 5,
+            _ => 10,
+        },
+
+        // A ring of petals. It opens, it closes, and the pollen is its own problem.
+        Character::Bloom => match kind {
+            A::Stretch => 25,
+            A::Sneeze => 20,
+            A::Wiggle => 18,
+            A::Settle => 13,
+            A::Shake => 12,
+            A::Hop => 6,
+            A::Scratch => 5,
+            A::Wander => 4,
+            A::Pounce => 4,
+            A::SleepBreath => 14,
+            _ => 10,
+        },
+
+        // The smallest, and the only one with antennae to lead it off somewhere. Flighty in both
+        // senses: it goes, and it startles.
+        Character::Moth => match kind {
+            A::Wander => 25,
+            A::Hop => 22,
+            A::Curious => 20,
+            A::Sniff => 18,
+            A::Stumble => 15,
+            A::Found => 15,
+            A::Pounce => 12,
+            A::Scratch => 12,
+            A::Stretch => 8,
+            A::Settle => 5,
+            A::SleepTwitch => 20,
+            A::SleepStartle => 18,
+            A::SleepRoll => 15,
+            A::SleepPeek => 15,
+            _ => 10,
+        },
+    }
+}
+
 pub struct Idles {
     /// When each behaviour last played, parallel to [`IDLES`] and [`SLEEP`].
     awake_last: [u64; IDLES.len()],
@@ -113,13 +239,14 @@ fn choose(
     prev: &mut Option<usize>,
     nothing: u16,
     now_ms: u64,
+    who: Character,
     level: Level,
     evening: bool,
     flat: bool,
     roll: u64,
 ) -> Option<AnimKind> {
     let mut total = u32::from(nothing);
-    let mut eligible = [0u16; 20];
+    let mut eligible = [0u32; 20];
     for (i, idle) in table.iter().enumerate() {
         if idle.floor > level || *prev == Some(i) || (idle.perky && flat) {
             continue;
@@ -137,13 +264,19 @@ fn choose(
         } else {
             idle.weight
         };
+        // And then what this particular creature thinks of it. A taste of zero is a real "never",
+        // not a long cooldown, so it drops out here rather than being picked rarely.
+        let w = u32::from(w) * u32::from(taste(who, idle.kind)) / 10;
+        if w == 0 {
+            continue;
+        }
         eligible[i] = w;
-        total += u32::from(w);
+        total += w;
     }
 
     let mut target = (roll % u64::from(total)) as u32;
     for (i, w) in eligible.iter().take(table.len()).enumerate() {
-        let w = u32::from(*w);
+        let w = *w;
         if w == 0 {
             continue;
         }
@@ -172,18 +305,27 @@ impl Idles {
     }
 
     /// Picks the next idle for a pet that is awake, or `None` for "sit there".
-    pub fn pick(&mut self, now_ms: u64, level: Level, evening: bool, flat: bool, roll: u64) -> Option<AnimKind> {
+    pub fn pick(
+        &mut self,
+        now_ms: u64,
+        who: Character,
+        level: Level,
+        evening: bool,
+        flat: bool,
+        roll: u64,
+    ) -> Option<AnimKind> {
         self.start(now_ms);
         let Idles { awake_last, awake_prev, .. } = self;
-        choose(IDLES, awake_last, awake_prev, DO_NOTHING_WEIGHT, now_ms, level, evening, flat, roll)
+        choose(IDLES, awake_last, awake_prev, DO_NOTHING_WEIGHT, now_ms, who, level, evening, flat, roll)
     }
 
     /// And for one curled up asleep in its burrow. Liveliness does not apply: a Calm companion
-    /// still breathes, and a Lively one does not have livelier dreams.
-    pub fn pick_asleep(&mut self, now_ms: u64, roll: u64) -> Option<AnimKind> {
+    /// still breathes, and a Lively one does not have livelier dreams. The creature does apply —
+    /// how an animal sleeps is as much itself as how it moves.
+    pub fn pick_asleep(&mut self, now_ms: u64, who: Character, roll: u64) -> Option<AnimKind> {
         self.start(now_ms);
         let Idles { sleep_last, sleep_prev, .. } = self;
-        choose(SLEEP, sleep_last, sleep_prev, SLEEP_NOTHING_WEIGHT, now_ms, 0, false, false, roll)
+        choose(SLEEP, sleep_last, sleep_prev, SLEEP_NOTHING_WEIGHT, now_ms, who, 0, false, false, roll)
     }
 }
 
@@ -191,14 +333,14 @@ impl Idles {
 mod picking {
     use super::*;
 
-    fn counts(level: Level, evening: bool, rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
+    fn counts(who: Character, level: Level, evening: bool, rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
         let mut idles = Idles::default();
         let mut nothing = 0;
         let mut seen: Vec<(AnimKind, usize)> = Vec::new();
         // An hour of pretend time per roll, so cooldowns never mask the weights being tested.
         for r in 0..rolls {
             let now = 10_000_000 + r * 3_600_000;
-            match idles.pick(now, level, evening, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(17)) {
+            match idles.pick(now, who, level, evening, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(17)) {
                 None => nothing += 1,
                 Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
                     Some((_, n)) => *n += 1,
@@ -212,7 +354,7 @@ mod picking {
     /// Calm means calm: nothing above the quietest tier is ever a candidate.
     #[test]
     fn calm_only_ever_gets_the_quiet_ones() {
-        let (_, seen) = counts(0, false, 3_000);
+        let (_, seen) = counts(Character::Sprout, 0, false, 3_000);
         for (kind, _) in seen {
             assert!(
                 matches!(kind, AnimKind::LookAround | AnimKind::Settle | AnimKind::Yawn),
@@ -224,7 +366,7 @@ mod picking {
     /// Sitting still has to be a common outcome, not a rounding error.
     #[test]
     fn the_pet_often_does_nothing_at_all() {
-        let (nothing, _) = counts(2, false, 3_000);
+        let (nothing, _) = counts(Character::Sprout, 2, false, 3_000);
         let share = nothing as f32 / 3_000.0;
         assert!((0.2..0.45).contains(&share), "doing nothing happened {:.0}% of the time", share * 100.0);
     }
@@ -232,7 +374,7 @@ mod picking {
     /// A rare animation has to actually be rare, which is the half of "rare" that gets forgotten.
     #[test]
     fn the_rare_one_stays_rare() {
-        let (_, seen) = counts(2, false, 3_000);
+        let (_, seen) = counts(Character::Sprout, 2, false, 3_000);
         let sneezes = seen.iter().find(|(k, _)| *k == AnimKind::Sneeze).map_or(0, |(_, n)| *n);
         let common = seen.iter().find(|(k, _)| *k == AnimKind::LookAround).map_or(0, |(_, n)| *n);
         assert!(sneezes > 0, "it should still happen sometimes");
@@ -246,7 +388,7 @@ mod picking {
         let mut prev = None;
         for r in 0..2_000u64 {
             let now = 10_000_000 + r * 3_600_000;
-            let got = idles.pick(now, 2, false, false, r.wrapping_mul(2_862_933_555_777_941_757).rotate_left(29));
+            let got = idles.pick(now, Character::Sprout, 2, false, false, r.wrapping_mul(2_862_933_555_777_941_757).rotate_left(29));
             if let (Some(a), Some(b)) = (got, prev) {
                 assert_ne!(a, b, "{a:?} played twice running");
             }
@@ -260,12 +402,12 @@ mod picking {
         let mut idles = Idles::default();
         // The first call only starts the clock — everything is on cooldown from the moment the
         // pet launches, so that a rare animation cannot land in the first minute.
-        assert_eq!(idles.pick(10_000_000, 2, false, false, 7), None, "nothing is eligible on the first tick");
+        assert_eq!(idles.pick(10_000_000, Character::Sprout, 2, false, false, 7), None, "nothing is eligible on the first tick");
 
         let t = 10_000_000 + 20 * 60_000;
         let mut first = None;
         for r in 0..40u64 {
-            if let Some(k) = idles.pick(t + r, 2, false, false, r * 7_919 + 3) {
+            if let Some(k) = idles.pick(t + r, Character::Sprout, 2, false, false, r * 7_919 + 3) {
                 first = Some(k);
                 break;
             }
@@ -276,7 +418,7 @@ mod picking {
         // inside every cooldown in the table.
         let mut seen_again = false;
         for r in 0..200u64 {
-            if idles.pick(t + 1_000 + r, 2, false, false, r * 97 + 13) == Some(first) {
+            if idles.pick(t + 1_000 + r, Character::Sprout, 2, false, false, r * 97 + 13) == Some(first) {
                 seen_again = true;
             }
         }
@@ -286,8 +428,8 @@ mod picking {
     /// A yawn belongs to the evening, and should hardly ever turn up at other times.
     #[test]
     fn yawning_belongs_to_the_end_of_the_day() {
-        let day = counts(1, false, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
-        let eve = counts(1, true, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
+        let day = counts(Character::Sprout, 1, false, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
+        let eve = counts(Character::Sprout, 1, true, 3_000).1.iter().find(|(k, _)| *k == AnimKind::Yawn).map_or(0, |(_, n)| *n);
         assert!(eve > day * 4, "{eve} yawns in the evening against {day} in the day is not a difference");
     }
 }
@@ -296,14 +438,14 @@ mod picking {
 mod sleeping {
     use super::*;
 
-    fn nights(rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
+    fn nights(who: Character, rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
         let mut idles = Idles::default();
         let mut nothing = 0;
         let mut seen: Vec<(AnimKind, usize)> = Vec::new();
         for r in 0..rolls {
             // An hour of pretend time per roll, so cooldowns do not mask the weights.
             let now = 50_000_000 + r * 3_600_000;
-            match idles.pick_asleep(now, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(23)) {
+            match idles.pick_asleep(now, who, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(23)) {
                 None => nothing += 1,
                 Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
                     Some((_, n)) => *n += 1,
@@ -317,7 +459,7 @@ mod sleeping {
     /// Everything a sleeping companion does has to be something a sleeping companion would do.
     #[test]
     fn a_sleeping_pet_only_does_sleeping_things() {
-        let (_, seen) = nights(2_000);
+        let (_, seen) = nights(Character::Sprout, 2_000);
         assert!(!seen.is_empty(), "it should do something now and then");
         for (kind, _) in seen {
             assert!(kind.is_sleep_talk(), "{kind:?} is not something to do while asleep");
@@ -327,7 +469,7 @@ mod sleeping {
     /// Mostly it just lies there, which is the point of being asleep.
     #[test]
     fn sleep_is_mostly_lying_still() {
-        let (nothing, _) = nights(2_000);
+        let (nothing, _) = nights(Character::Sprout, 2_000);
         let share = nothing as f32 / 2_000.0;
         assert!((0.25..0.55).contains(&share), "it lay still {:.0}% of the time", share * 100.0);
     }
@@ -335,7 +477,7 @@ mod sleeping {
     /// A nightmare you saw every night would stop being funny on the second one.
     #[test]
     fn the_nightmare_is_rare() {
-        let (_, seen) = nights(2_000);
+        let (_, seen) = nights(Character::Sprout, 2_000);
         let bad = seen.iter().find(|(k, _)| *k == AnimKind::SleepStartle).map_or(0, |(_, n)| *n);
         let breath = seen.iter().find(|(k, _)| *k == AnimKind::SleepBreath).map_or(0, |(_, n)| *n);
         assert!(bad > 0, "it should still happen");
@@ -347,11 +489,11 @@ mod sleeping {
     fn the_waking_day_does_not_eat_the_nights_cooldowns() {
         let mut idles = Idles::default();
         for r in 0..500u64 {
-            idles.pick(60_000_000 + r * 60_000, 2, false, false, r * 7_919 + 1);
+            idles.pick(60_000_000 + r * 60_000, Character::Sprout, 2, false, false, r * 7_919 + 1);
         }
         let mut slept = 0;
         for r in 0..60u64 {
-            if idles.pick_asleep(60_000_000 + 500 * 60_000 + r * 120_000, r * 104_729 + 7).is_some() {
+            if idles.pick_asleep(60_000_000 + 500 * 60_000 + r * 120_000, Character::Sprout, r * 104_729 + 7).is_some() {
                 slept += 1;
             }
         }
@@ -371,7 +513,7 @@ mod mood {
         let mut seen = Vec::new();
         for r in 0..3_000u64 {
             let now = 90_000_000 + r * 3_600_000;
-            if let Some(k) = idles.pick(now, 2, false, true, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
+            if let Some(k) = idles.pick(now, Character::Sprout, 2, false, true, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
                 if !seen.contains(&k) {
                     seen.push(k);
                 }
@@ -393,12 +535,170 @@ mod mood {
         let mut bouncy = 0;
         for r in 0..3_000u64 {
             let now = 90_000_000 + r * 3_600_000;
-            if let Some(k) = idles.pick(now, 2, false, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
+            if let Some(k) = idles.pick(now, Character::Sprout, 2, false, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(11)) {
                 if matches!(k, AnimKind::Hop | AnimKind::Pounce | AnimKind::Stumble) {
                     bouncy += 1;
                 }
             }
         }
         assert!(bouncy > 50, "only {bouncy} bouncy behaviours in 3000 picks");
+    }
+}
+
+#[cfg(test)]
+mod temperament {
+    use super::*;
+
+    /// Counts what one creature actually did over a long stretch of pretend time.
+    fn tally(who: Character, level: Level, rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
+        let mut idles = Idles::default();
+        let (mut nothing, mut seen) = (0, Vec::<(AnimKind, usize)>::new());
+        for r in 0..rolls {
+            // An hour apart, so cooldowns never stand in for the weights being tested.
+            let now = 20_000_000 + r * 3_600_000;
+            match idles.pick(now, who, level, false, false, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(13)) {
+                None => nothing += 1,
+                Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
+                    Some((_, n)) => *n += 1,
+                    None => seen.push((k, 1)),
+                },
+            }
+        }
+        (nothing, seen)
+    }
+
+    fn asleep(who: Character, rolls: u64) -> (usize, Vec<(AnimKind, usize)>) {
+        let mut idles = Idles::default();
+        let (mut nothing, mut seen) = (0, Vec::<(AnimKind, usize)>::new());
+        for r in 0..rolls {
+            let now = 70_000_000 + r * 3_600_000;
+            match idles.pick_asleep(now, who, r.wrapping_mul(6_364_136_223_846_793_005).rotate_left(19)) {
+                None => nothing += 1,
+                Some(k) => match seen.iter_mut().find(|(s, _)| *s == k) {
+                    Some((_, n)) => *n += 1,
+                    None => seen.push((k, 1)),
+                },
+            }
+        }
+        (nothing, seen)
+    }
+
+    fn how_often(seen: &[(AnimKind, usize)], kind: AnimKind) -> usize {
+        seen.iter().find(|(k, _)| *k == kind).map_or(0, |(_, n)| *n)
+    }
+
+    /// The original is the baseline and must stay exactly where it was, in every table.
+    #[test]
+    fn sprout_is_the_creature_it_always_was() {
+        for idle in IDLES.iter().chain(SLEEP.iter()) {
+            assert_eq!(taste(Character::Sprout, idle.kind), 10, "Sprout's {:?} moved", idle.kind);
+        }
+    }
+
+    /// A creature shaped like a stone that pounces reads as a bug, not as a surprise. Never is
+    /// never, not "rarely".
+    #[test]
+    fn a_pebble_keeps_its_feet_on_the_ground() {
+        let (_, seen) = tally(Character::Pebble, 2, 4_000);
+        assert!(!seen.is_empty(), "it should still do plenty");
+        for (kind, n) in seen {
+            assert!(
+                !matches!(kind, AnimKind::Hop | AnimKind::Pounce | AnimKind::Stumble),
+                "a Pebble did {kind:?} {n} times"
+            );
+        }
+    }
+
+    /// Personality must not read as "broken". Every creature keeps a varied day and keeps the same
+    /// habit of sitting still that §57 settled on.
+    #[test]
+    fn every_creature_still_has_plenty_to_do() {
+        for who in Character::ALL {
+            let (nothing, seen) = tally(who, 2, 3_000);
+            assert!(seen.len() >= 8, "{} only ever did {} different things", who.label(), seen.len());
+            let share = nothing as f32 / 3_000.0;
+            assert!(
+                (0.15..0.5).contains(&share),
+                "{} sat still {:.0}% of the time",
+                who.label(),
+                share * 100.0
+            );
+        }
+    }
+
+    /// The whole point: watch two of them for a while and they are not the same animal.
+    #[test]
+    fn no_two_creatures_behave_alike() {
+        let mut profiles: Vec<(Character, Vec<(AnimKind, usize)>)> = Vec::new();
+        for who in Character::ALL {
+            profiles.push((who, tally(who, 2, 3_000).1));
+        }
+        for (i, (a, pa)) in profiles.iter().enumerate() {
+            for (b, pb) in profiles.iter().skip(i + 1) {
+                let same = IDLES.iter().all(|idle| how_often(pa, idle.kind) == how_often(pb, idle.kind));
+                assert!(!same, "{} and {} behave identically", a.label(), b.label());
+            }
+        }
+    }
+
+    /// Character changes the odds; it never overrules the setting. Somebody who asked for Calm
+    /// asked for calm, whichever creature they picked.
+    #[test]
+    fn calm_stays_calm_whichever_creature_it_is() {
+        for who in Character::ALL {
+            let (_, seen) = tally(who, 0, 3_000);
+            for (kind, _) in seen {
+                assert!(
+                    matches!(kind, AnimKind::LookAround | AnimKind::Settle | AnimKind::Yawn),
+                    "a Calm {} did {kind:?}",
+                    who.label()
+                );
+            }
+        }
+    }
+
+    /// And no taste table may leave a creature with nothing to do at the quietest setting, which
+    /// is the one way a zero could turn into a companion that just sits there forever.
+    #[test]
+    fn nothing_is_ever_tasted_into_silence() {
+        for who in Character::ALL {
+            let (_, seen) = tally(who, 0, 2_000);
+            assert!(!seen.is_empty(), "a Calm {} never did anything at all", who.label());
+        }
+    }
+
+    /// How an animal sleeps is as much itself as how it moves.
+    #[test]
+    fn they_sleep_as_differently_as_they_wake() {
+        let (stone_still, stone) = asleep(Character::Pebble, 3_000);
+        let (flighty_still, flighty) = asleep(Character::Moth, 3_000);
+        assert!(
+            stone_still > flighty_still,
+            "a Pebble lay still {stone_still} times against a Moth's {flighty_still}"
+        );
+        let stone_twitch = how_often(&stone, AnimKind::SleepTwitch);
+        let moth_twitch = how_often(&flighty, AnimKind::SleepTwitch);
+        assert!(moth_twitch > stone_twitch * 2, "{moth_twitch} moth twitches against {stone_twitch}");
+        // Both still breathe. A sleeping companion that never moved at all would look switched off.
+        assert!(how_often(&stone, AnimKind::SleepBreath) > 0, "a Pebble should still breathe");
+    }
+
+    /// The creature it shows as is the creature it behaves as. A settings file naming one that has
+    /// not arrived shows Sprout (§31), and it must act like Sprout too rather than borrowing a
+    /// temperament nobody can see.
+    #[test]
+    fn it_behaves_as_the_creature_it_is_drawn_as() {
+        let hidden = Character::Moth;
+        assert_eq!(hidden.shown(0), Character::Sprout, "a Moth has not arrived on day zero");
+        let (_, as_sprout) = tally(hidden.shown(0), 2, 2_000);
+        let (_, as_sprout_again) = tally(Character::Sprout, 2, 2_000);
+        for idle in IDLES {
+            assert_eq!(
+                how_often(&as_sprout, idle.kind),
+                how_often(&as_sprout_again, idle.kind),
+                "{:?} differs between a shown Sprout and a real one",
+                idle.kind
+            );
+        }
     }
 }

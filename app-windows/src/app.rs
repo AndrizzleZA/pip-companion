@@ -556,7 +556,8 @@ impl App {
         if self.night_burrow() {
             if self.pet.anim.is_none() {
                 let roll = self.rand();
-                if let Some(k) = self.idles.pick_asleep(now, roll) {
+                let who = self.settings.pet.character.shown(self.state.experience);
+                if let Some(k) = self.idles.pick_asleep(now, who, roll) {
                     self.pet.start_anim(k);
                     self.render();
                 }
@@ -584,7 +585,10 @@ impl App {
             // Thirsty is the one mood that changes what the pet feels like doing. It never says so
             // — §28 — it just has less bounce, which is how it would read on anything alive.
             let flat = self.expr() == Expr::Thirsty;
-            match self.idles.pick(now, level, self.nearly_bedtime(), flat, roll) {
+            // Which creature it is changes the odds, not the vocabulary: a Pebble never pounces,
+            // a Moth is forever wandering off, and both do it with the same drawing (§64).
+            let who = self.settings.pet.character.shown(self.state.experience);
+            match self.idles.pick(now, who, level, self.nearly_bedtime(), flat, roll) {
                 Some(k) => k,
                 // It decided to sit there, which it is allowed to do.
                 None => {
