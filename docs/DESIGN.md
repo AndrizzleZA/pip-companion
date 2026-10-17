@@ -2894,8 +2894,15 @@ before it had just failed:
 Caught in the act by sampling the process every ten seconds: one moment 1 thread, 171 handles,
 1.2 MB, and the next **9 threads, 276 handles, 16.2 MB** with seven new modules resident —
 `MMDevAPI`, `AUDIOSES`, `wdmaud`, `wdmaud2`, `AVRT`, `msacm32`, `MSACM32`. **Playing one sound makes
-Windows load its entire audio stack into the process, and it stays for the life of the process.**
-A third of a second of noise, fourteen megabytes and six threads for the rest of the day.
+Windows load its entire audio stack into the process, and most of it stays for the life of the
+process.** A third of a second of noise, and the modules, the handles and the megabytes are
+resident for the rest of the day.
+
+**The threads are the part that does come back**, which a second experiment corrected: one process
+measured twice, quiet and then after exactly one noise, went 4 threads → 2 while the four audio
+modules, the 240 handles and the 10 MB stayed exactly where they were. So the thread count is a
+playback spike that retires, and a measurement that catches 9 of them caught a sound in progress.
+What persists is the mapped code and the handles, not the workers.
 
 Three things follow, and the second one is the reason the earlier failure was misread:
 
@@ -2903,7 +2910,12 @@ Three things follow, and the second one is the reason the earlier failure was mi
 nothing more. So a brief asking for *more kinds* of sound asks for nothing extra here at all — this
 bill was already paid by the build that shipped two days ago, and by every build since.
 
-**It is not an ongoing CPU cost.** A run with the audio stack fully resident measured 0.93 s/h,
+**It is not an ongoing CPU cost, and the second experiment made that emphatic.** The same process,
+with the audio stack resident and nothing happening, measured **0.04 s per hour** across a
+four-minute window — a fortieth of the target, and the lowest figure this number has ever produced
+by a wide margin. Its first window, which contained the pop-in and the first-run bubble, read
+1.13 s/h; the difference between those two is startup, not audio. A separate ten-minute run with
+the stack resident measured 0.93 s/h,
 inside target. The 2.1 s/h failure was the sound *playing* — a third of a second of synthesis and
 an animation's worth of frames — not the stack idling afterwards. Which also explains a share of
 §54's famous scatter: whether a noise happened to fall inside a ten-minute window was never
@@ -2916,3 +2928,11 @@ playing sound, and Pip's private working set — the number Task Manager shows �
 voice and it now describes a Pip that has never made a noise. It wants splitting in two, honestly,
 rather than quietly widening: **quiet, and has spoken.** That is a decision about what was promised
 in the README, so it is not one to take silently.
+
+**One loose end, recorded rather than guessed at.** In that second experiment the *quiet* window
+already had four audio modules resident, before the deliberate click — so something inside a fresh
+profile's first eighty seconds loads the stack on its own, most likely the first-run greeting. That
+would mean the earlier run which measured 2.73 MB and no audio stack was the unusual one rather
+than the normal one. It is not worth chasing now: every conclusion above holds either way, since
+the cost is one-time and does not recur. It is written down because the alternative is remembering
+it wrong later.
