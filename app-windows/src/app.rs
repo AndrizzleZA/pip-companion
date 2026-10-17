@@ -560,6 +560,12 @@ impl App {
                 if let Some(k) = self.idles.pick_asleep(now, who, roll) {
                     self.pet.start_anim(k);
                     self.render();
+                    // The bad dream, once or twice a night at most, and silent whenever reminders
+                    // are being held: a whimper at three in the morning is an interruption even
+                    // though nothing is due. Everything else it does in its sleep is quiet.
+                    if k == AnimKind::SleepStartle && !self.holding_interruptions() {
+                        self.play_sfx(crate::attention::Sfx::Whine);
+                    }
                 }
             }
             self.arm_idle();
@@ -606,14 +612,19 @@ impl App {
                 let size = self.size();
                 self.pet.aim_walk(size, coin);
             }
-            // Two idle behaviours make a noise, and only these two. Both are rare by their own
-            // cooldowns — a quarter of an hour and twenty minutes — and both are funnier with
-            // sound than without. Everything else the companion does while idling is silent,
-            // because a pet that comments on its own fidgeting is one you mute, and a muted pet
-            // has no voice left for the things that matter.
+            // Three idle behaviours make a noise, and only these three. Every one of them is rare
+            // by its own cooldown — a quarter of an hour, twenty minutes, three quarters of an
+            // hour — and every one is funnier with sound than without. Everything else the
+            // companion does while idling is silent, because a pet that comments on its own
+            // fidgeting is one you mute, and a muted pet has no voice left for the things that
+            // matter. That is also why §66 added sound to the rarest behaviour in the table and
+            // to none of the common ones: more *kinds* of noise cost nothing, more *noise* costs
+            // the whole feature.
             match kind {
                 AnimKind::Sneeze => self.play_sfx(crate::attention::Sfx::Chirp),
                 AnimKind::Stumble => self.play_sfx(crate::attention::Sfx::Whine),
+                // It found something. Weight one, forty-five minutes between: a few times a day.
+                AnimKind::Found => self.play_sfx(crate::attention::Sfx::Trill),
                 _ => {}
             }
             if kind == AnimKind::Blink {
@@ -1053,22 +1064,11 @@ impl App {
         if !self.settings.notify.sound {
             return;
         }
-        let ph = match sfx {
-            crate::attention::Sfx::Voice => platform::Phrase::Plain,
-            crate::attention::Sfx::Nudge => platform::Phrase::Rising,
-            crate::attention::Sfx::Tap => platform::Phrase::Knock,
-            crate::attention::Sfx::Trill => platform::Phrase::Trill,
-            crate::attention::Sfx::Sigh => platform::Phrase::Falling,
-            crate::attention::Sfx::Chirp => platform::Phrase::Chirp,
-            crate::attention::Sfx::Burble => platform::Phrase::Burble,
-            crate::attention::Sfx::Yawn => platform::Phrase::Yawn,
-            crate::attention::Sfx::Whine => platform::Phrase::Whine,
-            crate::attention::Sfx::Purr => platform::Phrase::Purr,
-            crate::attention::Sfx::Touch => platform::Phrase::Touch,
-            crate::attention::Sfx::Cheer => platform::Phrase::Cheer,
-        };
         let seed = self.rand();
         let who = self.settings.pet.character.shown(self.state.experience);
+        // Which shape, in this creature's dialect. The timbre comes from `who` inside `say`; this
+        // is the phrasing, which §66 made its own half of the identity.
+        let ph = crate::attention::dialect(who, sfx);
         let c = platform::Chime::say(self.settings.pet.voice, who, ph, sfx.level(), seed);
         c.play();
         self.chime = Some((self.settings.pet.voice, c));

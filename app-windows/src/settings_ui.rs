@@ -1168,19 +1168,24 @@ impl App {
                 // this voice can say (§59) and a preview that only ever plays one of them is a
                 // preview of the wrong thing. Tapping the same voice twice is meant to sound
                 // slightly different; that is the point being demonstrated.
-                const SAMPLER: [platform::Phrase; 5] = [
-                    platform::Phrase::Plain,
-                    platform::Phrase::Rising,
-                    platform::Phrase::Trill,
-                    platform::Phrase::Knock,
-                    platform::Phrase::Falling,
+                //
+                // These are the *things it says*, not the shapes: §66 gave each creature its own
+                // phrasing, so a preview made of raw shapes would audition noises this companion
+                // never makes. Run through the dialect, tapping Bunny plays Bunny's chime.
+                const SAMPLER: [crate::attention::Sfx; 5] = [
+                    crate::attention::Sfx::Voice,
+                    crate::attention::Sfx::Nudge,
+                    crate::attention::Sfx::Trill,
+                    crate::attention::Sfx::Tap,
+                    crate::attention::Sfx::Sigh,
                 ];
                 let n = platform::now_unix().unsigned_abs() as usize;
                 let seed = n.wrapping_mul(6_364_136_223_846_793_005) as u64;
                 // The preview must use the companion actually on screen, or "Its own" would audition
                 // somebody else's voice.
                 let who = st.pet.character.shown(xp);
-                platform::Chime::say(v, who, SAMPLER[n % SAMPLER.len()], 1.0, seed).play();
+                let ph = crate::attention::dialect(who, SAMPLER[n % SAMPLER.len()]);
+                platform::Chime::say(v, who, ph, 1.0, seed).play();
             }
             UiAct::Color(c) => {
                 st.pet.color = c;

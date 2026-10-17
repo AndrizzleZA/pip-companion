@@ -2829,3 +2829,90 @@ whatever a crash report names, the matching pair is in the folder.
 a machine has archived symbols only if that machine was given the archived build. Rebuilding the
 "same" commit to install it afterwards is not the same commit's binary in any way a debugger cares
 about.
+
+## 66. A dialect each, and what one sound costs, 2026-10-17
+
+The brief: every creature should have its own adorable, recognisable set of sounds, *"so that
+someone could recognise which creature is making a noise without even looking at the screen"* —
+and, added separately and taken as a condition rather than a wish, **only if it is safe and not
+resource heavy**.
+
+**Half of it already existed and saying so was the first job.** §61 gave all seven companions their
+own timbre: notes, harmonics, breath, waver, attack, length. No two sound alike and a test on the
+waveform holds that. Re-implementing it would have been billing twice for one feature.
+
+**What was genuinely shared was the phrasing.** Every creature announced a reminder with the same
+flat two-note chime and asked the same rising question — in its own voice, but with everybody
+else's words. So this is the other half: a **dialect**, one function mapping (creature, thing to
+say) to one of the twelve shapes that already exist.
+
+| | announces a reminder with | and otherwise |
+|---|---|---|
+| **Sprout** | the plain chime — *unchanged* | the plain language |
+| **Bunny** | a pleased little run; it cannot deliver a flat note | squeaks its questions, overdoes good news |
+| **Toadstool** | two dry knocks — a mushroom is not a bell | taps a plain note instead |
+| **Tuft** | a rising question; it asks rather than states | its surprise comes out as a flutter |
+| **Pebble** | a slow falling note | never squeaks; its celebration is three notes, not four |
+| **Bloom** | the plain chime | pleased is a small squeak, surprised is a flutter — the two swap |
+| **Moth** | a squeak | three notes to celebrate: four would be more noise than there is moth |
+
+**It costs nothing new.** Twelve existing shapes dealt out differently; no new synthesis, no files,
+no cache, no library. Switching companion changes the dialect on the very next noise because
+nothing is stored per creature. §61's generate-and-drop bargain is untouched.
+
+**Three rules keep a dialect from destroying information.** Shapes may repeat inside one dialect —
+a creature has fewer noises than it has things to say, which is true of animals — but the five a
+person actually learns (reminder, nudge, finished, tripped, touched) must stay distinct from each
+other; the click keeps its own shape, used for nothing else, in every dialect; and no creature may
+be reduced below nine distinct noises. Tests for all three, for all seven.
+
+**And the tests moved down to the waveform**, which is where the brief's real worry lives. "No
+creature unintentionally uses another creature's sounds" cannot be checked by comparing tables: a
+copied-and-not-edited entry can look different on paper and sound identical. So seven sounds are
+rendered for all seven creatures and compared as audio, 49 clips per run, plus a check that a click
+is the quietest thing every one of them says.
+
+**One new sound, deliberately.** `Found`, the rarest behaviour in the table — weight one, forty-five
+minutes between — gets a pleased trill, and the bad dream gets a whimper that is silent whenever
+reminders are being held. Nothing common gained a sound. More *kinds* of noise cost nothing; more
+*noise* costs the whole feature, because a pet that comments on its own fidgeting is one you mute,
+and a muted pet has no voice left for the things that matter.
+
+### What one sound costs, measured
+
+The condition in the brief turned out to be the right question to ask, because the measurement
+before it had just failed:
+
+| | quiet companion | after one sound |
+|---|---|---|
+| Threads | 1–4 | **6–9** |
+| Handles | 171 | **276** |
+| Working set | 2.73 MB | **16.5 MB** ❌ (target ≤ 15) |
+| Private working set | 0.63 MB | 3.87 MB |
+| Idle CPU | 0.55 s/h | 0.93 s/h ✅ |
+
+Caught in the act by sampling the process every ten seconds: one moment 1 thread, 171 handles,
+1.2 MB, and the next **9 threads, 276 handles, 16.2 MB** with seven new modules resident —
+`MMDevAPI`, `AUDIOSES`, `wdmaud`, `wdmaud2`, `AVRT`, `msacm32`, `MSACM32`. **Playing one sound makes
+Windows load its entire audio stack into the process, and it stays for the life of the process.**
+A third of a second of noise, fourteen megabytes and six threads for the rest of the day.
+
+Three things follow, and the second one is the reason the earlier failure was misread:
+
+**It is one-time, not per sound.** The stack loads on the first noise and the two hundredth costs
+nothing more. So a brief asking for *more kinds* of sound asks for nothing extra here at all — this
+bill was already paid by the build that shipped two days ago, and by every build since.
+
+**It is not an ongoing CPU cost.** A run with the audio stack fully resident measured 0.93 s/h,
+inside target. The 2.1 s/h failure was the sound *playing* — a third of a second of synthesis and
+an animation's worth of frames — not the stack idling afterwards. Which also explains a share of
+§54's famous scatter: whether a noise happened to fall inside a ten-minute window was never
+controlled for, and nobody knew it mattered by fourteen megabytes.
+
+**The working-set target is genuinely broken, and that is the honest version.** 16.5 MB against
+≤ 15 MB. Most of it is Windows' own audio code, shared with every other program on the machine
+playing sound, and Pip's private working set — the number Task Manager shows — is 3.87 MB. But
+"most of it is shared" is an explanation, not a pass. The target was written before Pip had a
+voice and it now describes a Pip that has never made a noise. It wants splitting in two, honestly,
+rather than quietly widening: **quiet, and has spoken.** That is a decision about what was promised
+in the README, so it is not one to take silently.

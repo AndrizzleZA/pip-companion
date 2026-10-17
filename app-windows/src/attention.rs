@@ -12,9 +12,10 @@
 //! `again_in` as `None` once it is reached. Nothing here ever mentions having been ignored: a
 //! second attempt is a different gesture, not a complaint (§7, §28).
 
+use crate::platform::Phrase;
 use crate::render::creature::AnimKind;
 use pip_core::schedule::{ItemKey, Priority};
-use pip_core::settings::Attention;
+use pip_core::settings::{Attention, Character};
 
 /// A short noise with the companion's own timbre. Which notes, not which file — these are
 /// synthesised at the moment they play (`platform::Chime`).
@@ -273,6 +274,112 @@ impl Sfx {
             Sfx::Cheer => 1.0,
         }
     }
+
+    /// The five that have to stay apart from each other inside one creature's dialect. Everything
+    /// else is small talk and may share a shape with its neighbour; these five are the ones a
+    /// person learns, so two of them sounding identical would cost real information.
+    #[cfg(test)]
+    const LOAD_BEARING: [Sfx; 5] = [Sfx::Voice, Sfx::Nudge, Sfx::Cheer, Sfx::Whine, Sfx::Touch];
+}
+
+/// Which *shape* this creature uses to say that, as opposed to which timbre it says it in.
+///
+/// §61 gave every companion its own voice — seven sets of notes, harmonics, breath and waver, so
+/// no two sound alike. What stayed shared was the phrasing: every creature announced a reminder
+/// with the same flat two-note chime and asked the same rising question, in its own timbre. A
+/// dialect is the other half. Bunny announces things with a pleased little run because it cannot
+/// keep still; Kit knocks, because a mushroom is not a bell; Pebble's chime falls slowly and its
+/// celebration is the smallest in the cast, because nothing about a stone is in a hurry.
+///
+/// **It costs nothing.** These are the twelve shapes that already exist (`platform::Phrase`) dealt
+/// out differently per creature — no new synthesis, no new buffers, no files, and the answer is a
+/// match arm resolved when a sound is already about to play. Switching companion changes the
+/// dialect on the very next noise, because nothing is cached anywhere.
+///
+/// Shapes may repeat inside one dialect: a creature has fewer noises than it has things to say,
+/// which is true of animals. What may not repeat is any two of [`Sfx::LOAD_BEARING`], and a test
+/// holds that for all seven.
+pub fn dialect(who: Character, sfx: Sfx) -> Phrase {
+    // The meaning of each sound, which is also Sprout's dialect: it is the creature the voice was
+    // designed on and the one in every screenshot, so it does not move (§64 made the same promise
+    // about its behaviour).
+    let plain = match sfx {
+        Sfx::Voice => Phrase::Plain,
+        Sfx::Nudge => Phrase::Rising,
+        Sfx::Tap => Phrase::Knock,
+        Sfx::Trill => Phrase::Trill,
+        Sfx::Sigh => Phrase::Falling,
+        Sfx::Chirp => Phrase::Chirp,
+        Sfx::Burble => Phrase::Burble,
+        Sfx::Yawn => Phrase::Yawn,
+        Sfx::Whine => Phrase::Whine,
+        Sfx::Purr => Phrase::Purr,
+        Sfx::Touch => Phrase::Touch,
+        Sfx::Cheer => Phrase::Cheer,
+    };
+    match who {
+        Character::Sprout => plain,
+
+        // Cannot deliver a flat note. It announces, squeaks and overdoes the good news.
+        Character::Bunny => match sfx {
+            Sfx::Voice => Phrase::Trill,
+            Sfx::Nudge => Phrase::Chirp,
+            Sfx::Trill => Phrase::Cheer,
+            Sfx::Purr => Phrase::Burble,
+            _ => plain,
+        },
+
+        // Dry and wooden. Its chime is two knocks on a table.
+        Character::Kit => match sfx {
+            Sfx::Voice => Phrase::Knock,
+            Sfx::Tap => Phrase::Plain,
+            Sfx::Purr => Phrase::Burble,
+            _ => plain,
+        },
+
+        // Airy, and asks rather than states. Its surprise comes out as a flutter.
+        Character::Tuft => match sfx {
+            Sfx::Voice => Phrase::Rising,
+            Sfx::Nudge => Phrase::Chirp,
+            Sfx::Chirp => Phrase::Trill,
+            Sfx::Sigh => Phrase::Yawn,
+            _ => plain,
+        },
+
+        // Low and unhurried. Nothing it says climbs, its surprise is a dull knock rather than a
+        // squeak, and its biggest noise is three notes where everyone else gets four — a stone
+        // is pleased quietly.
+        Character::Pebble => match sfx {
+            Sfx::Voice => Phrase::Falling,
+            Sfx::Nudge => Phrase::Plain,
+            Sfx::Chirp => Phrase::Knock,
+            Sfx::Trill => Phrase::Rising,
+            Sfx::Sigh => Phrase::Purr,
+            Sfx::Cheer => Phrase::Trill,
+            _ => plain,
+        },
+
+        // Sweet, and the two swap round: its pleased noise is a small squeak and its surprise is
+        // a flutter, like something that opens and closes rather than jumps.
+        Character::Bloom => match sfx {
+            Sfx::Trill => Phrase::Chirp,
+            Sfx::Chirp => Phrase::Trill,
+            Sfx::Purr => Phrase::Falling,
+            Sfx::Sigh => Phrase::Purr,
+            _ => plain,
+        },
+
+        // The smallest. Its chime is a squeak, and its celebration is three notes because four
+        // would be more noise than there is moth.
+        Character::Moth => match sfx {
+            Sfx::Voice => Phrase::Chirp,
+            Sfx::Trill => Phrase::Plain,
+            Sfx::Cheer => Phrase::Trill,
+            Sfx::Sigh => Phrase::Yawn,
+            Sfx::Purr => Phrase::Burble,
+            _ => plain,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -305,6 +412,102 @@ mod loudness {
         ];
         for s in all {
             assert!((0.2..=1.0).contains(&s.level()), "{s:?} is at {}", s.level());
+        }
+    }
+}
+
+#[cfg(test)]
+mod dialects {
+    use super::*;
+
+    const ALL: [Sfx; 12] = [
+        Sfx::Voice,
+        Sfx::Nudge,
+        Sfx::Tap,
+        Sfx::Trill,
+        Sfx::Sigh,
+        Sfx::Chirp,
+        Sfx::Burble,
+        Sfx::Yawn,
+        Sfx::Whine,
+        Sfx::Purr,
+        Sfx::Touch,
+        Sfx::Cheer,
+    ];
+
+    fn spoken(who: Character) -> Vec<Phrase> {
+        ALL.iter().map(|s| dialect(who, *s)).collect()
+    }
+
+    /// The creature the voice was designed on does not move, in sound any more than in behaviour.
+    #[test]
+    fn sprout_still_speaks_the_plain_language() {
+        assert_eq!(dialect(Character::Sprout, Sfx::Voice), Phrase::Plain);
+        assert_eq!(dialect(Character::Sprout, Sfx::Nudge), Phrase::Rising);
+        assert_eq!(dialect(Character::Sprout, Sfx::Cheer), Phrase::Cheer);
+        assert_eq!(dialect(Character::Sprout, Sfx::Touch), Phrase::Touch);
+    }
+
+    /// The point of the whole thing: you could tell them apart with your eyes shut.
+    #[test]
+    fn no_two_creatures_speak_the_same_dialect() {
+        for (i, a) in Character::ALL.into_iter().enumerate() {
+            for b in Character::ALL.into_iter().skip(i + 1) {
+                assert_ne!(spoken(a), spoken(b), "{} and {} say everything alike", a.label(), b.label());
+            }
+        }
+    }
+
+    /// Inside one creature, the five sounds a person actually learns have to stay apart. Small
+    /// talk may share a shape; "a reminder is due" and "you touched me" may not.
+    #[test]
+    fn the_sounds_that_carry_meaning_never_collide() {
+        for who in Character::ALL {
+            for (i, a) in Sfx::LOAD_BEARING.into_iter().enumerate() {
+                for b in Sfx::LOAD_BEARING.into_iter().skip(i + 1) {
+                    assert_ne!(
+                        dialect(who, a),
+                        dialect(who, b),
+                        "{} says {a:?} and {b:?} the same way",
+                        who.label()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A click is the sound heard most often by a wide margin and has its own shape, used for
+    /// nothing else. No dialect may spend it on something else or borrow something louder for it.
+    #[test]
+    fn being_touched_is_the_quietest_thing_every_creature_says() {
+        for who in Character::ALL {
+            assert_eq!(dialect(who, Sfx::Touch), Phrase::Touch, "{} mis-sounds a click", who.label());
+            for s in ALL.into_iter().filter(|s| *s != Sfx::Touch) {
+                assert_ne!(dialect(who, s), Phrase::Touch, "{} spends the click shape on {s:?}", who.label());
+            }
+        }
+    }
+
+    /// Nothing about a stone is in a hurry, so nothing it says is a quick little squeak.
+    #[test]
+    fn a_pebble_never_squeaks() {
+        for s in ALL {
+            assert_ne!(dialect(Character::Pebble, s), Phrase::Chirp, "a Pebble chirped at {s:?}");
+        }
+    }
+
+    /// Every creature still has the full range available to it — a dialect redistributes the
+    /// shapes, it does not shrink the vocabulary down to two noises.
+    #[test]
+    fn no_creature_is_left_with_only_a_handful_of_noises() {
+        for who in Character::ALL {
+            let mut distinct: Vec<Phrase> = Vec::new();
+            for p in spoken(who) {
+                if !distinct.contains(&p) {
+                    distinct.push(p);
+                }
+            }
+            assert!(distinct.len() >= 9, "{} only makes {} different noises", who.label(), distinct.len());
         }
     }
 }

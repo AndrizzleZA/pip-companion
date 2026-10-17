@@ -861,3 +861,63 @@ mod each_creature_its_own {
         assert_ne!(a, b, "the smallest and the largest companion sound identical");
     }
 }
+
+#[cfg(test)]
+mod what_each_creature_actually_says {
+    use super::*;
+    use crate::attention::{dialect, Sfx};
+    use pip_core::settings::Character;
+
+    fn samples(c: &Chime) -> Vec<i16> {
+        c.0[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    }
+
+    /// What a creature says, as audio: its own timbre through its own phrasing.
+    fn said(who: Character, sfx: Sfx) -> Vec<i16> {
+        samples(&Chime::say(Voice::Own, who, dialect(who, sfx), sfx.level(), 404))
+    }
+
+    /// The claim this is all for, tested on the waveform rather than on the table: tell them
+    /// apart with your eyes shut. Every creature's rendering of every sound differs from every
+    /// other creature's rendering of it — a table entry copied and not edited would show up here
+    /// even if the dialects looked different on paper.
+    #[test]
+    fn no_creature_ever_borrows_another_creatures_noise() {
+        for sfx in [Sfx::Voice, Sfx::Nudge, Sfx::Tap, Sfx::Trill, Sfx::Cheer, Sfx::Touch, Sfx::Whine] {
+            let mut seen: Vec<(Character, Vec<i16>)> = Vec::new();
+            for who in Character::ALL {
+                let s = said(who, sfx);
+                assert!(!s.is_empty(), "{who:?} says nothing at all for {sfx:?}");
+                for (other, prev) in &seen {
+                    assert_ne!(&s, prev, "{who:?} and {other:?} make the same noise for {sfx:?}");
+                }
+                seen.push((who, s));
+            }
+        }
+    }
+
+    /// A click happens dozens of times a day in every creature's company, so in every creature's
+    /// company it has to stay the smallest thing in the program.
+    #[test]
+    fn a_click_is_the_quietest_noise_any_of_them_makes() {
+        for who in Character::ALL {
+            let peak = |s: Sfx| said(who, s).iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+            let touch = peak(Sfx::Touch);
+            for louder in [Sfx::Voice, Sfx::Nudge, Sfx::Trill, Sfx::Cheer] {
+                assert!(touch < peak(louder), "{who:?}: a click is as loud as {louder:?}");
+            }
+        }
+    }
+
+    /// Changing companion changes the sound on the very next noise — nothing is cached per
+    /// creature, so there is nothing to invalidate and no restart to need.
+    #[test]
+    fn switching_companion_takes_effect_immediately() {
+        let before = said(Character::Bunny, Sfx::Voice);
+        let after = said(Character::Pebble, Sfx::Voice);
+        assert_ne!(before, after);
+        // And back again, byte for byte: the same companion saying the same thing with the same
+        // seed is the same sound, which is what makes the two above a real comparison.
+        assert_eq!(said(Character::Bunny, Sfx::Voice), before);
+    }
+}
