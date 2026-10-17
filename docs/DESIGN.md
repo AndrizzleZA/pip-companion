@@ -2717,3 +2717,31 @@ decoding as cp1252 and re-reading as UTF-8 restored them, verified by diff. The 
 than this project and this is the second time this session it has cost something (§38 was a BOM
 written the same way): **PowerShell is not a text editor, and round-tripping source through it
 corrupts anything that is not ASCII.** Use the editing tools, or `sed`, which does not transcode.
+
+**Measured on the finished build** (`e12345bd6c`), a ten-minute idle window rather than the usual
+four, because §54 left an open question about whether the idle number drifts and a longer window is
+the only way to answer it:
+
+| Metric | Measured | Target | |
+|---|---|---|---|
+| Processes | 1 | 1 | ✅ |
+| Idle private memory | 1.85 MB avg / 1.94 MB max | ≤ 8 MB | ✅ |
+| Idle working set | 2.73 MB avg / 3.34 MB max | ≤ 15 MB | ✅ |
+| Private working set | 0.63 MB avg / 0.77 MB max | — | |
+| **Idle CPU** | **0.55 s per hour** (cycle-exact, 3.701 GHz) | ≤ 1 s/h | ✅ |
+| Startup | 28 ms avg, 14–79 | ≤ 150 ms | ✅ |
+| Threads / handles | 4 / 171 | few, stable | |
+| Executable | 2154 KB | ≤ 3 MB | ✅ |
+
+Seven per-creature timbres and the night/hold split cost nothing, which is what should happen: the
+timbres are seven sets of constants chosen when a sound plays, and the split removed a question
+rather than adding one. The binary did not move a kilobyte from §59's reading.
+
+**And the drift question now has an answer: there is none.** Seven readings of this number under
+the same protocol — 1.76, 1.02, 0.89, 0.69, 0.32, 0.26, 0.55 — with the last taken over a window
+two and a half times longer than any of the others. A measurement whose spread is larger than its
+target is a measurement reporting its own noise, and the longer window lands in the middle of that
+spread rather than at either end. §54's "idle CPU has drifted past its target" was wrong, and it
+was wrong in the way single samples are usually wrong: it was one draw from a distribution, read as
+a trend. The number to trust is the order of magnitude — **under a second an hour, and nearer half
+of one** — not any one reading's decimal.
