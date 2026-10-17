@@ -139,7 +139,8 @@ pip/
 |---|---|---|
 | Processes | 1 | 1 |
 | Idle private memory | ≤ 8 MB | ≤ 5 MB |
-| Idle working set | ≤ 15 MB | ≤ 10 MB |
+| Idle working set, before it has made a sound | ≤ 15 MB | ≤ 10 MB |
+| Idle working set, once it has made a sound | ≤ 20 MB | ≤ 15 MB |
 | Idle CPU (pet visible, blinking) | ≤ 1 s CPU per hour (0.03 % of one core) | ≤ 0.3 s/h |
 | Idle CPU (away / locked) | ≤ 0.2 s per hour | ~0 |
 | Wake-ups while idle | ≤ 1 per 4 s average | none while locked (except scheduled) |
@@ -149,6 +150,17 @@ pip/
 | Executable | ≤ 3 MB, no runtime dependencies | ≤ 1.5 MB |
 | Network (Phase 1) | 0 bytes | — |
 | Disk writes while idle | 0 | — |
+
+**Why the working set has two rows.** Playing one sound makes Windows map its whole audio stack
+into the process, and most of it never leaves: about fourteen megabytes of working set, of which
+roughly three are Pip's own and the rest is operating-system code shared with every other program
+on the machine that plays sound (§66). It is one-time — the two hundredth noise costs no more than
+the first — and it costs no CPU while resident. The single ≤ 15 MB row was written before Pip had
+a voice and described a companion that has never spoken.
+
+Two rows rather than one widened row, deliberately. A target quietly moved to fit what was built
+has stopped being a target, and the first number is still the one to defend: it is the whole cost
+of the program itself, and it is 2.7 MB against a limit of fifteen.
 
 Mobile (Phase 4): no persistent background service; OS-scheduled notifications; background sync
 limited to a few short runs per day; battery attribution "negligible".

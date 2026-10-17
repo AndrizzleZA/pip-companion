@@ -28,6 +28,15 @@ and 6.0 MB and handles between 338 and 418, each drifting up and then back down 
 a leak. Earlier versions of this table quoted the fresh-start figures as though they were the
 connected ones; they were not, and §53 of the design document says so.
 
+**One number the table above does not show.** The first time your companion makes any sound,
+Windows maps its entire audio stack into the process and most of it stays there: about fourteen
+megabytes of working set, of which roughly three are Pip's own and the rest is operating-system
+code shared with every other program on your machine that plays sound. It happens once — the two
+hundredth noise costs no more than the first — and it costs no processor time sitting there; a
+measured Pip with the whole stack resident and nothing happening used 0.04 seconds of CPU per
+hour. Turn sounds off and none of it loads at all. The design document's working-set target is
+written as two rows for this reason rather than one widened one.
+
 There is no account, no server, and no telemetry. Nothing leaves your machine until you connect a
 service, and then only to Google, as you — see [What leaves your machine](#layout) below.
 
