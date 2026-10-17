@@ -2948,3 +2948,63 @@ would mean the earlier run which measured 2.73 MB and no audio stack was the unu
 than the normal one. It is not worth chasing now: every conclusion above holds either way, since
 the cost is one-time and does not recur. It is written down because the alternative is remembering
 it wrong later.
+
+## 67. The idle number was never drifting: it was measuring the pet, 2026-10-17
+
+Ten readings of idle CPU under what was believed to be one protocol: **1.76, 1.02, 0.89, 0.69,
+0.32, 0.26, 0.55, 0.93, 2.1, 4.35.** §54 called the first of those drift and planned a bisect. §63
+called the spread noise and said to trust the order of magnitude. Both were wrong, and the cause
+was sitting in the measuring script the whole time.
+
+**Two faults, both in `tools/measure.ps1`, neither in Pip.**
+
+**One: the settle was 75 seconds and the first-run bubble arrives at 60.** The most expensive
+moment in the process's life — a greeting, a sound and a gesture — sat exactly on the boundary of
+the measured window and fell inside it about half the time. Worse, the sound is what §66 found:
+the first noise loads seven audio modules and opens a device, a few hundred milliseconds of
+one-off work. A ten-minute window multiplies that by six and reports it as an hourly rate, which
+it is not: it happens once per launch and never again. That is the 4.35, the 2.1 and most of the
+1.76. The settle is now 150 seconds, `--cmd show` happens before the window instead of inside it
+so its wave is not counted as idling, and **the script now reports whether the audio stack loaded
+during the window and refuses to let that pass silently** — the one row that would have made this
+visible two weeks ago.
+
+**Two: the target asks about "idle" and idle is a dial the person turns.** With sound never loaded
+at all, the same build measured back to back:
+
+| Liveliness | Idle CPU | |
+|---|---|---|
+| Calm | **0.44 s/h** | ✅ |
+| Normal (the default) | 0.3 – 0.7 s/h across earlier silent runs | ✅ |
+| Lively | **1.36 s/h** | ❌ against ≤ 1 |
+
+A 30 fps animation is the most expensive thing Pip does, and Liveliness decides how often one
+plays: every 1–3 minutes on Lively against every 10–20 on Calm. The whole remaining spread is how
+many animations happened to fall inside the window. The number was never unstable — it was
+faithfully measuring a thing that varies by a factor of three *by design*, against a target written
+as though it did not.
+
+**The target is not being widened, and that is deliberate.** §5 could trivially gain a "Lively
+≤ 2 s/h" row and every number would go green. But §5 already grew a second row today, for the
+audio stack, and the two cases are not alike: that cost is operating-system code, outside this
+program, paid once. This one is ours, it recurs, and it is caused by a dial we chose the detents
+for. A target that moves whenever the thing it measures fails it has stopped being a target, so
+**the Lively overrun stays recorded as a failure** until it is either fixed or consciously
+accepted in writing.
+
+For the record, what failing means here: 1.36 seconds of CPU per hour is 0.038 % of one core, and
+nobody will ever perceive it. That is an argument for not panicking, not for moving the line.
+
+**What could be done about it, when it is worth doing:** drop the idle animation clock from 30 to
+24 fps (a fifth off, and almost certainly invisible on a 100-pixel creature); shorten the longest
+idle animations, several of which run over a second; or widen Lively's interval from 1–3 minutes to
+2–4, which costs the setting the liveliness it was asked for and is therefore the worst of the
+three. None of them is worth doing blind — the first is one constant and a visual check, and that
+is the order to try them in.
+
+**And the tool gained `-Settings`**, which is how the table above exists at all: it copies a seed
+`settings.json` into the throw-away profile, so a *configuration* can be measured rather than only
+the defaults. The seeds for the run above hold three fields. Copying a real profile was the first
+instinct and the wrong one: it carries somebody's reminders and connected accounts into a
+throw-away instance, which would both pollute the measurement and sync somebody's live data from a
+process built to be deleted.

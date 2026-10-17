@@ -9,12 +9,18 @@
   cold launches.
 
   Usage:  powershell -ExecutionPolicy Bypass -File tools\measure.ps1 [-Minutes 10] [-Launches 5]
+          [-Settings seed.json]  measures that configuration instead of the defaults
 #>
 param(
     [switch]$Awake,
     [double]$Minutes = 10,
     [int]$Launches = 5,
-    [string]$Exe = "$PSScriptRoot\..\target\release\pip.exe"
+    [string]$Exe = "$PSScriptRoot\..\target\release\pip.exe",
+    # A settings.json to start the throw-away profile from, so a *configuration* can be measured
+    # rather than only the defaults. Liveliness is the one that matters most: how often the idle
+    # animation clock runs is the largest thing in the idle CPU figure, and "Calm" and "Lively"
+    # are a factor of ten apart in how often it runs (§67).
+    [string]$Settings
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +38,7 @@ $Exe = (Resolve-Path $Exe).Path
 $data = Join-Path $env:TEMP ("pip-measure-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force $data | Out-Null
 $env:PIP_DATA_DIR = $data
+if ($Settings) { Copy-Item (Resolve-Path $Settings).Path (Join-Path $data "settings.json") -Force }
 if ($Awake) { $env:PIP_MEASURE_AWAKE = "1" } else { Remove-Item Env:PIP_MEASURE_AWAKE -ErrorAction SilentlyContinue }
 
 function Stop-Pip { & $Exe --cmd quit | Out-Null; Start-Sleep -Milliseconds 700 }
@@ -52,9 +59,25 @@ for ($i = 0; $i -lt $Launches; $i++) {
 }
 
 # --- Idle ---------------------------------------------------------------------------------
+#
+# The settle used to be 75 seconds, and the first-run bubble arrives at 60 with a sound and a
+# gesture behind it. So the most expensive moment in the process's life sat right on the boundary
+# and fell inside the measured window about half the time, which is most of what made this number
+# read 0.55 one hour and 4.35 the next (§54 called that drift, §66 found the audio stack, and this
+# is the rest of the answer). Playing the first sound loads seven audio modules and opens a device,
+# a few hundred milliseconds of one-off work that a ten-minute window then multiplies by six.
+#
+# 150 seconds puts the bubble, its noise and its animation well behind us, and `show` happens
+# before the window rather than inside it so its wave is not counted as idling either.
 $p = Start-Process $Exe -ArgumentList '--portable' -PassThru
-Start-Sleep -Seconds 75                      # steady state: after pop-in and the 60 s first-run bubble
+Start-Sleep -Seconds 20
 & $Exe --cmd "show" | Out-Null               # (dismisses nothing; just proves the channel works)
+Start-Sleep -Seconds 130
+function Audio-Modules($proc) {
+    $proc.Refresh()
+    ($proc.Modules | Where-Object { $_.ModuleName -match 'MMDevAPI|AUDIOSES|wdmaud|msacm' } | Measure-Object).Count
+}
+$audio0 = Audio-Modules $p
 $p.Refresh()
 $cpu0 = $p.TotalProcessorTime.TotalMilliseconds
 $cyc0 = Get-Cycles $p
@@ -72,6 +95,7 @@ while ((Get-Date) -lt $end) {
         PrivWS  = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.Id)").WorkingSetPrivate
     }
 }
+$audio1 = Audio-Modules $p
 $p.Refresh()
 $cpuMs = $p.TotalProcessorTime.TotalMilliseconds - $cpu0
 $cycMs = (Get-Cycles $p) - $cyc0; $cycMs = $cycMs / ($ghz * 1e6)
@@ -100,10 +124,19 @@ $rows = @(
     @("Startup", $(if ($st) { "$([math]::Round($st.Average)) ms avg ($($st.Minimum)-$($st.Maximum))" } else { "n/a" }), "<= 150 ms", $(if ($st -and $st.Maximum -le 150) { "PASS" } else { "CHECK" })),
     @("Threads (max)", "$th", "few", "INFO"),
     @("Handles (max)", "$hd", "stable", "INFO"),
-    @("Executable", "$exeKB KB", "<= 3 MB", $(if ($exeKB -le 3072) { "PASS" } else { "FAIL" }))
+    @("Executable", "$exeKB KB", "<= 3 MB", $(if ($exeKB -le 3072) { "PASS" } else { "FAIL" })),
+    # Whether the companion made its first noise inside the window, because that one-off cost is
+    # several hundred milliseconds and this window extrapolates whatever it contains.
+    @("Audio stack", $(if ($audio1 -gt $audio0) { "LOADED DURING THE WINDOW" } elseif ($audio1 -gt 0) { "already resident" } else { "never loaded (silent run)" }), "resident or absent", $(if ($audio1 -gt $audio0) { "CHECK" } else { "INFO" }))
 )
 "`nPip resource measurement  ({0:N1} min idle window, {1} launches, pet {2})`n" -f $Minutes, $Launches, $(if ($Awake) { "forced awake" } else { "free to nap when you are away" })
 "{0,-22} {1,-46} {2,-10} {3}" -f "Metric", "Measured", "Target", "Result"
 "{0,-22} {1,-46} {2,-10} {3}" -f "------", "--------", "------", "------"
 foreach ($r in $rows) { "{0,-22} {1,-46} {2,-10} {3}" -f $r[0], $r[1], $r[2], $r[3] }
+if ($audio1 -gt $audio0) {
+    Write-Host ""
+    Write-Host "The first sound played inside the measured window, so the CPU figure above contains" -ForegroundColor Yellow
+    Write-Host "several hundred milliseconds of one-off audio setup multiplied out to an hourly rate." -ForegroundColor Yellow
+    Write-Host "It is not a steady-state reading. Run it again." -ForegroundColor Yellow
+}
 Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
