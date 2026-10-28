@@ -3141,3 +3141,119 @@ other. It is a good idea for the day that number is closed, and a bad idea today
 the mail rules and the bubble cards are all untouched: `act` returned one animation and now returns
 two, and that is the entire interface change. Every promise §7 and §28 made about not nagging is
 held by the same tests as before, which still pass unmodified.
+
+## 69. It was never the animations. It was the blinking, 2026-10-28
+
+§67 left three candidate fixes for `Lively` overrunning the idle-CPU target, cheapest first, and
+the note that none was worth doing blind. The cheapest was done, measured properly, and fixed
+nothing — because it was aimed at the wrong half of the program. This is what was actually there,
+and how four measurements in a row failed to show it.
+
+### The frame rate was the wrong lever, and a count says so
+
+The idle animation clock went from 30 fps to 24, reasoning that animations are the most expensive
+thing the companion does and a fifth of them could go unseen. The reasoning was never checked.
+Checked:
+
+| Build | Drawings in five minutes, `Lively` |
+|---|---|
+| 24 fps | 177 |
+| 30 fps | 178 |
+
+One drawing. **The frame rate barely moves the idle figure, because the idle figure is barely made
+of animation frames.** Reverted — it traded smoothness for nothing, and "nothing" is now measured
+rather than assumed. The commit and its revert both stay in history: the wrong turn is worth being
+able to find.
+
+### What the drawings actually are
+
+Every idle animation carries a cooldown of between forty-five seconds and forty-five minutes (§8,
+§64). For most of the companion's waking life every candidate is on cooldown, the chooser returns
+nothing, and the tick spends itself on a blink — two renders, the cheap path that exists precisely
+to avoid starting the animation clock.
+
+177 drawings in five minutes is **78 blinks and one animation.** It was never an animation budget.
+It was a blink budget.
+
+And the blink interval was tied to liveliness:
+
+| | Woke to blink every | Did something every |
+|---|---|---|
+| Calm | 5–11 s | 10–20 min |
+| Normal | 4.5–9 s | 3–6 min |
+| Lively | **2.2–5.5 s** | 1–3 min |
+
+`Lively` woke about twice as often as `Calm` to do the one thing that is not liveliness. The
+0.44-against-1.36 gap that §67 spent a day explaining as "liveliness controls animation frequency"
+was mostly the ratio between two blink rates. §67 was closer than §54 and §63, and still wrong.
+
+### The fix is one number
+
+One blink rate for every setting, and it is the calm one: 5–11 seconds. How often the companion
+*does something* stays exactly where it was, on its own separate timer, because that is the thing
+the setting is named after and the thing the person chose.
+
+Both builds, side by side, in the same five minutes on the same desktop:
+
+| | Drawings |
+|---|---|
+| As it was | 85 |
+| Blink unhooked | **43** |
+
+Halved, which is what the constants say it must be: a mean interval of 3.85 s became 8 s. A
+thirty-second probe agrees from the other direction — one blink every 6.7 seconds, inside the new
+range. Three independent agreements, which is the standard this number has never once met before.
+
+Blinking every seven seconds instead of every four is invisible on a creature a hundred pixels
+tall. Doing something every two minutes instead of every fifteen is the whole of what somebody
+chose when they chose `Lively`, and it is untouched. `Calm` is unchanged — its rate is now
+everybody's. `Normal` blinks slightly slower than it did.
+
+### Why four measurements in a row said nothing
+
+The same binary, in conditions meant to be identical: **1.36, 1.47, 2.41, 1.66, 1.97 s/h.** A
+spread of a full second per hour, hunting a difference of 0.3. And counting was no better at first
+— the same unchanged build produced 178, then 149, then 45 drawings in three sequential runs.
+
+Every cause turned out to be the companion behaving correctly:
+
+- **Windows drops the low-priority timer** the animation clock runs on when the machine is busy, so
+  a loaded machine makes the pet animate *less* and read *cheaper*. The machine was busy compiling
+  the build being measured.
+- **It stands down entirely behind a fullscreen window** (the `ABN_FULLSCREENAPP` handling in §4's "not annoying"), so a run that overlaps somebody
+  watching something measures an inert process. One paired run came back 5 drawings against 5 —
+  both switched off, both identical, measuring nothing. That reading is the proof the method works
+  and the proof that the desktop dominates it.
+- **It sleeps when nobody is there**, which `PIP_MEASURE_AWAKE` exists to defeat, and which an
+  earlier run forgot to pass.
+- **It gets sleepy towards bedtime** and changes what it chooses to do, so two runs an hour apart
+  are two different experiments.
+
+### So: count, and pair
+
+Two rules out of a day of bad numbers.
+
+**When the effect is smaller than the noise, stop timing and start counting.** The frame counter
+was already in the program, exposed by `--cmd stats`. A count has no noise floor.
+
+**And when the environment cannot be held still, do not hold it still — share it.** Two instances,
+the same five minutes, the same desktop, the same fullscreen window and the same load: whatever the
+conditions were, both halves got them. Pip keys its instance on `PIP_DATA_DIR`, so two companions
+run side by side without seeing each other, which makes the paired experiment free.
+`tools/count-paired.sh` is four lines of it.
+
+This does not retire `tools/measure.ps1`: working set, handles, threads, startup and process count
+are all still worth what it says. But a CPU figure out of it is worth about **±0.5 s/h**, which
+means no target under roughly 2 s/h can be *confirmed* by it — only failed. Better written down
+than rediscovered every few weeks, which is now the third time.
+
+### What this does to §67
+
+§67 refused to widen the target so that `Lively` would pass, and that refusal stands. But the
+sentence it was defending — "Lively genuinely fails at 1.36" — was reporting a blink rate to two
+significant figures off an instrument good for one. The overrun was real, its cause was
+misattributed, and the fix cost one constant.
+
+Four sections, five diagnoses, one cause. The pattern in every one of them: **when this number
+surprised somebody, the fault was in the measuring, and never once in the program.** Worth
+remembering the next time it surprises somebody.
