@@ -2055,6 +2055,15 @@ impl App {
                     "wave" => AnimKind::Wave,
                     "stretch" => AnimKind::Stretch,
                     "blink" => AnimKind::Blink,
+                    // The §68 gestures, so each beat of a sequence can be held still and looked
+                    // at. A four-beat animation is four decisions, and watching it at speed is no
+                    // way to tell which of the four is wrong.
+                    "peer" => AnimKind::Peer,
+                    "alert" => AnimKind::Alert,
+                    "rush" => AnimKind::Rush,
+                    "point" => AnimKind::Point,
+                    "thirsty" => AnimKind::Thirsty,
+                    "fidget" => AnimKind::Fidget,
                     _ => AnimKind::Hop,
                 };
                 let offset = (kind.duration_ms() as f32 * t) as u64;
