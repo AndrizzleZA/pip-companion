@@ -45,7 +45,12 @@ pub const T_HEALTH: usize = 16;
 /// dealt with, and never set past the ceiling.
 pub const T_ATTN: usize = 17;
 
-const FRAME_MS: u32 = 33;
+/// 24 frames a second, not 30. Animations are wall-clock driven, so this drops a fifth of the
+/// drawings out of every gesture without making any gesture slower or shorter — on a creature a
+/// hundred pixels tall there is nothing there to see. It is the only idle-CPU saving available that
+/// costs nothing anyone can perceive; shortening the gestures themselves would cost a yawn that
+/// reads as a yawn, for a hundredth of a percent of one core (§67).
+const FRAME_MS: u32 = 42;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
 const STARTUP_GRACE_MS: u64 = 45_000;
 const AWAY_AFTER_MS: u64 = 5 * 60_000;
@@ -629,7 +634,7 @@ impl App {
             }
             if kind == AnimKind::Blink {
                 // A blink is two frames (shut, then open 110 ms later) instead of running the
-                // 30 fps animation clock — the single biggest idle-CPU saving.
+                // animation clock at all — the single biggest idle-CPU saving.
                 self.pet.eyes_shut = true;
                 self.render();
                 self.set_timer(T_BLINK, 110);
