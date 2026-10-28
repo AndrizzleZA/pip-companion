@@ -479,6 +479,21 @@ pub enum AnimKind {
     Tap,
     /// A small two-step with a wag at the end. The biggest thing it does that is not a celebration.
     Dance,
+    /// Glances up at the screen and back: the whole of a low-priority ask (§68).
+    Peer,
+    /// A double-take. Dips away, snaps round wide-eyed, rings. The anticipation beat that goes
+    /// in front of anything urgent.
+    Alert,
+    /// The important-email performance: recoils, comes *to* the person, waves with both arms,
+    /// stops dead and points at the screen, then goes back to where it was standing.
+    Rush,
+    /// Leans in and holds one arm out at what matters. The normal-priority ask.
+    Point,
+    /// Asks for water by miming the absence of it: looks about, tips its head back over an empty
+    /// nothing, slumps. Not [`AnimKind::Drink`], which is the glass already drunk.
+    Thirsty,
+    /// Restless. Weight side to side, a foot going, a look away, a huff.
+    Fidget,
 }
 
 /// How far along the ground an animation wants the creature to be, in design units.
@@ -502,6 +517,12 @@ pub fn walk_offset(kind: AnimKind, t: f32) -> f32 {
         AnimKind::Pounce => {
             // The pounce itself carries it forward, and it walks back looking puzzled.
             9.0 * smooth(0.30, 0.42, t) - 9.0 * smooth(0.62, 0.90, t)
+        }
+        AnimKind::Rush => {
+            // Towards the person and back. Sixteen units is as far as anything in this program
+            // travels and it is deliberately less than the wander: a creature that crosses the
+            // desk at you is alarming rather than endearing, and the window has to hold it.
+            16.0 * smooth(0.12, 0.34, t) - 16.0 * smooth(0.80, 0.98, t)
         }
         _ => 0.0,
     }
@@ -593,6 +614,16 @@ impl AnimKind {
             AnimKind::Found => 3000,
             AnimKind::Tap => 1600,
             AnimKind::Dance => 2000,
+            // The reminder vocabulary (§68). Peer is deliberately the shortest thing in the
+            // table bar a blink: a low-priority ask that outstays its welcome is not low priority.
+            AnimKind::Peer => 700,
+            AnimKind::Alert => 800,
+            // Four beats and two journeys. The longest animation in the program, and the only one
+            // allowed to be: it is what an important email gets, and nothing else uses it.
+            AnimKind::Rush => 2800,
+            AnimKind::Point => 1300,
+            AnimKind::Thirsty => 1800,
+            AnimKind::Fidget => 1500,
         }
     }
 }
@@ -1279,6 +1310,164 @@ pub fn animate(kind: AnimKind, t: f32, p: &mut Pose) {
             p.mouth = Mouth::Grin;
             p.blush = p.blush.max(0.65);
         }
+        // -- The reminder vocabulary (§68) -----------------------------------------------------
+        //
+        // These six exist because the reminders were being mimed with gestures borrowed from
+        // elsewhere: an important email knocked on the glass like a tooltip, and being asked to
+        // drink replayed the same swallow used to confirm a glass already drunk. Each of these
+        // says one thing, and the whole of what it says is in the body.
+        AnimKind::Peer => {
+            // The entire low-priority ask: look up at the screen, hold it, look back. No travel,
+            // no arms, no noise. Something that has *noticed*, not something performing.
+            let up = smooth(0.08, 0.30, t) * (1.0 - smooth(0.64, 0.94, t));
+            p.look_y = -0.75 * up;
+            p.look_x = 0.30 * up;
+            p.tilt += 4.5 * up;
+            p.dy -= 1.2 * up;
+            p.eyes = Eyes::Open;
+            p.mouth = Mouth::Tiny;
+        }
+        AnimKind::Alert => {
+            // The double-take, and the one piece of real craft in this set: it dips *away* before
+            // it snaps towards. Anticipation is what makes a snap read as a reaction instead of a
+            // jump cut, and here it costs one extra term. The ring afterwards is the body carrying
+            // on for a moment after the head has stopped -- follow-through, for the same price.
+            let dip = (smooth(0.0, 0.10, t) - smooth(0.10, 0.22, t)).max(0.0);
+            let snap = smooth(0.12, 0.24, t) * (1.0 - smooth(0.78, 1.0, t));
+            let ring = (t * 11.0 * PI).sin() * (1.0 - smooth(0.24, 0.66, t));
+            p.dy += 1.4 * dip;
+            p.sy *= 1.0 - 0.10 * dip + 0.08 * snap;
+            p.sx *= 1.0 + 0.08 * dip - 0.05 * snap;
+            p.dy -= 5.0 * snap;
+            p.tilt += 3.0 * ring * snap;
+            p.leaf += 22.0 * ring * snap;
+            p.look_y = -0.6 * snap;
+            p.eyes = if snap > 0.3 { Eyes::Wide } else { Eyes::Open };
+            p.mouth = if snap > 0.3 { Mouth::O } else { Mouth::Tiny };
+            p.arm_l = p.arm_l.max(0.35 * snap);
+            p.arm_r = p.arm_r.max(0.35 * snap);
+        }
+        AnimKind::Rush => {
+            // Important mail, and the only animation in the program with four beats: it recoils,
+            // comes *to* you, waves with both arms, points at the screen, and goes back. The
+            // travel is in `walk_offset`; what is here is what the body does on the way.
+            let recoil = (smooth(0.0, 0.07, t) - smooth(0.07, 0.16, t)).max(0.0);
+            let out = smooth(0.12, 0.34, t) * (1.0 - smooth(0.80, 0.98, t));
+            p.dy += 1.6 * recoil;
+            p.sy *= 1.0 - 0.11 * recoil;
+            p.sx *= 1.0 + 0.09 * recoil;
+            p.eyes = Eyes::Wide;
+            p.mouth = Mouth::O;
+            // Leaning into the journey, both ways.
+            p.tilt += 7.0 * out;
+            p.look_x = 0.6 * out;
+            if (0.34..0.64).contains(&t) {
+                // The frantic part. Both arms, twice the rate of a friendly wave, and a bob under
+                // it: one arm at wave speed is hello, two arms at this speed is *look*.
+                let k = (t - 0.34) / 0.30;
+                let flap = (k * 7.0 * PI).sin();
+                let hold = smooth(0.0, 0.12, k) * (1.0 - smooth(0.86, 1.0, k));
+                p.arm_l = (0.80 + 0.20 * flap) * hold;
+                p.arm_r = (0.80 - 0.20 * flap) * hold;
+                p.dy -= 4.6 * (k * 6.0 * PI).sin().abs() * hold;
+                p.tilt += 4.0 * flap * hold;
+                p.leaf += 26.0 * flap * hold;
+            } else if (0.64..0.82).contains(&t) {
+                // And then it stops dead and points. The stillness is the point of the stillness:
+                // after that much flapping, one held arm is the loudest thing it can do.
+                let k = (t - 0.64) / 0.18;
+                let hold = smooth(0.0, 0.18, k) * (1.0 - smooth(0.82, 1.0, k));
+                p.arm_r = 0.95 * hold;
+                p.arm_l = 0.10 * hold;
+                // Four degrees, with a lift under it. Five put the corner of the widest body
+                // 0.1 of a unit through the bottom of the window — which the floor test caught
+                // and nobody's eye would have, until the day somebody chose that creature.
+                p.tilt += 4.0 * hold;
+                p.dy -= 1.2 * hold;
+                p.look_y = -0.8 * hold;
+                p.mouth = Mouth::Grin;
+            }
+            if t >= 0.82 {
+                // Back where it was, and pleased with itself rather than apologetic.
+                p.eyes = Eyes::Happy;
+                p.mouth = Mouth::Smile;
+            }
+        }
+        AnimKind::Point => {
+            // Lean in, one arm out at the thing that matters, hold long enough to be followed,
+            // and drop. The normal-priority version of the rush, for everything that is worth a
+            // gesture but not worth a performance.
+            let lean = smooth(0.06, 0.24, t) * (1.0 - smooth(0.76, 1.0, t));
+            p.tilt += 8.0 * lean;
+            p.dy -= 2.4 * lean;
+            p.arm_r = 0.90 * lean;
+            p.look_x = 0.55 * lean;
+            p.look_y = -0.45 * lean;
+            p.eyes = Eyes::Open;
+            p.mouth = Mouth::Tiny;
+            // One small insistence halfway through, so a long hold does not read as a frozen frame.
+            if (0.42..0.56).contains(&t) {
+                let j = (((t - 0.42) / 0.14) * PI).sin();
+                p.arm_r += 0.10 * j;
+                p.tilt += 2.5 * j;
+            }
+        }
+        AnimKind::Thirsty => {
+            // Asking for water, which is a different thing from drinking it: it looks about for a
+            // glass, finds nothing, tips its head back over the nothing anyway, and gives up. No
+            // `Acc::Sip` anywhere in it -- the absence of the drop is the whole joke.
+            let look = smooth(0.04, 0.18, t) * (1.0 - smooth(0.34, 0.44, t));
+            let turn = smooth(0.16, 0.30, t);
+            p.look_x = -0.8 * look * (1.0 - turn) + 0.8 * look * turn;
+            p.tilt += 5.0 * look * (1.0 - 2.0 * turn);
+            if (0.44..0.78).contains(&t) {
+                // Head back, arm up holding the glass that is not there.
+                let k = (t - 0.44) / 0.34;
+                let up = smooth(0.0, 0.26, k) * (1.0 - smooth(0.72, 1.0, k));
+                p.tilt -= 9.0 * up;
+                p.dy -= 1.8 * up;
+                p.arm_r = 0.85 * up;
+                p.look_y = -0.7 * up;
+                p.mouth = Mouth::O;
+                p.eyes = Eyes::Closed;
+            } else if t >= 0.78 {
+                // Nothing came out. A small slump, and a look at whoever is responsible.
+                let s = smooth(0.78, 0.92, t) * (1.0 - smooth(0.96, 1.0, t));
+                p.sy *= 1.0 - 0.06 * s;
+                p.sx *= 1.0 + 0.05 * s;
+                p.dy += 1.2 * s;
+                p.mouth = Mouth::Wobble;
+                p.look_y = -0.3 * s;
+                p.eyes = Eyes::Open;
+            } else {
+                p.eyes = Eyes::Open;
+                p.mouth = Mouth::Tiny;
+            }
+        }
+        AnimKind::Fidget => {
+            // Restless: the body language of having been sat still too long. Weight from one side
+            // to the other, a foot going, and a look away at nothing in particular. This is what a
+            // break reminder looks like from the inside.
+            let ramp = smooth(0.0, 0.16, t) * (1.0 - smooth(0.84, 1.0, t));
+            let sway = (t * 2.0 * PI).sin();
+            p.tilt += 6.0 * sway * ramp;
+            p.dy -= 1.4 * sway.abs() * ramp;
+            // The foot: four times the rate of the sway, and the thing anyone actually reads as
+            // impatience.
+            p.feet_drop += 1.5 * (t * 8.0 * PI).sin().abs() * ramp;
+            p.look_x = 0.5 * (t * PI).cos() * ramp;
+            p.arm_l = 0.20 * ramp;
+            p.arm_r = 0.20 * ramp;
+            p.eyes = Eyes::Open;
+            p.mouth = Mouth::Tiny;
+            // A huff near the end, which is the only part of this that is funny.
+            if (0.66..0.80).contains(&t) {
+                let h = (((t - 0.66) / 0.14) * PI).sin();
+                p.sy *= 1.0 + 0.05 * h;
+                p.mouth = Mouth::O;
+                p.leaf += 14.0 * h;
+            }
+        }
         AnimKind::GetUp => {
             let k = 1.0 - smooth(0.22, 0.78, t);
             p.burrow = 1.0 - smooth(0.70, 1.0, t);
@@ -1938,7 +2127,7 @@ mod shape_tests {
     /// ends a pixel out would walk the pet across the desk over a morning, one trip at a time.
     #[test]
     fn everything_that_walks_comes_back_to_where_it_started() {
-        for kind in [AnimKind::Wander, AnimKind::Stumble, AnimKind::Pounce] {
+        for kind in [AnimKind::Wander, AnimKind::Stumble, AnimKind::Pounce, AnimKind::Rush] {
             assert_eq!(walk_offset(kind, 0.0), 0.0, "{kind:?} does not start where it stands");
             assert_eq!(walk_offset(kind, 1.0), 0.0, "{kind:?} does not finish where it started");
             // And it must stay on the desk on the way: the window clamps to the monitor, so a
@@ -2000,7 +2189,7 @@ mod shape_tests {
     }
 
     /// Everything, so a new animation is covered by the checks above without being added to a list.
-    const ALL_ANIMS: [AnimKind; 38] = [
+    const ALL_ANIMS: [AnimKind; 44] = [
         AnimKind::Blink, AnimKind::Hop, AnimKind::Wave, AnimKind::Celebrate, AnimKind::Drink,
         AnimKind::LookAround, AnimKind::Stretch, AnimKind::Wiggle, AnimKind::WakeUp, AnimKind::PopIn,
         AnimKind::Nod, AnimKind::Yawn, AnimKind::Sniff, AnimKind::Scratch, AnimKind::Sneeze,
@@ -2009,7 +2198,8 @@ mod shape_tests {
         AnimKind::GetUp, AnimKind::GetUpSlow, AnimKind::SleepBreath, AnimKind::SleepTwitch,
         AnimKind::SleepRoll, AnimKind::SleepStartle, AnimKind::SleepPeek, AnimKind::Wander,
         AnimKind::Stumble, AnimKind::Curious, AnimKind::Pounce, AnimKind::Shake, AnimKind::Found,
-        AnimKind::Tap, AnimKind::Dance,
+        AnimKind::Tap, AnimKind::Dance, AnimKind::Peer, AnimKind::Alert, AnimKind::Rush,
+        AnimKind::Point, AnimKind::Thirsty, AnimKind::Fidget,
     ];
 
     /// Nothing that stays put may quietly acquire a journey.

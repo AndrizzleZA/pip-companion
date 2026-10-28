@@ -510,8 +510,30 @@ impl App {
         self.render();
     }
 
+    /// A gesture, and what to do when it has finished.
+    ///
+    /// The second half of a reminder: `Alert` then `Rush`, `Thirsty` then a shrug. The frame timer
+    /// is already running for the first one and picks the second up in `on_frame`, so a sequence
+    /// costs what the two animations cost and not one timer more. One deep by design — see
+    /// [`Pet::then`].
+    pub fn anim_then(&mut self, kind: AnimKind, then: Option<AnimKind>) {
+        self.anim(kind);
+        if self.pet.anim.is_some() {
+            self.pet.then = then;
+        }
+    }
+
     fn on_frame(&mut self) {
         self.pet.finish_anim_if_done();
+        // The second beat of a reminder, if there is one. This is the whole cost of sequences: a
+        // check on a frame that was already being drawn. `start_anim` clears the slot, so the
+        // chain is one deep and cannot refill itself.
+        if self.pet.anim.is_none() && !self.burrowing_out {
+            if let Some(next) = self.pet.then.take() {
+                self.anim(next);
+                return;
+            }
+        }
         // The hole has closed over; now the window can actually go. The flag stays *set* across
         // this call on purpose: `set_visible` reads it to tell "start digging" from "the digging
         // is done", and clearing it here sent the second call straight back into the first branch —
@@ -990,25 +1012,37 @@ impl App {
         let key = self.pending[0].key.clone();
         let attempt = self.pending[0].attempts;
         // One decision, in `attention`: which gesture, which noise, and whether to come back.
-        let act = crate::attention::act(
-            self.settings.pet.attention,
-            &key,
-            prio,
+        let act = crate::attention::act(crate::attention::Ask {
+            style: self.settings.pet.attention,
+            who: self.settings.pet.character.shown(self.state.experience),
+            key: &key,
+            priority: prio,
             attempt,
-            self.settings.notify.sound && sound,
-            self.holding_interruptions(),
-        );
+            sound_on: self.settings.notify.sound && sound,
+            quiet: self.holding_interruptions(),
+            roll: self.rand(),
+        });
         // Mid-burrow the window is still up, but it is on its way out and the bubble would be
         // thrown away with it in half a second. Hidden was asked for and is already recorded, so
         // this goes the way anything for a hidden pet goes: the notification area.
         if self.pet.visible && !self.burrowing_out {
             self.pet.show_bubble(card);
             self.set_timer(T_BUBBLE, self.settings.notify.bubble_minutes * 60_000);
-            if self.asleep() {
+            let was_asleep = self.asleep();
+            if was_asleep {
                 self.wake_until_ms = tick_ms() + 60_000;
             }
             if let Some(a) = act.anim {
-                self.anim(a);
+                // What it was doing when the reminder arrived is part of the reaction. Something
+                // that was asleep opens its eyes first and then says the thing, which is both
+                // truer and better to watch than a sleeping creature snapping into a double-take.
+                // The gesture's own follow-on is given up for that: the chain is one deep, and
+                // waking up earns the slot.
+                if was_asleep {
+                    self.anim_then(AnimKind::WakeUp, Some(a));
+                } else {
+                    self.anim_then(a, act.follow);
+                }
             }
             self.arm_clock();
         } else if prio >= Priority::Normal {
@@ -1036,16 +1070,18 @@ impl App {
         if self.locked || self.away || self.fullscreen || self.night_burrow() || !self.pet.visible {
             return;
         }
-        let act = crate::attention::act(
-            self.settings.pet.attention,
-            &key,
-            prio,
+        let act = crate::attention::act(crate::attention::Ask {
+            style: self.settings.pet.attention,
+            who: self.settings.pet.character.shown(self.state.experience),
+            key: &key,
+            priority: prio,
             attempt,
-            self.settings.notify.sound,
-            self.holding_interruptions(),
-        );
+            sound_on: self.settings.notify.sound,
+            quiet: self.holding_interruptions(),
+            roll: self.rand(),
+        });
         if let Some(a) = act.anim {
-            self.anim(a);
+            self.anim_then(a, act.follow);
         }
         if let Some(s) = act.sound {
             self.play_sfx(s);
@@ -1900,6 +1936,70 @@ impl App {
                 self.present(d, false);
                 "ok".into()
             }
+            // Fires one of each kind of reminder, which is the only way to *watch* what §68 did:
+            // the gestures are chosen per creature and per priority, and the whole point of them
+            // is how they look. `mail` plants one fake message so the grouped card has something
+            // to say, and takes it straight back out again when the item is answered.
+            "fire" => {
+                let mut it = arg.split_whitespace();
+                let what = it.next().unwrap_or("mail");
+                let prio = match it.next() {
+                    Some("low") => Priority::Low,
+                    Some("normal") => Priority::Normal,
+                    _ => Priority::High,
+                };
+                let key = match what {
+                    "water" => ItemKey::Water,
+                    "brief" => ItemKey::Brief,
+                    "date" => {
+                        let id = "dev-date".to_string();
+                        if !self.settings.dates.items.iter().any(|d| d.id == id) {
+                            let today = local(&Local, now_unix()).date();
+                            self.settings.dates.items.push(pip_core::dates::ImportantDate {
+                                id: id.clone(),
+                                title: "Somebody's birthday".into(),
+                                month: chrono::Datelike::month(&today),
+                                day: chrono::Datelike::day(&today),
+                                ..Default::default()
+                            });
+                        }
+                        ItemKey::Date(id)
+                    }
+                    "mail" => {
+                        if self.state.mail_pending.is_empty() {
+                            self.state.mail_pending.push(pip_core::email::EmailMsg {
+                                id: "dev-mail".into(),
+                                account_id: "dev".into(),
+                                from_name: "A Very Important Person".into(),
+                                from_addr: "vip@example.com".into(),
+                                subject: "This one actually matters".into(),
+                                labels: Vec::new(),
+                                received: now_unix(),
+                            });
+                        }
+                        ItemKey::Mail
+                    }
+                    _ => {
+                        let id = "dev-reminder".to_string();
+                        if !self.settings.reminders.iter().any(|r| r.id == id) {
+                            let mut r = pip_core::settings::CustomReminder::new(
+                                id.clone(),
+                                "Stand-up meeting",
+                                Vec::new(),
+                                pip_core::time::DaySet::WEEKDAYS,
+                                now_unix(),
+                            );
+                            r.enabled = false;
+                            self.settings.reminders.push(r);
+                        }
+                        ItemKey::Custom(id)
+                    }
+                };
+                self.pending.retain(|p| p.key != key);
+                self.pet.bubble = None;
+                self.present(Due { key, occurrence: now_unix(), priority: prio, late: false }, true);
+                "ok".into()
+            }
             "click" => {
                 self.click_creature();
                 "ok".into()
@@ -1931,6 +2031,14 @@ impl App {
                     "look" => AnimKind::LookAround,
                     "stretch" => AnimKind::Stretch,
                     "wiggle" => AnimKind::Wiggle,
+                    // The §68 vocabulary, so each new gesture can be looked at on its own rather
+                    // than only as half of a reminder.
+                    "peer" => AnimKind::Peer,
+                    "alert" => AnimKind::Alert,
+                    "rush" => AnimKind::Rush,
+                    "point" => AnimKind::Point,
+                    "thirsty" => AnimKind::Thirsty,
+                    "fidget" => AnimKind::Fidget,
                     _ => AnimKind::Blink,
                 };
                 self.anim(k);

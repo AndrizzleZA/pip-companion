@@ -91,6 +91,13 @@ pub struct Pet {
     pub visible: bool,
     pub bubble: Option<Bubble>,
     pub anim: Option<(AnimKind, u64)>,
+    /// One gesture waiting for the running one to end, and no more than one.
+    ///
+    /// Reminders are sequences now -- a double-take and then a point, a thirsty mime and then a
+    /// shrug -- and this is the whole of the machinery for it. `App::on_frame` already runs for
+    /// the duration of the first animation, finds this when that animation finishes, and starts
+    /// it. Nothing new ticks, and when the second one ends there is nothing left to start.
+    pub then: Option<AnimKind>,
     pub hover_btn: Option<usize>,
     pub mouse_inside: bool,
     pub press: Option<Press>,
@@ -130,6 +137,7 @@ impl Pet {
             visible: true,
             bubble: None,
             anim: None,
+            then: None,
             hover_btn: None,
             mouse_inside: false,
             press: None,
@@ -184,6 +192,9 @@ impl Pet {
 
     pub fn start_anim(&mut self, kind: AnimKind) {
         self.anim = Some((kind, tick_ms()));
+        // A new gesture cancels whatever the last one had queued: that sequence is over, and a
+        // follow-on landing after an unrelated animation reads as a twitch rather than a beat.
+        self.then = None;
     }
 
     /// Points the next journey at whichever side has room for it.

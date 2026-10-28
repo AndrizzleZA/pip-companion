@@ -3008,3 +3008,136 @@ the defaults. The seeds for the run above hold three fields. Copying a real prof
 instinct and the wrong one: it carries somebody's reminders and connected accounts into a
 throw-away instance, which would both pollute the measurement and sync somebody's live data from a
 process built to be deleted.
+
+## 68. A gesture that means the thing it is about, 2026-10-28
+
+The reminders were being mimed with gestures borrowed from elsewhere. An important email knocked
+on the glass — the same two taps a tooltip uses. Being asked to drink replayed `Drink`, which is
+the swallow played *after* a glass is logged, so the companion answered "have some water" with "I
+have had some water". Dates celebrated, events waved, and every creature did all of it identically
+with a different noise over the top. Nothing was wrong, and nothing meant anything.
+
+Six animations and one table later, each reminder says what it is with its body.
+
+### What was added, and what it costs
+
+| Animation | ms | What it is for |
+|---|---|---|
+| `Peer` | 700 | The whole of a low-priority ask: a glance up at the screen and back |
+| `Alert` | 800 | A double-take. Dips *away*, snaps round wide-eyed, rings |
+| `Rush` | 2800 | Important mail: recoil, come at the person, both arms, stop dead, point |
+| `Point` | 1300 | Lean in and hold one arm out at what matters |
+| `Thirsty` | 1800 | Asking for water by miming the absence of it |
+| `Fidget` | 1500 | Restless: weight shifting, a foot going, a huff |
+
+They cost nothing when nothing is due. Each is a function of `t` evaluated inside the frame loop
+that was already running for the animation itself, in the same `animate` match as the other
+thirty-eight, and the frame loop stops when the gesture ends. No new timer, no new thread, no new
+state beyond one `Option<AnimKind>`. The executable is unchanged at 2156 KB.
+
+**`Alert` is the one with craft in it.** It dips away from the thing before it snaps towards it.
+That is anticipation, the oldest trick in hand-drawn animation, and it costs one extra term in an
+expression: without it a snap reads as a dropped frame, and with it the same snap reads as a
+creature reacting. The ring afterwards is follow-through, for the same price. Everything expressive
+about these six is timing, not pixels — which is the only kind of expressive this program can
+afford.
+
+### Sequences, and why there is no animation queue
+
+A reminder is now up to two beats: `Alert` then `Rush`, `Thirsty` then a shrug. The machinery for
+that is one field — `Pet::then` — and four lines in `on_frame`, which was already being called for
+every frame of the first animation and now finds a second one waiting when the first ends.
+
+**One deep, deliberately.** Two is a sequence; three is a cut scene; and a chain that can refill
+itself is a creature that never stops moving. `start_anim` clears the slot, so an unrelated
+animation arriving mid-sequence ends the sequence rather than queueing behind it — a follow-on that
+lands after something else reads as a twitch.
+
+`no_sequence_goes_on_too_long` holds the ceiling at five seconds for every creature, every
+reminder and every roll of the dice.
+
+### The two rules that keep seven creatures legible
+
+The brief asked for both "each reminder unmistakable" and "each creature its own personality",
+which pull against each other: personality that changes *what* a gesture means makes a reminder you
+have to decode.
+
+**The first gesture says what the reminder is. The follow-on says who is doing it.** Water is
+always `Thirsty`, whichever of the seven is asking — `asking_for_water_always_starts_by_asking_for_water`
+— and then a bunny hops, a kit settles, a pebble sits down next to the problem, a moth cannot hold
+still, and tuft shakes itself. That is where the variation lives, and `the_same_reminder_is_not_always_identical`
+holds it: twelve rolls of the dice, at least two different outcomes, for every creature and every
+reminder that has several a day.
+
+Important mail is the one exception, where the creature changes the whole shape of the reaction:
+seven different startles, and then **four of them come at you and three stay put and knock.**
+
+| | Startles by | Then |
+|---|---|---|
+| Sprout | the double-take | comes at you |
+| Bunny | going airborne | comes at you |
+| Tuft | shaking itself | comes at you |
+| Moth | fidgeting first | comes at you |
+| Kit | staring | knocks at the screen |
+| Pebble | the double-take | knocks at the screen |
+| Bloom | a wiggle | knocks at the screen |
+
+`no_two_creatures_react_to_mail_alike` asserts all seven differ. A pebble sprinting across the desk
+would be funny once and wrong every time after — §64 settled that it does not hop, and
+`a_pebble_stays_a_pebble_about_everything` now holds that across every reminder, priority, style
+and roll.
+
+### Rushing means one thing
+
+`only_important_mail_ever_rushes` is the promise the whole change rests on: nothing else in the
+program, at any priority, in any style, for any creature, ever comes at the person across the desk.
+
+Two attempts at this were wrong and the tests caught both.
+
+**The first** let an ordinary reminder borrow the rush when the style was turned up, because
+`Insistent` and "important" had been folded into one idea called urgency. They are not one idea:
+the style is how much the *person* wants to be bothered, and the priority is how much *this item*
+deserves it. So `manner` takes both, and the performance belongs to mail that is genuinely
+important rather than to anybody who turned the dial up. Otherwise the rush would have come to mean
+"you have mail" instead of "you have *this* mail", which is the same failure as a tooltip knocking
+on the glass, arrived at from the other direction.
+
+**The second** gave the three creatures that stay put the same `(Alert, Point)` as every ordinary
+loud reminder, so a kit treated a stand-up at ten exactly like an urgent email.
+`important_mail_never_looks_like_an_ordinary_reminder` found it at roll 1. They knock instead —
+the loudest thing a creature can do without leaving the spot it is standing on.
+
+### What it was doing when you asked
+
+A reminder arriving at a sleeping creature used to snap it into a gesture. It wakes up first now,
+and the reminder's own gesture is what it does once its eyes are open — the one place where prior
+state changes the reaction, and the only one worth the code. The gesture's follow-on is given up
+for it, because the chain is one deep and waking up earns the slot.
+
+### Found by a test, not by an eye
+
+`Pebble Rush at t=0.71 reaches 98.4, below the window's 98.3`. The pointing beat tilted the widest
+body four degrees past the bottom edge of its own window — a tenth of a design unit, which is one
+screen pixel, which nobody would ever have reported and everybody would have half-noticed. Four
+degrees and a lift instead of five. The floor test from §44 has now caught three animations and it
+has never once been wrong.
+
+### Low priority is a glance, and that is all
+
+`a_quiet_ask_is_only_ever_a_glance`: every creature, every reminder, every style — `Peer`, no
+follow-on, no sound. It is the one place in the whole table where everything behaves identically,
+because "barely anything" has only one shape, and a low-priority item that performs is not low
+priority. `Subtle` keeps meaning what it always meant too: one gesture, no sequence, never the
+rush, held by `subtle_is_one_gesture_and_then_nothing`.
+
+### What was deliberately not done
+
+**The new animations did not join the idle pool.** `Fidget` and `Peer` would both make good idle
+behaviour, and §67 has Lively already over its idle-CPU target at about 1.4 s/h. Adding to the idle
+vocabulary while that is open would be fixing the frame rate with one hand and spending it with the
+other. It is a good idea for the day that number is closed, and a bad idea today.
+
+**Nothing was rebuilt.** The reminder scheduling, the retry ceiling, quiet hours, Do Not Disturb,
+the mail rules and the bubble cards are all untouched: `act` returned one animation and now returns
+two, and that is the entire interface change. Every promise §7 and §28 made about not nagging is
+held by the same tests as before, which still pass unmodified.
