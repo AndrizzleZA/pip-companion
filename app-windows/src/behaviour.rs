@@ -63,7 +63,7 @@ const DO_NOTHING_WEIGHT: u16 = 55;
 /// What a sleeping companion does, and how rarely.
 ///
 /// **There is no continuous breathing, and that was the one real decision here.** A gentle breath
-/// running all night means the animation clock running all night: about 65 seconds of CPU over nine
+/// running all night means the 30 fps clock running all night: about 65 seconds of CPU over nine
 /// hours, against a target of one second per hour (§8). It would have been the single most
 /// expensive thing in the program, to animate something nobody is looking at — Pip only idles at
 /// all while somebody is actually at the machine, because going away stops the timer outright.

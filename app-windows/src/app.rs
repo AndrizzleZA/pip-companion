@@ -45,12 +45,7 @@ pub const T_HEALTH: usize = 16;
 /// dealt with, and never set past the ceiling.
 pub const T_ATTN: usize = 17;
 
-/// 24 frames a second, not 30. Animations are wall-clock driven, so this drops a fifth of the
-/// drawings out of every gesture without making any gesture slower or shorter — on a creature a
-/// hundred pixels tall there is nothing there to see. It is the only idle-CPU saving available that
-/// costs nothing anyone can perceive; shortening the gestures themselves would cost a yawn that
-/// reads as a yawn, for a hundredth of a percent of one core (§67).
-const FRAME_MS: u32 = 42;
+const FRAME_MS: u32 = 33;
 /// Non-important reminders wait this long after launch (let the desktop settle at login).
 const STARTUP_GRACE_MS: u64 = 45_000;
 const AWAY_AFTER_MS: u64 = 5 * 60_000;
@@ -560,12 +555,24 @@ impl App {
             self.kill_timer(T_IDLE);
             return;
         }
-        let (lo, hi) = match self.settings.pet.liveliness {
-            Liveliness::Calm => (5_000, 11_000),
-            Liveliness::Normal => (4_500, 9_000),
-            Liveliness::Lively => (2_200, 5_500),
-        };
-        let d = self.rand_range(lo, hi) as u32;
+        // One blink rate for all three settings, and it is the calm one (§69).
+        //
+        // This timer is almost always a blink: the idle animations each hold a cooldown of between
+        // forty-five seconds and forty-five minutes, so for most of its waking life there is
+        // nothing eligible and the companion blinks instead. Counting the drawings says so — a
+        // five-minute window on `Lively` produced 177 of them, which is 78 blinks at two renders
+        // each and one actual animation.
+        //
+        // So this interval, not the frame rate and not the animation vocabulary, *is* the idle
+        // CPU figure, and tying it to liveliness meant `Lively` woke up twice as often as `Calm`
+        // to do the one thing that is not liveliness. The ratio between the two settings' idle
+        // CPU was the ratio between their blink rates, which is a measurement of nothing.
+        //
+        // How often it *does something* is liveliness, and that lives in `on_idle`, untouched: one
+        // to three minutes against ten to twenty. Blinking every six or seven seconds instead of
+        // every four is not a thing anybody can see on a creature a hundred pixels tall, which is
+        // the test for whether a saving is free.
+        let d = self.rand_range(5_000, 11_000) as u32;
         self.set_timer(T_IDLE, d);
     }
 
@@ -656,7 +663,7 @@ impl App {
             }
             if kind == AnimKind::Blink {
                 // A blink is two frames (shut, then open 110 ms later) instead of running the
-                // animation clock at all — the single biggest idle-CPU saving.
+                // 30 fps animation clock — the single biggest idle-CPU saving.
                 self.pet.eyes_shut = true;
                 self.render();
                 self.set_timer(T_BLINK, 110);
