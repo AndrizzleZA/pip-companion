@@ -34,6 +34,11 @@ pub enum Action {
     Open,
     /// "Always from this sender": adds the one email's sender to the important list.
     AlwaysFrom,
+    /// "Important": flags the mail already waiting, for this once (§70).
+    ///
+    /// The only button on a card that does not answer it. Everything else here means "I have
+    /// dealt with this"; this one means "I have not, and do not let me forget".
+    MarkImportant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

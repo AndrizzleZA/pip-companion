@@ -10,6 +10,7 @@
 
 use crate::agenda::{brief_lines, event_alert_at, event_important};
 use crate::calendar::Event;
+use crate::email;
 use crate::settings::{CustomReminder, Settings};
 use crate::state::{ReminderState, State};
 use crate::time::{in_window, local, to_ts, TimeOfDay};
@@ -424,9 +425,18 @@ fn dates_events_due<Tz: TimeZone>(s: &Settings, st: &State, events: &[Event], no
         }
     }
     // Important email: one grouped item while anything is waiting.
+    //
+    // Two kinds of important, and they are not the same kind (§70). Mail that is waiting because
+    // the person said so — a sender they listed, a message they starred, a card they flagged —
+    // is `High`: it may break through quiet hours if they allowed that, it comes back sooner, and
+    // it is the one thing in the program that earns the performance in §68. Mail that is waiting
+    // because something guessed — a subject keyword, Gmail's own marker — stays `Normal` and gets
+    // noticed and pointed at. Every message here already passed `email::important`; this is only
+    // about which of those two ways it got in.
     if !st.mail_pending.is_empty() && snoozed(st, MAIL_STATE_KEY, now).is_none() {
         let newest = st.mail_pending.iter().map(|m| m.received).max().unwrap_or(now);
-        out.push(Due { key: ItemKey::Mail, occurrence: newest, priority: Priority::Normal, late: false });
+        let priority = if email::anyone_asked_for(&s.email, &st.mail_pending) { Priority::High } else { Priority::Normal };
+        out.push(Due { key: ItemKey::Mail, occurrence: newest, priority, late: false });
     }
     // Morning summary: once a day from notify time, only when there is something to say.
     if s.dates.morning_summary && st.brief_day != Some(today) {
@@ -788,7 +798,7 @@ mod tests {
     fn important_mail_grouped_deduped_snoozed() {
         use crate::email::EmailMsg;
         let (s, mut st) = quiet_setup();
-        let m = |id: &str| EmailMsg { id: id.into(), account_id: "a".into(), from_name: "Mom".into(), from_addr: "m@x.com".into(), subject: "Hi".into(), labels: vec![], received: at(10, 0) };
+        let m = |id: &str| EmailMsg { id: id.into(), account_id: "a".into(), from_name: "Mom".into(), from_addr: "m@x.com".into(), subject: "Hi".into(), labels: vec![], received: at(10, 0), urgent: false };
         assert_eq!(st.add_mail(vec![m("1"), m("2")]), 2);
         assert_eq!(st.add_mail(vec![m("2")]), 0, "never announced twice");
         let d = due_items(&s, &st, at(10, 1), &tz());
@@ -801,6 +811,73 @@ mod tests {
         assert!(due_items(&s, &st, at(10, 40), &tz()).is_empty());
         let (title, lines) = crate::messages::mail_card(&[m("3")]);
         assert_eq!((title.as_str(), lines[0].as_str()), ("Email from Mom", "“Hi”"));
+    }
+
+    /// Mail somebody asked for outranks mail something guessed at (§70).
+    ///
+    /// This is the join between the rules and the gestures: `High` is what `attention::act` reads
+    /// to decide that an email has earned the performance in §68, and before this nothing in the
+    /// program ever filed mail as `High` at all — so the most expressive thing the companion knows
+    /// how to do could not happen outside a developer command.
+    #[test]
+    fn mail_the_person_asked_for_outranks_mail_something_guessed() {
+        use crate::email::EmailMsg;
+        let (mut s, mut st) = quiet_setup();
+        s.email.senders = vec!["mom@example.com".into()];
+        s.email.keywords = vec!["urgent".into()];
+        let m = |id: &str, from: &str, subject: &str| EmailMsg {
+            id: id.into(),
+            account_id: "a".into(),
+            from_name: String::new(),
+            from_addr: from.into(),
+            subject: subject.into(),
+            labels: vec!["INBOX".into(), "UNREAD".into()],
+            received: at(10, 0),
+            urgent: false,
+        };
+
+        // A subject word is a guess: noticed and pointed at, not performed about.
+        st.add_mail(vec![m("1", "stranger@nowhere.com", "urgent invoice")]);
+        let d = due_items(&s, &st, at(10, 1), &tz());
+        assert_eq!((d[0].key.clone(), d[0].priority), (ItemKey::Mail, Priority::Normal));
+
+        // A sender on the list is a decision, and the whole grouped card rises with it.
+        st.add_mail(vec![m("2", "mom@example.com", "no keyword here")]);
+        let d = due_items(&s, &st, at(10, 2), &tz());
+        assert_eq!(d.len(), 1, "still one grouped item");
+        assert_eq!(d[0].priority, Priority::High);
+
+        // And the button does the same thing to mail nobody had a rule for.
+        ack_mail(&mut st);
+        st.add_mail(vec![m("3", "stranger@nowhere.com", "no keyword here either")]);
+        assert_eq!(due_items(&s, &st, at(10, 3), &tz())[0].priority, Priority::Normal);
+        for msg in &mut st.mail_pending {
+            msg.urgent = true;
+        }
+        assert_eq!(due_items(&s, &st, at(10, 4), &tz())[0].priority, Priority::High);
+    }
+
+    /// Adding a sender rule after the mail has arrived raises what is already waiting, because
+    /// the priority is worked out when the companion speaks rather than when the message landed.
+    /// "Always from this sender" is a button on the same card, so this is one click away.
+    #[test]
+    fn a_rule_added_afterwards_still_counts() {
+        use crate::email::EmailMsg;
+        let (mut s, mut st) = quiet_setup();
+        s.email.keywords = vec!["urgent".into()];
+        st.add_mail(vec![EmailMsg {
+            id: "1".into(),
+            account_id: "a".into(),
+            from_name: String::new(),
+            from_addr: "boss@work.com".into(),
+            subject: "urgent".into(),
+            labels: vec!["INBOX".into(), "UNREAD".into()],
+            received: at(10, 0),
+            urgent: false,
+        }]);
+        assert_eq!(due_items(&s, &st, at(10, 1), &tz())[0].priority, Priority::Normal);
+        s.email.senders = vec!["boss@work.com".into()];
+        assert_eq!(due_items(&s, &st, at(10, 2), &tz())[0].priority, Priority::High);
     }
 
     #[test]

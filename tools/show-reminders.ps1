@@ -78,8 +78,8 @@ try {
         Write-Host "Watching: $Creature. Each one gets $Pause seconds." -ForegroundColor Green
         Write-Host "The bubble is the old part. The body is the new part." -ForegroundColor Gray
 
-        Watch 'mail' 'high' "An IMPORTANT email. It should flinch, come at you, wave with both arms, then stop dead and point."
-        Watch 'mail' 'normal' "Ordinary mail. Noticed, and pointed at -- but it stays where it is."
+        Watch 'mail' 'high' "An email you asked for -- a sender on your list, or one you starred. Flinch, come at you, both arms, then stop dead and point."
+        Watch 'mail' 'normal' "Mail something guessed at -- a subject keyword, or Gmail's own marker. Noticed and pointed at, but it stays where it is."
         Watch 'water' 'normal' "Drink some water. It looks for a glass, tips its head back over nothing, and gives up."
         Watch 'custom' 'normal' "Your own reminder. Restless: weight shifting, a foot going, a huff."
         Watch 'date' 'normal' "Somebody's birthday. Pleased, and it says so."

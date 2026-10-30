@@ -62,6 +62,17 @@ pub struct EmailMsg {
     pub labels: Vec<String>,
     /// Unix seconds.
     pub received: i64,
+    /// Flagged from the card, by hand, after it had already arrived (§70).
+    ///
+    /// Nothing else in here is set by the person in the moment: every other signal is a rule
+    /// written beforehand or a guess made on their behalf. This one outranks all of them, because
+    /// being told outright is the strongest thing a program ever gets.
+    ///
+    /// It lives on the message rather than in a list of ids beside it, so it is dropped by the
+    /// same line that drops the message when the mail is dealt with, and cannot outlive what it
+    /// describes. Defaulted, so a state file written by an older Pip loads unchanged.
+    #[serde(default)]
+    pub urgent: bool,
 }
 
 impl EmailMsg {
@@ -83,6 +94,35 @@ pub enum Reason {
     Starred,
     Keyword(String),
     GmailImportant,
+}
+
+impl Reason {
+    /// Whether the person said so, as against something having guessed on their behalf.
+    ///
+    /// A sender rule and a star are both deliberate acts: somebody typed an address into the
+    /// list, or reached into their inbox and starred a message. A subject keyword and Gmail's own
+    /// Important marker are inferences — good ones, worth a notification, and still guesses.
+    ///
+    /// This is the whole basis of the two treatments in §70. A companion that comes across the
+    /// desk at you about every message containing the word "urgent" is one you stop believing by
+    /// Wednesday; the performance has to be reserved for the mail you yourself marked out, or it
+    /// stops meaning anything, exactly as the rush would have if any reminder could borrow it
+    /// (§68).
+    pub fn chosen(&self) -> bool {
+        matches!(self, Reason::Sender(_) | Reason::Starred)
+    }
+}
+
+/// Is any of the mail now waiting there because the person asked for it, rather than because
+/// something guessed?
+///
+/// Recomputed from the rules and the messages rather than stored: the rules can change between
+/// the message arriving and the companion mentioning it — somebody adds a sender, or turns the
+/// star rule on — and a priority filed away at fetch time would be stale and silently wrong. It
+/// is a handful of string comparisons over at most twenty messages, on a path that already walks
+/// the same list to build the card.
+pub fn anyone_asked_for(s: &EmailSettings, pending: &[EmailMsg]) -> bool {
+    pending.iter().any(|m| m.urgent || important(s, m).is_some_and(|r| r.chosen()))
 }
 
 /// Is this (new) message important under the user's rules? Only unread inbox mail qualifies —
@@ -378,6 +418,8 @@ pub mod gmail {
             subject: if subject.is_empty() { "(no subject)".into() } else { subject },
             labels: m.labels,
             received: m.internal_date.parse::<i64>().map(|ms| ms / 1000).unwrap_or(0),
+            // Nothing arrives flagged: that is a thing the person does to it later.
+            urgent: false,
         })
     }
 
@@ -468,7 +510,7 @@ mod tests {
 
     fn msg(from: &str, subject: &str, labels: &[&str]) -> EmailMsg {
         let (from_name, from_addr) = parse_from(from);
-        EmailMsg { id: "1".into(), account_id: "a".into(), from_name, from_addr, subject: subject.into(), labels: labels.iter().map(|s| s.to_string()).collect(), received: 0 }
+        EmailMsg { id: "1".into(), account_id: "a".into(), from_name, from_addr, subject: subject.into(), labels: labels.iter().map(|s| s.to_string()).collect(), received: 0, urgent: false }
     }
 
     #[test]
@@ -518,5 +560,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!((m.from_name.as_str(), m.subject.as_str(), m.received), ("Théo", "Dinner?", 1_789_990_000));
+    }
+}
+
+#[cfg(test)]
+mod two_kinds_of_important {
+    use super::*;
+
+    fn rules() -> EmailSettings {
+        EmailSettings { senders: vec!["mom@example.com".into()], starred: true, gmail_important: true, ..Default::default() }
+    }
+
+    fn msg(from: &str, subject: &str, labels: &[&str]) -> EmailMsg {
+        EmailMsg {
+            id: "1".into(),
+            account_id: "a".into(),
+            from_name: String::new(),
+            from_addr: from.into(),
+            subject: subject.into(),
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+            received: 0,
+            urgent: false,
+        }
+    }
+
+    const IN: [&str; 2] = ["INBOX", "UNREAD"];
+
+    /// The distinction the whole of §70 rests on: a rule somebody wrote and a star somebody
+    /// placed are things they did; a subject word and Gmail's marker are things that were worked
+    /// out for them.
+    #[test]
+    fn a_rule_and_a_star_are_choices_and_the_rest_are_guesses() {
+        let s = rules();
+        assert!(important(&s, &msg("mom@example.com", "anything", &IN)).unwrap().chosen());
+        assert!(important(&s, &msg("x@y.com", "hello", &["INBOX", "UNREAD", "STARRED"])).unwrap().chosen());
+        assert!(!important(&s, &msg("x@y.com", "this is urgent", &IN)).unwrap().chosen());
+        assert!(!important(&s, &msg("x@y.com", "hello", &["INBOX", "UNREAD", "IMPORTANT"])).unwrap().chosen());
+    }
+
+    /// One flagged message is enough. The card is one grouped item, so if any of what it covers
+    /// was asked for, the whole item is treated as asked for -- the alternative is a card that is
+    /// half urgent, which is not a thing a creature can mime.
+    #[test]
+    fn one_asked_for_message_raises_the_whole_card() {
+        let s = rules();
+        let guessed = msg("x@y.com", "urgent: invoice", &IN);
+        let asked = msg("mom@example.com", "hello", &IN);
+        assert!(!anyone_asked_for(&s, std::slice::from_ref(&guessed)));
+        assert!(anyone_asked_for(&s, &[guessed.clone(), asked]));
+    }
+
+    /// The button. Flagging by hand outranks every rule, because it is the one signal that came
+    /// from the person at the moment they were looking at the thing.
+    #[test]
+    fn flagging_by_hand_beats_every_rule() {
+        let s = rules();
+        let mut m = msg("stranger@nowhere.com", "no keyword here at all", &IN);
+        assert!(!anyone_asked_for(&s, std::slice::from_ref(&m)));
+        m.urgent = true;
+        assert!(anyone_asked_for(&s, std::slice::from_ref(&m)));
+    }
+
+    /// Flagging cannot resurrect mail that was never important enough to appear: the button only
+    /// exists on a card, and a card only exists for mail that already got through the rules. This
+    /// holds the invariant from the other side -- `urgent` raises the treatment, never the bar.
+    #[test]
+    fn the_flag_does_not_let_anything_new_in() {
+        let s = rules();
+        let mut read_already = msg("stranger@nowhere.com", "hello", &["INBOX"]);
+        read_already.urgent = true;
+        assert_eq!(important(&s, &read_already), None, "a flag made unimportant mail important");
+    }
+
+    /// A state file written before any of this existed must load, with nothing flagged.
+    #[test]
+    fn mail_saved_by_an_older_pip_still_loads() {
+        let json = r#"{"id":"1","account_id":"a","from_name":"Mom","from_addr":"m@x.com",
+                       "subject":"Hi","labels":["INBOX","UNREAD"],"received":12}"#;
+        let m: EmailMsg = serde_json::from_str(json).expect("an older message");
+        assert!(!m.urgent);
+        assert_eq!(m.subject, "Hi");
     }
 }

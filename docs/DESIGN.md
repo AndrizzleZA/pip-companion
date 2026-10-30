@@ -3257,3 +3257,103 @@ misattributed, and the fix cost one constant.
 Four sections, five diagnoses, one cause. The pattern in every one of them: **when this number
 surprised somebody, the fault was in the measuring, and never once in the program.** Worth
 remembering the next time it surprises somebody.
+
+## 70. Two kinds of important, and the one the person said out loud, 2026-10-30
+
+The request was an "Important" button on the incoming-email pop-up, so a message could be marked
+without opening the inbox. Reading the code first changed the shape of it, as it usually does.
+
+### Three things that were already true
+
+**There is no ordinary email notification.** Pip only ever raises mail that has already passed
+`email::important` — a sender on the list, a subject keyword, a star, or Gmail's own marker.
+Everything else arrives in the inbox and is never mentioned. So a button marking an arriving email
+as important had nothing to attach to: by the time there is a card, the answer is already yes.
+
+**Gmail's own importance flag was already wired in, and switched off.** `gmail_important` and
+`starred` are both settings with toggles in Settings → Email, both defaulting to false. The brief
+asked whether Gmail provides a flag Pip could use. It does, Pip reads it, nobody had turned it on.
+
+**Pip cannot write to Gmail, and should not learn how.** The connection is
+`https://www.googleapis.com/auth/gmail.metadata` — it cannot even see a message body. Starring from
+the card would mean `gmail.modify`, a restricted scope: fresh consent from every user and a
+security assessment before the app could be published, bought in exchange for saving one click
+inside Gmail. Refused, and written down here so it is refused once rather than reconsidered
+quarterly.
+
+### The thing that was actually wrong
+
+**Every email notification was `Priority::Normal`.** Not some — all of them, since mail
+notifications were written. And §68 had just made `Priority::High` the gate on the most expressive
+thing the companion knows how to do:
+
+> `only_important_mail_ever_rushes` … `assert_eq!(prio, Priority::High, "{who:?} rushes about ordinary mail")`
+
+So the important-email performance — the recoil, the dash across the desk, the both-arms wave, the
+point — could not happen outside a developer command. A test asserted a property of something
+unreachable, passed, and said nothing. Two days of work hanging off a priority nothing produced.
+
+### Two kinds of important
+
+Pip already knew *why* each message was flagged; it was throwing the reason away. `Reason::chosen`
+divides the four:
+
+| Why it is waiting | | Treatment |
+|---|---|---|
+| A sender the person listed | chosen | **High** — the §68 performance |
+| A message the person starred | chosen | **High** — the §68 performance |
+| A subject keyword matched | guess | Normal — notices, and points |
+| Gmail's own Important marker | guess | Normal — notices, and points |
+
+A rule somebody typed and a star somebody placed are things they *did*. A subject word and Gmail's
+marker are inferences — good ones, worth a notification, and still inferences. **A companion that
+comes across the desk at you about every message containing the word "urgent" is one you stop
+believing by Wednesday.** The performance has to be reserved for mail the person marked out
+themselves, for the same reason no other reminder may borrow the rush (§68).
+
+The amber stripe down the card came free: `card.important` already keys off `Priority::High`, so
+the mail that earns the gesture also looks different, in the same way every other urgent item in
+the program already does. Nothing new was drawn.
+
+### The button
+
+*Important*, on the mail card, beside *Always from this sender* — which is the same idea with a
+longer memory, and was already there.
+
+It is **the only button on any card that does not answer it.** Everything else means "dealt with"
+and removes the item; this one means "not dealt with, and do not let me forget". So the item stays
+pending, the priority rises, and `T_ATTN` is deliberately left exactly as armed: the retry that was
+already coming now reads the raised priority, waits the shorter interval and arrives as the
+gesture for mail somebody asked for. Re-arming it here would have written the four minutes down in
+a second place, and §68 exists to have one.
+
+The flag lives on the message, as `EmailMsg::urgent`, not in a list of ids beside it — so it is
+dropped by the same line that drops the message, and can never outlive what it describes. It is
+`#[serde(default)]`, so a state file from an older Pip loads unchanged, which
+`mail_saved_by_an_older_pip_still_loads` holds.
+
+And it raises the treatment, never the bar: `the_flag_does_not_let_anything_new_in` asserts that
+flagging cannot make unimportant mail important, which it could not do anyway — the button only
+exists on a card, and a card only exists for mail that already got through.
+
+### Worked out late, on purpose
+
+The priority is computed when the companion speaks, not when the message was fetched. Rules change
+in between: somebody adds a sender, or turns the star rule on, and mail already waiting should rise
+with it — `a_rule_added_afterwards_still_counts`. Since *Always from this sender* is a button on
+the very same card, that is one click away and would have been stale under any stored-priority
+design.
+
+It costs a handful of string comparisons across at most twenty messages, on a path that already
+walks the same list to build the card text. No new timer, no new thread, no new network call, no
+new file, and one bool per pending message.
+
+### What was not built
+
+**No new setting.** The two existing Gmail toggles cover "trust Gmail's guess" and "trust my
+stars", and a third switch asking which kinds of important deserve which gesture would be a
+preference about a preference.
+
+**No importance *levels* beyond the two.** `Priority` has three rungs and mail now uses two of
+them. A third shade would need a third gesture that is distinguishable from both at a glance, and
+there isn't one worth having.

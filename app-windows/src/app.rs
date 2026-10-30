@@ -996,6 +996,16 @@ impl App {
             ItemKey::Brief => card.buttons.push(("Thanks!".into(), Action::Done, BtnStyle::Primary)),
             ItemKey::Mail => {
                 card.buttons.push(("Open Gmail".into(), Action::Open, BtnStyle::Primary));
+                // One click, and only when it would change something: mail already being treated
+                // this way does not offer to be treated this way, and a button that does nothing
+                // is worse than no button (§70).
+                //
+                // Read off the item's own priority rather than recomputed from the rules, so this
+                // and the amber stripe down the card — which keys off exactly the same thing —
+                // can never disagree about whether this email is one of the loud ones.
+                if p.priority < Priority::High {
+                    card.buttons.push(("Important".into(), Action::MarkImportant, BtnStyle::Secondary));
+                }
                 // Only for a single email — the grouped card has no one sender to mean — and only
                 // when that sender doesn't already always get through.
                 if let Some(m) = self.one_pending_mail() {
@@ -1151,6 +1161,31 @@ impl App {
                 self.effects.push(Effect::OpenSettings);
             }
             Action::Drink => self.drink(),
+            // The one button that does not answer the card (§70). Everything below this means
+            // "dealt with"; this means "not dealt with, and do not let me forget".
+            //
+            // So the item stays pending and `T_ATTN` is left exactly as it was: the retry already
+            // armed will now read the raised priority and come back on the shorter ladder with
+            // the gesture that belongs to mail somebody asked for. Re-arming it here would have
+            // meant writing the four minutes down in a second place, and §68's whole point is
+            // that there is one place where that is decided.
+            Action::MarkImportant => {
+                // The card is one grouped item, so the flag goes on everything it covers: the
+                // person flagged what they were shown, and what they were shown was all of it.
+                for m in &mut self.state.mail_pending {
+                    m.urgent = true;
+                }
+                if let Some(p) = self.pending.first_mut() {
+                    if p.key == ItemKey::Mail {
+                        p.priority = Priority::High;
+                    }
+                }
+                self.state_dirty = true;
+                self.schedule_save();
+                self.reschedule();
+                self.message("Flagged. I'll keep after you about that one.".into(), 4);
+                self.anim(AnimKind::Nod);
+            }
             Action::Done | Action::Snooze | Action::Dismiss | Action::Open | Action::AlwaysFrom => {
                 // Answered. Whatever the companion was going to do about it in nine minutes, it
                 // is not doing it: a gesture that arrives after you have dealt with something is
@@ -1982,6 +2017,9 @@ impl App {
                                 subject: "This one actually matters".into(),
                                 labels: Vec::new(),
                                 received: now_unix(),
+                                // `fire mail high` is how the urgent treatment gets watched, and
+                                // the priority argument alone would not survive a `reschedule`.
+                                urgent: prio == Priority::High,
                             });
                         }
                         ItemKey::Mail
@@ -2024,6 +2062,7 @@ impl App {
                     "dismiss" => Action::Dismiss,
                     "drink" => Action::Drink,
                     "always-from" => Action::AlwaysFrom,
+                    "important" => Action::MarkImportant,
                     _ => Action::Close,
                 };
                 self.act(a);
@@ -2337,9 +2376,9 @@ impl App {
             "stats" => {
                 let u = platform::process_usage();
                 format!(
-                    "{{\"private\":{},\"ws\":{},\"cpu_ms\":{},\"handles\":{},\"render_us\":{},\"frames\":{},\"startup_ms\":{},\"pending\":{},\"bubble\":\"{:?}\",\"expr\":\"{:?}\",\"water\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
+                    "{{\"private\":{},\"ws\":{},\"cpu_ms\":{},\"handles\":{},\"render_us\":{},\"frames\":{},\"startup_ms\":{},\"pending\":{},\"prio\":\"{:?}\",\"bubble\":\"{:?}\",\"expr\":\"{:?}\",\"water\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
                     u.private_bytes, u.working_set, u.cpu_ms, u.handles, self.pet.render_us, self.pet.frames, self.startup_ms,
-                    self.pending.len(), self.pet.bubble_kind(), self.expr(), self.water_today(),
+                    self.pending.len(), self.pending.first().map(|p| p.priority), self.pet.bubble_kind(), self.expr(), self.water_today(),
                     self.pet.win.l, self.pet.win.t, self.pet.win.w(), self.pet.win.h()
                 )
             }
