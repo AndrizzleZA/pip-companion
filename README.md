@@ -127,17 +127,19 @@ yet — see §45 of the design document.
 
 **Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Calendar (with an optional
 heads-up a few days before). South African public holidays are built in. Calendars come from Google
-(Settings › Connections): events show on today’s card, important ones (own alert, important calendar
+on the same page: events show on today’s card, important ones (own alert, important calendar
 or a keyword like “dentist”) get a gentle alert, and a quiet morning summary lists what’s on.
 
-**Connections.** Settings › Connections has three entries, and they all work the same way: click *Continue
-with Google*, choose your account, Allow, and you’re back in Pip, connected. **Gmail** gives Pip the
-sender, subject and labels of new mail — never the contents — and it can’t send or delete. **Google
-Calendar** is read-only. Disconnect (asks once more) also withdraws Pip’s access at Google; if Google
-ever signs Pip out, the entry shows **Reconnect**. Important senders and subject words live in
-Settings › Email, along with two one-tap rules: mail Gmail marks Important, and mail that is already
-starred when it arrives. When Pip nudges you about a single email, the bubble offers **Always from
-this sender** — one click and that address always gets through.
+**Connecting Google.** Each connector sits on the page about the thing it connects — Gmail on
+Settings › Email, your calendars on Settings › Calendar, your phone on Settings › About — and they
+all work the same way: click *Continue with Google*, choose your account, Allow, and you’re back in
+Pip, connected. **Gmail** gives Pip the sender, subject and labels of new mail — never the contents
+— and it can’t send or delete. **Google Calendar** is read-only. Disconnect (asks once more) also
+withdraws Pip’s access at Google; if Google ever signs Pip out, the entry shows **Reconnect**.
+Important senders and subject words live in Settings › Email; mail you had already starred in Gmail
+counts too, with no switch to find. When Pip nudges you about a single email, the bubble offers
+**Important** — one click, and that mail gets the full performance — and **Always from this sender**,
+which does the same for that address from then on.
 
 **Reminders.** A reminder has a name, one or more times of day, and the days it repeats — so
 "take pills" at 08:00, 14:00 and 20:00 is one reminder, not three. On the phone they behave like the

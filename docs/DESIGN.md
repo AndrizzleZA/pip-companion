@@ -1677,7 +1677,7 @@ of CPU an hour, drawn per-pixel into a layered window with no framework under it
 about water and whatever else you ask, keeps birthdays and deadlines, reads the metadata of mail
 that matters and your calendar read-only, and syncs to an Android phone through one encrypted file
 in your own Google Drive. Seven characters, three of which arrive as the companion grows. Settings
-is seven pages, usable without a mouse. A crash leaves a readable report behind, and the symbols for
+is five pages, usable without a mouse. A crash leaves a readable report behind, and the symbols for
 every build that went out are archived so it can still be read a year later.
 
 Phases 1 to 5 are in §8 through §32. Phase 6 is §34 to §46.
@@ -3357,3 +3357,99 @@ preference about a preference.
 **No importance *levels* beyond the two.** `Priority` has three rungs and mail now uses two of
 them. A third shade would need a third gesture that is distinguishable from both at a glance, and
 there isn't one worth having.
+
+## 71. Thirty-nine controls, and the eight that were only ever asking, 2026-10-30
+
+The brief was to make Pip minimal: fewer settings, fewer decisions, less clutter, without making
+it boring. Counting first, which §62 is the standing reminder to do, the settings window held
+**thirty-nine controls across six pages**. The useful question is not which could go, but which
+of them were ever a *decision* — something where two reasonable people would answer differently.
+
+### The eight that were not
+
+| Row | Page | What it decided |
+|---|---|---|
+| Snooze for | Reminders | How long "Snooze 10m" snoozes for |
+| Bubble stays for | Reminders | When an unanswered bubble folds into the badge |
+| Pause during fullscreen | Reminders | Whether a reminder interrupts a game |
+| Important reminders | Reminders | Whether "important" means anything during Do Not Disturb |
+| Check every | Email | How often to ask Google for new mail |
+| Gmail's Important marker | Email | Whether to trust a guess its own hint called "a lot" |
+| Starred in Gmail | Email | Whether a star you placed yourself counts |
+| Alert me | Calendar | How long before an event with no alert of its own |
+
+Nobody wants reminders over a game. Nobody marks a reminder important and then asks that it be
+held back anyway — that is what the word means. A snooze button that says *Snooze 10m* on its face
+was never hiding its number. And a star is the one mark the person reached into their own inbox and
+put there: it is now on from the first day, which made the feature *better* by deleting the switch
+in front of it.
+
+These are not hidden, they are **pinned**. `Settings::sanitize` writes each one on load and after
+every edit, so the value is identical on the PC and the phone and cannot sit at something from an
+older file that there is no longer a way to see or change. Hiding a row that still reads a stored
+value is the version of this that strands people, and `a_setting_with_no_row_left_cannot_drift`
+holds the difference.
+
+### Connections, which was a page about a page
+
+The Connections page held three cards: Gmail, Google Calendar, your phone. The Gmail card was
+`draw_gmail_section`, the same function the Email page already called — so the one thing on that
+page anybody saw twice was the one thing it duplicated, and the **answer to "where do I connect
+Gmail?" was two places**. Each connector now sits on the page about the thing it connects, and the
+phone with About, which is the page about this PC. **Six pages became five**, and the duplicate
+call site went with it.
+
+This is the merge §60 looked at and declined, and it declined it for a good reason that no longer
+applies: folding *Email and Calendars under Connections* would have moved several hundred lines of
+layout to shorten the sidebar. Moving three cards to the three pages they belong on is the opposite
+trade, and it removes a duplicate rather than creating one.
+
+### Two halves of one decision, on one row
+
+"Starting at" and "Until" were two rows, and the second was a row whose entire label was the word
+*Until*. Water's window and Do Not Disturb's are both one row now, with two steppers and a gap.
+That is 308 units of the right-hand side where every other row spends 150, so
+`two_times_on_one_row_leave_their_hint_room` checks the label and hint still fit at 100%, 125% and
+150% — a hint that fits at one scaling and not another is exactly the thing nobody looks at twice.
+
+Water's "Today" row went too. It was a counter on a page of controls, it could not be set, and
+About says it in full; it now reads back under the goal it is counting towards. "Growing up" left
+the Companion page for the same reason and landed on the same card.
+
+### Three labels instead of twelve rows
+
+The Companion page is unchanged except that it is now in three parts — **who it is**, **how it
+behaves**, **on your desktop**. Nothing moved page and nothing was dropped. The labels exist so the
+eye can skip the two thirds of the page it did not come for, which is most of what "uncluttered"
+means on a page where every row is genuinely a choice.
+
+Its Liveliness hint was also wrong: it still said "how often it blinks", and §69 unhooked blinking
+from liveliness a fortnight ago.
+
+### The bug the screenshots found
+
+`page_reminders` returned early when there were no custom reminders, to draw "No reminders yet."
+That `return` took **When it speaks up** down with it — so on a fresh install, before anybody has
+added a reminder, **Do Not Disturb and Sound could not be reached at all**. §21 fixed exactly this
+on the Dates page and it had grown back here. The empty state now ends its own section and nothing
+else.
+
+It was found by looking at the rendered page rather than at the code, which is the second time in
+three sections that capturing a PNG has caught something no test asserted.
+
+### What was deliberately left
+
+**The Voice picker stayed.** Five options is a lot for one row and it was the obvious ninth cut —
+but the brief that asked for less also asked, in the same breath, for distinctive character sounds,
+and §61 gave each creature its own. Removing the row would have removed a thing §5 of the brief
+protects in order to satisfy §2 of it.
+
+**"On these days" for water stayed.** Removing it would have pinned somebody's weekdays-only water
+window to every day, and unlike the eight above, that is a real difference between two reasonable
+people.
+
+**Getting your attention stayed at four rungs**, because it is already that argument made once:
+one setting standing in for the eight it could have been.
+
+Thirty-nine controls became twenty-seven, six pages became five, and nothing can do less than it
+did yesterday.

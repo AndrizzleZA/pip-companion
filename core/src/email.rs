@@ -46,7 +46,7 @@ impl Default for EmailSettings {
             senders: Vec::new(),
             keywords: ["urgent", "action required", "interview", "final notice", "overdue"].iter().map(|s| s.to_string()).collect(),
             gmail_important: false,
-            starred: false,
+            starred: true,
             check_minutes: 3,
         }
     }
@@ -453,14 +453,17 @@ pub mod gmail {
 mod tests {
     use super::*;
 
+    /// A star is the one mark the person put there themselves, so §71 made it count from the
+    /// first day rather than from the day somebody found the switch.
     #[test]
-    fn a_star_counts_as_important_only_when_asked() {
+    fn a_star_counts_as_important_from_the_first_day() {
         let mut s = EmailSettings { senders: Vec::new(), keywords: Vec::new(), ..Default::default() };
         let starred = msg("Thandi <thandi@example.com>", "Lunch?", &["INBOX", "UNREAD", "STARRED"]);
 
-        assert_eq!(important(&s, &starred), None, "off by default");
+        assert_eq!(important(&s, &starred), Some(Reason::Starred), "on by default");
+        s.starred = false;
+        assert_eq!(important(&s, &starred), None, "and still switchable in the file");
         s.starred = true;
-        assert_eq!(important(&s, &starred), Some(Reason::Starred));
 
         // The rest of the rules still apply: starring something already read changes nothing.
         let read = msg("Thandi <thandi@example.com>", "Lunch?", &["INBOX", "STARRED"]);

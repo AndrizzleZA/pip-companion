@@ -2144,6 +2144,12 @@ impl App {
                 self.set_visible(false);
                 "ok".into()
             }
+            // Wheel notches, so a settings page taller than the window can be looked at below the
+            // fold. Positive scrolls down.
+            "ui-scroll" => {
+                self.ui_wheel(-120 * arg.parse::<i32>().unwrap_or(1));
+                "ok".into()
+            }
             "ui-click" => {
                 let v: Vec<f32> = arg.split_whitespace().filter_map(|x| x.parse().ok()).collect();
                 if v.len() == 2 {

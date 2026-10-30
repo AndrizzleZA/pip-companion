@@ -33,7 +33,6 @@ pub fn page_at(i: usize) -> Page {
 pub enum Page {
     Pet,
     Reminders,
-    Connections,
     Calendars,
     Email,
     About,
@@ -41,13 +40,18 @@ pub enum Page {
 
 /// Water lives with the reminders because it is one, and dates live with the calendar because
 /// that is what they are. Fewer pages, nothing hidden.
-const PAGES: [(Page, &str, &str); 6] = [
+///
+/// Connections is gone (§71). It was a page of its own that held the Gmail card, the calendar
+/// card and the phone card — and the Gmail card was literally the same function the Email page
+/// already drew, so the one thing on it anybody needed twice was the one thing it duplicated.
+/// Each connector now sits on the page about the thing it connects, where you are already
+/// standing when you want it, and the phone sits with About, which is the page about this PC.
+const PAGES: [(Page, &str, &str); 5] = [
     (Page::Pet, "Companion", "Name, look and behaviour"),
     (Page::Reminders, "Reminders", "Water, your reminders, and when it speaks up"),
-    (Page::Connections, "Connections", "Services Pip keeps an eye on for you"),
     (Page::Calendars, "Calendar", "Dates, holidays and your calendars"),
     (Page::Email, "Email", "A gentle nudge for mail that matters"),
-    (Page::About, "About", "Stats, privacy and resource use"),
+    (Page::About, "About", "This PC, your phone and privacy"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,11 +87,7 @@ pub enum UiAct {
     QuietOn,
     QuietStart(i32),
     QuietEnd(i32),
-    QuietImportant,
     Sound,
-    Snooze(i32),
-    BubbleMin(i32),
-    Fullscreen,
     AddReminder,
     RemOn(String),
     /// Nudge one of a reminder's times: id, which time, minutes.
@@ -113,7 +113,6 @@ pub enum UiAct {
     DateLead(String, u32),
     DateDelete(String),
     Alerts(EventAlerts),
-    EventLead(i32),
     CalOn(String),
     CalImportant(String),
     CalDelete(String),
@@ -134,11 +133,8 @@ pub enum UiAct {
     SyncApprove(String),
     SyncDeny(String),
     SyncAskAgain,
-    MailImportantMarker,
-    MailStarred,
     Who(Character),
     Say(Voice),
-    MailEvery(i32),
 }
 
 pub struct SettingsUi {
@@ -289,9 +285,9 @@ impl App {
         if let Some(p) = self.open_page.take() {
             ui.page = page_at(p);
         }
-        let connections = ui.page == Page::Connections;
+        let about = ui.page == Page::About;
         self.ui = Some(ui);
-        if connections {
+        if about {
             self.sync_peek();
         }
     }
@@ -314,7 +310,7 @@ impl App {
             ui.scroll = 0.0;
             ui.focus = None;
         }
-        if PAGES[index.min(PAGES.len() - 1)].0 == Page::Connections {
+        if PAGES[index.min(PAGES.len() - 1)].0 == Page::About {
             self.sync_peek();
         }
         self.ui_invalidate();
@@ -391,7 +387,6 @@ impl App {
 
             Page::Reminders => self.page_reminders(&mut c, &focus),
             Page::Calendars => self.page_calendars(&mut c, &focus, &kw_buf),
-            Page::Connections => self.page_connections(&mut c),
             Page::Email => self.page_email(&mut c, &focus, &kw_buf),
             Page::About => self.page_about(&mut c, usage, cpu_rate),
         }
@@ -467,17 +462,19 @@ impl App {
         ui.max_scroll = (content_bottom - h).max(0.0);
     }
 
+    /// Three groups rather than one list of twelve (§71): who the companion is, how it behaves,
+    /// and this window. Nothing moved pages and nothing was dropped — the labels are there so the
+    /// eye can skip the two thirds of the page it did not come for. "Growing up" went to About,
+    /// because it was never a setting: it is something earned, and it sits with the other things
+    /// that are only true about this companion.
     fn page_pet(&self, c: &mut Ctx, focus: &Option<Field>) {
         let s = c.s;
         let p = &self.settings.pet;
+        section_label(c, "WHO IT IS");
         let cy = c.row("Name", Some("What your companion is called"));
         let r = R::new(c.x1 - 220.0 * s, cy - 16.0 * s, 220.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &p.name, *focus == Some(Field::Name), &c.pal, s, "Pip");
         c.hits.push((r, UiAct::Focus(Field::Name)));
-
-        // Read-only: something earned, not a setting.
-        let growth = pip_core::messages::growth_label(self.state.experience);
-        c.row("Growing up", Some(&growth));
 
         // More characters than fit on one line: a single control is sized by its labels, so it
         // would have run off the left and over the description. Four to a line, each line its own
@@ -512,7 +509,9 @@ impl App {
         let cy = c.row("Size", None);
         let sel = match p.size { PetSize::Small => 0, PetSize::Medium => 1, PetSize::Large => 2 };
         c.segmented(cy, &["Small", "Medium", "Large"], sel, vec![UiAct::Size(PetSize::Small), UiAct::Size(PetSize::Medium), UiAct::Size(PetSize::Large)]);
-        let cy = c.row("Liveliness", Some("How often it blinks, stretches and looks around"));
+
+        section_label(c, "HOW IT BEHAVES");
+        let cy = c.row("Liveliness", Some("How often it stretches, fidgets and looks around"));
         let sel = match p.liveliness { Liveliness::Calm => 0, Liveliness::Normal => 1, Liveliness::Lively => 2 };
         c.segmented(cy, &["Calm", "Normal", "Lively"], sel, vec![UiAct::Live(Liveliness::Calm), UiAct::Live(Liveliness::Normal), UiAct::Live(Liveliness::Lively)]);
         let cy = c.row("Getting your attention", Some("How hard it tries when a reminder is due"));
@@ -523,6 +522,8 @@ impl App {
             sel,
             Attention::ALL.iter().map(|a| UiAct::Attn(*a)).collect(),
         );
+
+        section_label(c, "ON YOUR DESKTOP");
         let cy = c.row("Theme", Some("Speech bubbles and this window"));
         let sel = match p.theme { Theme::System => 0, Theme::Light => 1, Theme::Dark => 2 };
         c.segmented(cy, &["System", "Light", "Dark"], sel, vec![UiAct::Theme(Theme::System), UiAct::Theme(Theme::Light), UiAct::Theme(Theme::Dark)]);
@@ -542,28 +543,21 @@ impl App {
         let x1 = c.x1;
         let cy = c.row("Remind me every", None);
         c.stepper(cy, x1, 150.0, &fmt_minutes(w.interval_min), UiAct::WaterEvery(-15), UiAct::WaterEvery(15));
-        let cy = c.row("Starting at", Some("No water reminders before this time"));
-        c.stepper(cy, x1, 150.0, &w.start.to_string(), UiAct::WaterStart(-30), UiAct::WaterStart(30));
-        let cy = c.row("Until", None);
+        // One row, two steppers: "Starting at" and "Until" were never two decisions, they were two
+        // halves of one, and splitting them cost a whole row to say "Until" (§71).
+        let cy = c.row("Between", Some("No water reminders outside these hours"));
+        c.stepper(cy, x1 - 158.0 * c.s, 150.0, &w.start.to_string(), UiAct::WaterStart(-30), UiAct::WaterStart(30));
         c.stepper(cy, x1, 150.0, &w.end.to_string(), UiAct::WaterEnd(-30), UiAct::WaterEnd(30));
         let cy = c.row("On these days", None);
         let rects = ui::day_chips(c.pm, c.x1 - ui::DAY_CHIPS_W * c.s, cy - 13.0 * c.s, w.days.0, &c.pal, c.s);
         for (i, r) in rects.into_iter().enumerate() {
             c.hits.push((r, UiAct::WaterDay(i as u32)));
         }
-        let cy = c.row("Daily goal", Some("Glasses per day — for progress and celebrations"));
+        // What you have drunk today reads back under the goal rather than on a row of its own. It
+        // was never something you could set, and About already says it in full.
+        let cy = c.row("Daily goal", Some(&water_today(self)));
         let goal = if w.daily_goal == 1 { "1 glass".to_string() } else { format!("{} glasses", w.daily_goal) };
         c.stepper(cy, x1, 150.0, &goal, UiAct::WaterGoal(-1), UiAct::WaterGoal(1));
-        let cy = c.row("Today", None);
-        let today = local_count(self);
-        let mut t = format!("{today} of {} glasses", w.daily_goal);
-        if self.state.streak > 0 {
-            t += &format!("  ·  {}-day streak", self.state.streak);
-        }
-        let f = fonts();
-        let fs = 13.0 * c.s;
-        let tw = text::width(&f.regular, fs, &t);
-        text::draw(c.pm, &f.regular, fs, c.x1 - tw, cy + fs * 0.36, c.pal.muted, 1.0, &t);
     }
 
     fn page_reminders(&self, c: &mut Ctx, focus: &Option<Field>) {
@@ -573,6 +567,10 @@ impl App {
         self.water_section(c);
         section_label(c, "YOUR REMINDERS");
         c.y += 6.0 * s;
+        // The empty state ends its own section and nothing else. It used to `return`, which took
+        // "When it speaks up" down with it — so on a fresh install, when nobody has added a
+        // reminder yet, Do Not Disturb and Sound could not be reached at all. §21 fixed exactly
+        // this on the Dates page and it had grown back here.
         if self.settings.reminders.is_empty() {
             c.y += 40.0 * s;
             let msg = "No reminders yet.";
@@ -582,6 +580,8 @@ impl App {
                 text::draw(c.pm, &f.regular, 13.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
                 c.y += 19.0 * s;
             }
+            section_label(c, "WHEN IT SPEAKS UP");
+            self.quiet_section(c);
             return;
         }
         let now = platform::now_unix();
@@ -683,26 +683,23 @@ impl App {
     /// four of its seven rows were never about quiet hours at all — sound, snooze, how long a
     /// bubble waits, pausing for fullscreen — and all seven answer the same question as the page
     /// they now live on, which is when and how you get told things.
+    ///
+    /// Four of those rows are gone (§71), and the two steppers that are left share a line. What
+    /// went was not functionality: snooze is still ten minutes, the bubble still folds away after
+    /// three, reminders still wait for a fullscreen game, and an important one still arrives
+    /// silently while you are not being disturbed. `Settings::sanitize` pins all four, so the only
+    /// thing removed is being asked.
     fn quiet_section(&self, c: &mut Ctx) {
         let q = &self.settings.quiet;
         let n = &self.settings.notify;
         let x1 = c.x1;
-        let cy = c.row("Do not disturb", Some("Reminders wait. Your companion sleeps through it either way"));
+        let cy = c.row("Do not disturb", Some("Reminders wait, except important ones. Your companion sleeps either way"));
         c.toggle(cy, q.enabled, UiAct::QuietOn);
-        let cy = c.row("From", None);
-        c.stepper(cy, x1, 150.0, &q.start.to_string(), UiAct::QuietStart(-30), UiAct::QuietStart(30));
-        let cy = c.row("Until", None);
+        let cy = c.row("Between", None);
+        c.stepper(cy, x1 - 158.0 * c.s, 150.0, &q.start.to_string(), UiAct::QuietStart(-30), UiAct::QuietStart(30));
         c.stepper(cy, x1, 150.0, &q.end.to_string(), UiAct::QuietEnd(-30), UiAct::QuietEnd(30));
-        let cy = c.row("Important reminders", Some("Still shown while you are not being disturbed, silently"));
-        c.toggle(cy, q.allow_important, UiAct::QuietImportant);
         let cy = c.row("Sound", Some("Pip has a voice; this is whether you hear it"));
         c.toggle(cy, n.sound, UiAct::Sound);
-        let cy = c.row("Snooze for", None);
-        c.stepper(cy, x1, 150.0, &fmt_minutes(n.snooze_min), UiAct::Snooze(-5), UiAct::Snooze(5));
-        let cy = c.row("Bubble stays for", Some("Then it folds into a small badge on your pet"));
-        c.stepper(cy, x1, 150.0, &fmt_minutes(n.bubble_minutes), UiAct::BubbleMin(-1), UiAct::BubbleMin(1));
-        let cy = c.row("Pause during fullscreen", Some("Games, videos, presentations — reminders wait"));
-        c.toggle(cy, n.pause_in_fullscreen, UiAct::Fullscreen);
     }
 
     fn page_about(&self, c: &mut Ctx, u: Usage, cpu_rate: Option<f32>) {
@@ -712,15 +709,17 @@ impl App {
         let days = ((now - self.state.created_at).max(0) / 86_400) as u32;
         let (x, w) = (c.x0 - 14.0 * s, c.x1 - c.x0 + 28.0 * s);
 
-        // Stats card
+        // Stats card. "Growing up" came here off the Companion page (§71): it was a read-only row
+        // among eleven controls, which is the one place a fact does not belong.
         let y = c.y + 4.0 * s;
-        fill_rrect(c.pm, x, y, w, 76.0 * s, 14.0 * s, color(c.pal.surface, 1.0));
+        fill_rrect(c.pm, x, y, w, 98.0 * s, 14.0 * s, color(c.pal.surface, 1.0));
         let with = match days {
             0 => "arrived today".to_string(),
             1 => "has been with you for 1 day".to_string(),
             d => format!("has been with you for {d} days"),
         };
         text::draw(c.pm, &f.semibold, 15.0 * s, c.x0, y + 30.0 * s, c.pal.text, 1.0, &format!("{} {with}", self.settings.pet.name));
+        text::draw(c.pm, &f.regular, 12.5 * s, c.x0, y + 54.0 * s, c.pal.muted, 1.0, &pip_core::messages::growth_label(self.state.experience));
         let stats = format!(
             "Today {} of {} glasses  ·  streak {} (best {})",
             local_count(self),
@@ -728,8 +727,14 @@ impl App {
             self.state.streak,
             self.state.best_streak
         );
-        text::draw(c.pm, &f.regular, 12.5 * s, c.x0, y + 54.0 * s, c.pal.muted, 1.0, &stats);
-        c.y = y + 92.0 * s;
+        text::draw(c.pm, &f.regular, 12.5 * s, c.x0, y + 76.0 * s, c.pal.muted, 1.0, &stats);
+        c.y = y + 114.0 * s;
+
+        // Your phone, which came off the Connections page with the other two connectors (§71).
+        // It belongs on the page about this PC rather than on a page of its own: it is the one
+        // connector that is not about a service at all.
+        section_label(c, "YOUR PHONE");
+        self.draw_sync_connector(c);
 
         // Resource card
         let y = c.y;
@@ -1145,8 +1150,6 @@ impl App {
                 self.ui_arm_usage();
                 if p == Page::About {
                     self.ui_usage_tick();
-                }
-                if p == Page::Connections {
                     self.sync_peek();
                 }
                 return;
@@ -1219,11 +1222,7 @@ impl App {
             UiAct::QuietOn => st.quiet.enabled = !st.quiet.enabled,
             UiAct::QuietStart(d) => st.quiet.start = st.quiet.start.add_minutes(d),
             UiAct::QuietEnd(d) => st.quiet.end = st.quiet.end.add_minutes(d),
-            UiAct::QuietImportant => st.quiet.allow_important = !st.quiet.allow_important,
             UiAct::Sound => st.notify.sound = !st.notify.sound,
-            UiAct::Snooze(d) => st.notify.snooze_min = (st.notify.snooze_min as i32 + d).clamp(5, 60) as u32,
-            UiAct::BubbleMin(d) => st.notify.bubble_minutes = (st.notify.bubble_minutes as i32 + d).clamp(1, 30) as u32,
-            UiAct::Fullscreen => st.notify.pause_in_fullscreen = !st.notify.pause_in_fullscreen,
             UiAct::AddReminder => {
                 let next_hour = TimeOfDay::of(pip_core::time::local(&chrono::Local, now + 3600)).0 / 60 * 60;
                 let id = format!("r{:x}{:04x}", now, (platform::tick_ms() & 0xffff));
@@ -1364,6 +1363,16 @@ impl App {
 fn local_count(app: &App) -> u32 {
     let today = pip_core::time::local(&chrono::Local, platform::now_unix()).date();
     if app.state.water.day == Some(today) { app.state.water.count } else { 0 }
+}
+
+/// What the "Daily goal" row says underneath itself: how today is going, which used to be a row
+/// of its own called "Today" (§71).
+fn water_today(app: &App) -> String {
+    let mut t = format!("Glasses per day — {} so far today", local_count(app));
+    if app.state.streak > 0 {
+        t += &format!(", {}-day streak", app.state.streak);
+    }
+    t
 }
 
 pub fn set_window_icon(hwnd: HWND, body: u32, who: Character) {
@@ -1523,9 +1532,11 @@ impl App {
         let f = fonts();
         section_label(c, "IMPORTANT DATES");
         self.dates_section(c, focus);
+        // Connecting a calendar now happens on the calendar page, where you are already standing
+        // when you want one (§71).
         section_label(c, "CALENDARS");
+        self.draw_calendar_connectors(c);
         let d = &self.settings.dates;
-        let x1 = c.x1;
         let now = platform::now_unix();
         let cy = c.row("Event alerts", Some("Important: has its own alert, important calendar, or a word below"));
         let sel = match d.event_alerts {
@@ -1539,28 +1550,21 @@ impl App {
             sel,
             vec![UiAct::Alerts(EventAlerts::Important), UiAct::Alerts(EventAlerts::All), UiAct::Alerts(EventAlerts::Off)],
         );
-        let cy = c.row("Alert me", Some("For events without an alert of their own"));
-        let lead = if d.event_lead_min == 0 { "At the start".to_string() } else { format!("{} min before", d.event_lead_min) };
-        c.stepper(cy, x1, 160.0, &lead, UiAct::EventLead(-5), UiAct::EventLead(5));
         let cy = c.row("Important words", Some("Comma-separated, e.g. interview, dentist"));
         let editing = *focus == Some(Field::Keywords);
         let value = if editing { kw_buf.to_string() } else { d.keywords.join(", ") };
         let r = R::new(c.x1 - 250.0 * s, cy - 16.0 * s, 250.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &value, editing, &c.pal, s, "No keywords");
         c.hits.push((r, UiAct::Focus(Field::Keywords)));
-        let last = d.calendars.iter().filter_map(|c| self.feed_meta.get(&c.id)).map(|m| m.synced_at).max().unwrap_or(0);
-        let hint = if d.calendars.is_empty() {
-            "Add a calendar to start".to_string()
-        } else if last > 0 {
-            format!("Last synced {}. Checks hourly.", ago(now - last))
-        } else {
-            "Not synced yet".to_string()
-        };
-        let cy = c.row("Sync", Some(&hint));
+        // Only once there is something to sync. The row used to appear with "Add a calendar to
+        // start" beside an empty space, which is a control that cannot be used telling you so.
         if !d.calendars.is_empty() {
+            let last = d.calendars.iter().filter_map(|c| self.feed_meta.get(&c.id)).map(|m| m.synced_at).max().unwrap_or(0);
+            let hint = if last > 0 { format!("Last synced {}. Checks hourly.", ago(now - last)) } else { "Not synced yet".to_string() };
+            let cy = c.row("Sync", Some(&hint));
             let label = "Sync now";
             let bw = ui::button_width(label, s);
-            c.button(x1 - bw, cy - 15.0 * s, label, BtnStyle::Secondary, UiAct::SyncNow);
+            c.button(c.x1 - bw, cy - 15.0 * s, label, BtnStyle::Secondary, UiAct::SyncNow);
         }
         c.y += 12.0 * s;
 
@@ -1685,7 +1689,6 @@ impl App {
             }
             UiAct::DateDelete(id) => d.items.retain(|x| &x.id != id),
             UiAct::Alerts(a) => d.event_alerts = *a,
-            UiAct::EventLead(m) => d.event_lead_min = (d.event_lead_min as i32 + m).clamp(0, 60) as u32,
             UiAct::CalOn(id) => {
                 if let Some(x) = d.calendars.iter_mut().find(|x| &x.id == id) {
                     x.enabled = !x.enabled;
@@ -2070,30 +2073,6 @@ impl App {
         c.y += h + 12.0 * s;
     }
 
-    fn page_connections(&self, c: &mut Ctx) {
-        let s = c.s;
-        let f = fonts();
-        let inner = c.x1 - c.x0;
-        let intro = "You sign in on each service\u{2019}s own page, so Pip never sees your password. You can disconnect any time.";
-        for l in text::wrap(&f.regular, 12.5 * s, intro, inner) {
-            c.y += 19.0 * s;
-            text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y, c.pal.muted, 1.0, &l);
-        }
-        c.y += 4.0 * s;
-        section_label(c, "EMAIL");
-        self.draw_gmail_section(c);
-        section_label(c, "CALENDARS");
-        self.draw_calendar_connectors(c);
-        section_label(c, "YOUR OTHER DEVICES");
-        self.draw_sync_connector(c);
-        c.y += 4.0 * s;
-        let privacy = "Sign-ins are stored encrypted for your Windows account on this PC and never sent anywhere else. Disconnecting also removes Pip\u{2019}s access on the service\u{2019}s side.";
-        for line in text::wrap(&f.regular, 12.0 * s, privacy, inner) {
-            c.y += 18.0 * s;
-            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
-        }
-    }
-
     fn page_email(&self, c: &mut Ctx, focus: &Option<Field>, list_buf: &str) {
         let s = c.s;
         let f = fonts();
@@ -2113,14 +2092,18 @@ impl App {
         };
         list_field(c, "Important senders", "Addresses, @domains or names, comma-separated", Field::MailSenders, &e.senders, "e.g. mom@gmail.com, @work.co.za");
         list_field(c, "Subject words", "Mail whose subject contains any of these", Field::MailKeywords, &e.keywords, "e.g. urgent, invoice");
-        let cy = c.row("Gmail\u{2019}s Important marker", Some("Also nudge for mail Gmail itself marks important (can be a lot)"));
-        c.toggle(cy, e.gmail_important, UiAct::MailImportantMarker);
-        // Worded carefully: Pip looks at mail as it arrives, so it only ever sees a star that is
-        // already on the message. Starring something later doesn't bring it back.
-        let cy = c.row("Starred in Gmail", Some("Also nudge for mail that is already starred when it arrives"));
-        c.toggle(cy, e.starred, UiAct::MailStarred);
-        let cy = c.row("Check every", Some("Only while you\u{2019}re at the PC \u{2014} paused when away or locked"));
-        c.stepper(cy, c.x1, 150.0, &fmt_minutes(e.check_minutes), UiAct::MailEvery(-1), UiAct::MailEvery(1));
+        c.y += 8.0 * s;
+        // Three rows became two and a sentence (§71). "Check every" was never a decision anybody
+        // wanted; Gmail's own Important marker warned in its own hint that it "can be a lot"; and
+        // a star is the one mark you put there yourself, so it counts from the first day rather
+        // than waiting behind a switch nobody found. Worded carefully, because Pip looks at mail
+        // as it arrives and only ever sees a star that is already on the message — starring
+        // something later does not bring it back, which is what Important on the card is for.
+        let how = "Pip also nudges for mail you had already starred in Gmail, and checks every few minutes while you\u{2019}re at the PC \u{2014} never while you\u{2019}re away or locked. Anything else, use Important on the pop-up when it arrives.";
+        for line in text::wrap(&f.regular, 12.5 * s, how, inner) {
+            c.y += 19.0 * s;
+            text::draw(c.pm, &f.regular, 12.5 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
+        }
         c.y += 8.0 * s;
         let privacy = "Pip asks Google only for each new email\u{2019}s sender, subject and labels \u{2014} it can\u{2019}t read, send or delete your mail. Sign-ins are stored encrypted on this PC; nothing goes anywhere else.";
         for line in text::wrap(&f.regular, 12.0 * s, privacy, inner) {
@@ -2181,9 +2164,6 @@ impl App {
                     self.confirm_disconnect = Some(id.clone());
                 }
             }
-            UiAct::MailImportantMarker => self.settings.email.gmail_important = !self.settings.email.gmail_important,
-            UiAct::MailStarred => self.settings.email.starred = !self.settings.email.starred,
-            UiAct::MailEvery(d) => self.settings.email.check_minutes = (self.settings.email.check_minutes as i32 + d).clamp(1, 30) as u32,
             UiAct::Page(_) => {
                 // Leaving the page puts an old "didn't work" message away.
                 self.dismiss_signin_problem();
@@ -2254,6 +2234,34 @@ mod character_row_fits {
                     x1 - w >= left,
                     "at {s}x, character line {i} ({labels:?}) is {:.0}px too wide and would run back over the text",
                     left - (x1 - w)
+                );
+            }
+        }
+    }
+
+    /// §71 put "Starting at" and "Until" onto one row, because they were always two halves of one
+    /// decision rather than two decisions. Two steppers plus a gap is 308 units of the right-hand
+    /// side, where every other row spends 150, so the label and its hint have to be checked
+    /// against what is left — and checked at every scaling, since a hint that fits at 100% is the
+    /// kind of thing that stops fitting at 150% and is never looked at again.
+    #[test]
+    fn two_times_on_one_row_leave_their_hint_room() {
+        let f = fonts();
+        // Both the water window and do-not-disturb; the longer hint is the one that decides it.
+        for (label, hint) in [
+            ("Between", "No water reminders outside these hours"),
+            ("Do not disturb", "Reminders wait, except important ones. Your companion sleeps either way"),
+        ] {
+            for s in [1.0f32, 1.25, 1.5] {
+                let (x0, x1) = content(s);
+                let text_w = text::width(&f.semibold, 13.5 * s, label).max(text::width(&f.regular, 12.0 * s, hint));
+                // A stepper at `x_right` occupies `w * s` back from it; the pair sits at
+                // `x1 - 158 * s` and `x1`, so together they start 308 units in from the right.
+                let controls = if label == "Between" { 308.0 * s } else { ui::TOGGLE_W * s };
+                assert!(
+                    x1 - controls >= x0 + text_w + 12.0 * s,
+                    "at {s}x, \"{label}\" is {:.0}px short of room and its hint would run under the control",
+                    (x0 + text_w + 12.0 * s) - (x1 - controls)
                 );
             }
         }

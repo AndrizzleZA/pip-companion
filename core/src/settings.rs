@@ -591,20 +591,49 @@ impl CustomReminder {
     }
 }
 
+/// The settings Pip decides for itself (§71).
+///
+/// Each of these was a row on a settings page, and none of them was a decision anybody wanted to
+/// make: the answer was the same for everyone, and all the row did was ask. They stay as fields
+/// because the file format, the phone and the sync block all carry them — what changed is that
+/// `sanitize` pins them, so the value is identical on every device and cannot drift to something
+/// there is no longer a way to put back.
+pub mod fixed {
+    /// How long "Snooze" puts a reminder off for. The button has always said the number out loud,
+    /// so it was never really hidden, and ten minutes is what every card already offered.
+    pub const SNOOZE_MIN: u32 = 10;
+    /// How long an unanswered bubble stays before it folds into the badge on the pet.
+    pub const BUBBLE_MIN: u32 = 3;
+    /// Minutes before a timed event that has no alert of its own.
+    pub const EVENT_LEAD_MIN: u32 = 10;
+    /// Minutes between mail checks while you are at the PC. Night-time backs off separately.
+    pub const MAIL_CHECK_MIN: u32 = 3;
+}
+
 impl Settings {
-    /// Clamp values to sane ranges after loading or editing (hand-edited files, future versions).
+    /// Clamp values to sane ranges after loading or editing (hand-edited files, future versions),
+    /// and pin the ones Pip decides for itself.
     pub fn sanitize(&mut self) {
         self.version = SETTINGS_VERSION;
         let name: String = self.pet.name.trim().chars().take(24).collect();
         self.pet.name = if name.is_empty() { "Pip".into() } else { name };
         self.water.interval_min = self.water.interval_min.clamp(1, 24 * 60);
         self.water.daily_goal = self.water.daily_goal.clamp(1, 30);
-        self.notify.snooze_min = self.notify.snooze_min.clamp(1, 240);
-        self.notify.bubble_minutes = self.notify.bubble_minutes.clamp(1, 120);
+        self.notify.snooze_min = fixed::SNOOZE_MIN;
+        self.notify.bubble_minutes = fixed::BUBBLE_MIN;
+        // A reminder that waits for a game to finish, and an important one that still arrives
+        // while you are not being disturbed, are the only answers anybody ever wanted. Asking was
+        // the entire cost of them.
+        self.notify.pause_in_fullscreen = true;
+        self.quiet.allow_important = true;
         self.reminders.truncate(50);
-        self.email.check_minutes = self.email.check_minutes.clamp(1, 60);
+        self.email.check_minutes = fixed::MAIL_CHECK_MIN;
+        // A star is something you put there yourself, so it counts from the first day. Gmail's own
+        // marker is a guess, and the row's own hint warned that it "can be a lot" (§70).
+        self.email.starred = true;
+        self.email.gmail_important = false;
         self.email.accounts.truncate(5);
-        self.dates.event_lead_min = self.dates.event_lead_min.clamp(0, 240);
+        self.dates.event_lead_min = fixed::EVENT_LEAD_MIN;
         self.dates.items.truncate(200);
         self.dates.calendars.truncate(10);
         for d in &mut self.dates.items {
@@ -624,6 +653,52 @@ impl Settings {
 
     pub fn reminder_mut(&mut self, id: &str) -> Option<&mut CustomReminder> {
         self.reminders.iter_mut().find(|r| r.id == id)
+    }
+}
+
+#[cfg(test)]
+mod decided_for_you {
+    use super::*;
+
+    /// The rows §71 took off the settings pages are pinned, not merely hidden. Hiding a control
+    /// that still reads a stored value leaves anybody who had changed it stuck with a number they
+    /// can no longer see or put back, and leaves the PC and the phone free to disagree about it.
+    #[test]
+    fn a_setting_with_no_row_left_cannot_drift() {
+        let mut s = Settings::default();
+        // A file from an older Pip, or one somebody edited by hand.
+        s.notify.snooze_min = 45;
+        s.notify.bubble_minutes = 30;
+        s.notify.pause_in_fullscreen = false;
+        s.quiet.allow_important = false;
+        s.email.check_minutes = 25;
+        s.email.gmail_important = true;
+        s.email.starred = false;
+        s.dates.event_lead_min = 60;
+        s.sanitize();
+
+        assert_eq!(s.notify.snooze_min, fixed::SNOOZE_MIN);
+        assert_eq!(s.notify.bubble_minutes, fixed::BUBBLE_MIN);
+        assert_eq!(s.email.check_minutes, fixed::MAIL_CHECK_MIN);
+        assert_eq!(s.dates.event_lead_min, fixed::EVENT_LEAD_MIN);
+        assert!(s.notify.pause_in_fullscreen, "a reminder still waits for a fullscreen game");
+        assert!(s.quiet.allow_important, "an important reminder still gets through, silently");
+        assert!(s.email.starred, "a star is a mark you put there yourself");
+        assert!(!s.email.gmail_important, "Gmail's own guess stays off; its own hint said it can be a lot");
+    }
+
+    /// What a fresh install gets is what every install gets, so the defaults and the pins have to
+    /// agree. If they ever disagree, `sanitize` silently rewrites the file on first load and the
+    /// default is a lie told once.
+    #[test]
+    fn the_defaults_already_say_what_sanitize_would_say() {
+        let mut s = Settings::default();
+        let before = s.clone();
+        s.sanitize();
+        assert_eq!(before.notify, s.notify);
+        assert_eq!(before.quiet, s.quiet);
+        assert_eq!(before.email, s.email);
+        assert_eq!(before.dates.event_lead_min, s.dates.event_lead_min);
     }
 }
 
