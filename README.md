@@ -87,7 +87,13 @@ file; it is what Windows says about anything it has not seen signed before.
 - Reminders appear as a speech bubble: **Done / Snooze / Dismiss**. Ignored bubbles fold into a
   small badge on the pet after a few minutes; click the pet to bring it back.
 
-**Your companion.** Settings › Companion picks who it is. Four are there from the first day —
+**Today.** Pip opens on your day: the time, the date, your water, what's coming, mail waiting, your
+streak — with the companion standing beside it, awake or asleep as it actually is. The same card
+appears if you click the creature on your desktop. Underneath, **Watching for you** offers the
+three things Pip can keep an eye on (Gmail, your calendar, your phone), one click each.
+
+**Your companion.** Settings › Pip picks who it is, with the creature live on the page: change the
+character, the colour, the size or how hard it tries, and it reacts in front of you. Four are there from the first day —
 **Sprout**, **Bunny**, **Toadstool** and **Tuft** — and they are yours forever; changing your mind
 costs nothing and nothing is ever taken away. Name it, colour it, size it, give it a voice.
 
@@ -121,9 +127,13 @@ in a while having a bad dream it recovers from — then stretches and climbs out
 <img src="docs/night.png" alt="A companion curled up asleep in its burrow" width="112">
 
 **Keyboard.** The settings window works without a mouse: **Tab** and **Shift+Tab** move through
-everything including the page list, **Enter** or **Space** activates, **←/→** move within a row of
-choices, and **Esc** closes (or leaves a text field first). A screen reader cannot see the window
-yet — see §45 of the design document.
+everything including the row of page names, **Enter** or **Space** activates, **←/→** move within a
+row of choices, and **Esc** closes (or leaves a text field first). A screen reader cannot see the
+window yet — see §45 of the design document.
+
+**The first run.** Pip asks three things, one at a time, each answerable in a tap and each
+skippable: who it should be, whether it should keep an eye on anything, and then — last, next to
+the thing it operates — that clicking it shows your day.
 
 **Dates & calendars.** Add birthdays, anniversaries and deadlines in Settings › Calendar (with an optional
 heads-up a few days before). South African public holidays are built in. Calendars come from Google

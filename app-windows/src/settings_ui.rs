@@ -3,7 +3,7 @@
 
 use crate::app::{hm, App, Effect};
 use crate::platform::{self, tick_ms, Usage};
-use crate::render::creature::{self, Expr, Pose};
+use crate::render::creature::{self, AnimKind, Expr, Pose};
 use crate::render::text::{self, fonts};
 use crate::render::ui::{self, BtnStyle, R};
 use crate::render::{color, fill_rrect, stroke_rrect, Palette};
@@ -21,9 +21,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const LOGICAL_W: i32 = 760;
 pub const LOGICAL_H: i32 = 580;
-const SIDEBAR_W: f32 = 196.0;
-const HEADER_H: f32 = 92.0;
+/// The band of page names across the top, and the margin either side of the content (§72).
+///
+/// What was here before was a 196-pixel sidebar and a 92-pixel header: 288 units of chrome on a
+/// 760-wide window, every page, forever, to hold five words and repeat the word you had just
+/// clicked. A row of the same five words costs 56, gives the content back 196 of width, and stops
+/// the window being shaped like Windows Settings — which is most of what "uncluttered" turned out
+/// to mean here. The name the row highlights is the page's title, so the title and its subtitle
+/// went with the sidebar.
+const NAV_H: f32 = 56.0;
+const PAD_X: f32 = 34.0;
 pub const T_USAGE: usize = 1;
+/// Drives the live companion on the Pip page, and only while it has something to show (§72).
+pub const T_PREVIEW: usize = 2;
 
 pub fn page_at(i: usize) -> Page {
     PAGES[i.min(PAGES.len() - 1)].0
@@ -31,6 +41,7 @@ pub fn page_at(i: usize) -> Page {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
+    Today,
     Pet,
     Reminders,
     Calendars,
@@ -46,12 +57,17 @@ pub enum Page {
 /// already drew, so the one thing on it anybody needed twice was the one thing it duplicated.
 /// Each connector now sits on the page about the thing it connects, where you are already
 /// standing when you want it, and the phone sits with About, which is the page about this PC.
-const PAGES: [(Page, &str, &str); 5] = [
-    (Page::Pet, "Companion", "Name, look and behaviour"),
-    (Page::Reminders, "Reminders", "Water, your reminders, and when it speaks up"),
-    (Page::Calendars, "Calendar", "Dates, holidays and your calendars"),
-    (Page::Email, "Email", "A gentle nudge for mail that matters"),
-    (Page::About, "About", "This PC, your phone and privacy"),
+/// Today is first, and Today is what opens (§72). The card that appears when you click the
+/// companion was the warmest and most useful surface in the program, and it was taught in one
+/// sentence, in one bubble, that goes away after sixty seconds and never comes back. The window
+/// used to open on a page of eleven controls instead. They are the wrong way round.
+const PAGES: [(Page, &str); 6] = [
+    (Page::Today, "Today"),
+    (Page::Pet, "Pip"),
+    (Page::Reminders, "Reminders"),
+    (Page::Calendars, "Calendar"),
+    (Page::Email, "Email"),
+    (Page::About, "About"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +151,10 @@ pub enum UiAct {
     SyncAskAgain,
     Who(Character),
     Say(Voice),
+    /// One of the right-click menu's own commands, run from a button on Today (§72). The menu
+    /// already knows how to pour a glass and to hold reminders for an hour; a second copy of
+    /// either here would be a second thing to keep right.
+    Menu(u32),
 }
 
 pub struct SettingsUi {
@@ -170,6 +190,13 @@ pub struct SettingsUi {
     edit_origin: Option<Box<pip_core::Settings>>,
     /// Comma-separated keywords while that field is being edited.
     keywords_buf: String,
+    /// The gesture the companion on the Pip page is making, and when it started (§72).
+    ///
+    /// A still picture of a creature that has forty-four animations is a waste of the creature.
+    /// This is the cheapest honest version of making it live: nothing runs until you change
+    /// something, the timer is armed for one gesture and killed the moment it ends, and the page
+    /// has to be open for either to happen.
+    preview: Option<(AnimKind, u64)>,
 }
 
 impl SettingsUi {
@@ -177,7 +204,7 @@ impl SettingsUi {
         SettingsUi {
             hwnd,
             surface: Surface::empty(),
-            page: Page::Pet,
+            page: Page::Today,
             hits: Vec::new(),
             hover: None,
             focus: None,
@@ -190,6 +217,7 @@ impl SettingsUi {
             usage_prev: None,
             edit_origin: None,
             keywords_buf: String::new(),
+            preview: None,
         }
     }
 
@@ -329,6 +357,42 @@ impl App {
         }
     }
 
+    /// Show the companion doing something, because you just changed what it is (§72).
+    ///
+    /// Only from the Pip page, where the companion is on screen to see it. The timer runs for one
+    /// gesture — under two seconds — and `ui_preview_tick` kills it the moment the gesture ends,
+    /// so an open settings window costs nothing extra the rest of the time.
+    fn ui_preview(&mut self, kind: AnimKind) {
+        let Some(ui) = &mut self.ui else { return };
+        if ui.page != Page::Pet {
+            return;
+        }
+        ui.preview = Some((kind, tick_ms()));
+        unsafe { SetTimer(ui.hwnd, T_PREVIEW, 33, None) };
+    }
+
+    /// One frame of that gesture, and the end of it.
+    pub fn ui_preview_tick(&mut self) {
+        let Some(ui) = &mut self.ui else { return };
+        let done = match ui.preview {
+            Some((kind, t0)) => tick_ms().saturating_sub(t0) >= kind.duration_ms(),
+            None => true,
+        };
+        if done {
+            ui.preview = None;
+            unsafe { KillTimer(ui.hwnd, T_PREVIEW) };
+        }
+        self.ui_invalidate();
+    }
+
+    /// The settings window's timers. Routed by id, because there is more than one now.
+    pub fn ui_timer(&mut self, id: usize) {
+        match id {
+            T_PREVIEW => self.ui_preview_tick(),
+            _ => self.ui_usage_tick(),
+        }
+    }
+
     pub fn ui_usage_tick(&mut self) {
         if let Some(ui) = &mut self.ui {
             let u = platform::process_usage();
@@ -375,30 +439,51 @@ impl App {
         let usage = ui.usage;
         let cpu_rate = ui.cpu_rate;
         let kw_buf = ui.keywords_buf.clone();
+        let prev_anim = ui.preview;
         let Some(mut pm) = ui.surface.canvas() else { return };
         fill_rrect(&mut pm, 0.0, 0.0, w, h, 0.0, color(pal.window, 1.0));
 
-        let x0 = (SIDEBAR_W + 36.0) * s;
-        let x1 = w - 36.0 * s;
-        let mut c = Ctx { pm: &mut pm, pal, s, x0, x1, y: HEADER_H * s - scroll, hits: Vec::new(), hover };
+        let x0 = PAD_X * s;
+        let x1 = w - PAD_X * s;
+        let mut c = Ctx { pm: &mut pm, pal, s, x0, x1, y: NAV_H * s + 8.0 * s - scroll, hits: Vec::new(), hover };
 
         match page {
-            Page::Pet => self.page_pet(&mut c, &focus),
-
+            Page::Today => self.page_today(&mut c),
+            Page::Pet => self.page_pet(&mut c, &focus, prev_anim),
             Page::Reminders => self.page_reminders(&mut c, &focus),
             Page::Calendars => self.page_calendars(&mut c, &focus, &kw_buf),
             Page::Email => self.page_email(&mut c, &focus, &kw_buf),
             Page::About => self.page_about(&mut c, usage, cpu_rate),
         }
         let content_bottom = c.y + scroll + 28.0 * s;
-        let mut hits: Vec<(R, UiAct)> = c.hits.into_iter().filter(|(r, _)| r.y + r.h > HEADER_H * s).collect();
+        let mut hits: Vec<(R, UiAct)> = c.hits.into_iter().filter(|(r, _)| r.y + r.h > NAV_H * s).collect();
 
-        // Header (drawn over scrolled content)
-        fill_rrect(&mut pm, SIDEBAR_W * s, 0.0, w, HEADER_H * s, 0.0, color(pal.window, 1.0));
-        let (title, sub) = PAGES.iter().find(|p| p.0 == page).map(|p| (p.1, p.2)).unwrap_or(("", ""));
+        // The navigation band, painted over the scrolled content. Each page is its own name and
+        // nothing else: no icon to decode, no second copy of the name as a heading below, and the
+        // underline rather than a filled pill, because six filled pills in a row is a toolbar.
         let f = fonts();
-        text::draw(&mut pm, &f.semibold, 22.0 * s, x0, 44.0 * s, pal.text, 1.0, title);
-        text::draw(&mut pm, &f.regular, 12.5 * s, x0, 66.0 * s, pal.muted, 1.0, sub);
+        fill_rrect(&mut pm, 0.0, 0.0, w, NAV_H * s, 0.0, color(pal.window, 1.0));
+        fill_rrect(&mut pm, 0.0, NAV_H * s - 1.0, w, 1.0, 0.0, color(pal.border, 0.7));
+        let fs = 13.5 * s;
+        let mut nx = x0;
+        for (p, label) in PAGES {
+            let selected = p == page;
+            let font = if selected { &f.semibold } else { &f.regular };
+            let lw = text::width(font, fs, label);
+            let r = R::new(nx - 8.0 * s, 12.0 * s, lw + 16.0 * s, 32.0 * s);
+            if !selected && hover == Some(r) {
+                fill_rrect(&mut pm, r.x, r.y, r.w, r.h, 8.0 * s, color(pal.surface, 0.6));
+            }
+            let rgb = if selected || hover == Some(r) { pal.text } else { pal.muted };
+            text::draw(&mut pm, font, fs, nx, 32.0 * s, rgb, 1.0, label);
+            if selected {
+                fill_rrect(&mut pm, nx, 42.0 * s, lw, 2.0 * s, 1.0 * s, color(pal.accent, 1.0));
+            }
+            hits.push((r, UiAct::Page(p)));
+            nx += lw + 26.0 * s;
+        }
+        // The one action a page can add to the band. It used to sit in the header beside a title
+        // that said the same word as the button next to it.
         let add = match page {
             Page::Reminders if self.settings.reminders.len() < 50 => Some(("+ Add reminder", UiAct::AddReminder)),
             Page::Calendars if self.settings.dates.items.len() < 200 => Some(("+ Add date", UiAct::AddDate)),
@@ -406,41 +491,10 @@ impl App {
         };
         if let Some((label, act)) = add {
             let bw = ui::button_width(label, s);
-            let r = R::new(x1 - bw, 32.0 * s, bw, 30.0 * s);
+            let r = R::new(x1 - bw, 13.0 * s, bw, 30.0 * s);
             ui::button(&mut pm, r, label, BtnStyle::Primary, &pal, s, hover == Some(r));
             hits.push((r, act));
         }
-
-        // Sidebar
-        let side = if pal.dark { 0x171A20 } else { 0xEDEFF3 };
-        fill_rrect(&mut pm, 0.0, 0.0, SIDEBAR_W * s, h, 0.0, color(side, 1.0));
-        let cs = 0.62 * s;
-        let base = Transform::from_translate((SIDEBAR_W * s - 100.0 * cs) / 2.0, 14.0 * s).pre_scale(cs, cs);
-        let mut pose = Pose::base(Expr::Happy);
-        pose.blush = 0.6;
-        // The portrait is this companion, so it is as grown as it actually is.
-        pose.stage = self.state.stage();
-        creature::draw(&mut pm, &pose, pal.body, self.settings.pet.character.shown(self.state.experience), base);
-        let name = &self.settings.pet.name;
-        text::draw_centered(&mut pm, &f.semibold, 16.0 * s, SIDEBAR_W * s / 2.0, 100.0 * s, pal.text, 1.0, name);
-        text::draw_centered(&mut pm, &f.regular, 11.5 * s, SIDEBAR_W * s / 2.0, 118.0 * s, pal.muted, 1.0, "your tiny friend");
-        let mut ny = 142.0 * s;
-        for (p, label, _) in PAGES {
-            let r = R::new(12.0 * s, ny, (SIDEBAR_W - 24.0) * s, 36.0 * s);
-            let selected = p == page;
-            if selected {
-                fill_rrect(&mut pm, r.x, r.y, r.w, r.h, 10.0 * s, color(pal.surface, 1.0));
-                fill_rrect(&mut pm, r.x + 6.0 * s, r.y + 10.0 * s, 3.0 * s, r.h - 20.0 * s, 1.5 * s, color(pal.accent, 1.0));
-            } else if hover == Some(r) {
-                fill_rrect(&mut pm, r.x, r.y, r.w, r.h, 10.0 * s, color(pal.surface, 0.5));
-            }
-            let fs = 13.5 * s;
-            let font = if selected { &f.semibold } else { &f.regular };
-            text::draw(&mut pm, font, fs, r.x + 18.0 * s, ui::baseline(r.y, r.h, fs), if selected { pal.text } else { pal.muted }, 1.0, label);
-            hits.push((r, UiAct::Page(p)));
-            ny += 40.0 * s;
-        }
-        text::draw_centered(&mut pm, &f.regular, 11.0 * s, SIDEBAR_W * s / 2.0, h - 16.0 * s, pal.muted, 0.8, concat!("Pip ", env!("CARGO_PKG_VERSION")));
 
         // The focus ring, last, so it sits over whatever it is marking — including the sidebar and
         // the header, which are themselves painted over the scrolled content. Drawing it from the
@@ -462,17 +516,171 @@ impl App {
         ui.max_scroll = (content_bottom - h).max(0.0);
     }
 
+    /// Your day, as the front page (§72).
+    ///
+    /// This is the card that appears when you click the companion, which was the warmest surface
+    /// in the program and the hardest to find. It is built from the very same `info_card`, so the
+    /// bubble and the page cannot drift apart: what changes is only the room it is given — the
+    /// companion stands beside it, and underneath is the one thing the card never had, which is
+    /// somewhere for Pip to offer what it could be watching instead of waiting to be found.
+    fn page_today(&self, c: &mut Ctx) {
+        let s = c.s;
+        let f = fonts();
+        let card = self.info_card();
+        let now = platform::now_unix();
+
+        // The companion, as it actually is this minute: asleep in the small hours, awake in the day.
+        let asleep = self.asleep();
+        let cs = 1.0 * s;
+        let stage_w = 168.0 * s;
+        let base = Transform::from_translate(c.x0 + (stage_w - 100.0 * cs) / 2.0, c.y + 10.0 * s).pre_scale(cs, cs);
+        let mut pose = Pose::base(if asleep { Expr::Asleep } else { Expr::Happy });
+        pose.blush = 0.6;
+        pose.stage = self.state.stage();
+        creature::draw(c.pm, &pose, c.pal.body, self.settings.pet.character.shown(self.state.experience), base);
+        let mood = if asleep {
+            format!("{} is asleep", self.settings.pet.name)
+        } else {
+            format!("{} is keeping an eye out", self.settings.pet.name)
+        };
+        for (i, l) in text::wrap(&f.regular, 12.0 * s, &mood, stage_w).into_iter().enumerate() {
+            text::draw_centered(c.pm, &f.regular, 12.0 * s, c.x0 + stage_w / 2.0, c.y + 128.0 * s + 16.0 * s * i as f32, c.pal.muted, 1.0, &l);
+        }
+
+        // The day itself, to the right of the companion.
+        let dx = c.x0 + stage_w + 26.0 * s;
+        let mut dy = c.y + 6.0 * s;
+        if let Some(big) = &card.big {
+            text::draw(c.pm, &f.semibold, 42.0 * s, dx, dy + 36.0 * s, c.pal.text, 1.0, big);
+            dy += 50.0 * s;
+        }
+        for line in &card.lines {
+            let fs = if line.muted { 12.5 * s } else { 13.5 * s };
+            let rgb = if line.muted { c.pal.muted } else { c.pal.text };
+            text::draw(c.pm, &f.regular, fs, dx, dy + fs, rgb, 1.0, &line.text);
+            dy += fs * 1.62;
+        }
+        // The first line is always the date, so one line means the date and nothing else. A page
+        // that simply stops there reads as broken rather than as a clear day.
+        if card.lines.len() <= 1 {
+            text::draw(c.pm, &f.regular, 13.5 * s, dx, dy + 13.5 * s, c.pal.muted, 1.0, "Nothing else due today.");
+            dy += 13.5 * s * 1.62;
+        }
+        if let Some((count, goal)) = card.water {
+            dy += 10.0 * s;
+            let n = goal.min(12);
+            let dsz = 15.0 * s;
+            for i in 0..n {
+                let t = Transform::from_translate(dx + 19.0 * s * i as f32 + dsz * 0.4, dy + dsz * 0.5).pre_scale(dsz / 19.0, dsz / 19.0);
+                if i < count {
+                    creature::draw_drop(c.pm, t, 0x4DB3F2, 1.0);
+                } else {
+                    creature::draw_drop_outline(c.pm, t, if c.pal.dark { 0x5A6273 } else { 0xC3CAD6 });
+                }
+            }
+            let note = if self.state.streak >= 2 {
+                format!("{count} of {goal}  \u{00b7}  {}-day streak", self.state.streak)
+            } else {
+                format!("{count} of {goal}")
+            };
+            text::draw(c.pm, &f.regular, 12.0 * s, dx + 19.0 * s * n as f32 + 10.0 * s, dy + 15.0 * s, c.pal.muted, 1.0, &note);
+            dy += dsz + 14.0 * s;
+        }
+
+        // Two things you can do about today, rather than one hidden in a right-click menu.
+        let mut bx = dx;
+        if self.settings.water.enabled {
+            bx += c.button(bx, dy, "+ Glass of water", BtnStyle::Primary, UiAct::Menu(App::ID_DRINK)) + 8.0 * s;
+        }
+        let holding = self.state.dnd_until.is_some_and(|t| t > now);
+        let (label, id) = if holding { ("Reminders are paused", App::ID_DND_OFF) } else { ("Hold reminders an hour", App::ID_DND_1H) };
+        c.button(bx, dy, label, BtnStyle::Secondary, UiAct::Menu(id));
+        dy += 38.0 * s;
+
+        c.y = dy.max(c.y + 140.0 * s) + 18.0 * s;
+        self.watching_strip(c);
+    }
+
+    /// What Pip could be watching for you, and the one click that starts it.
+    ///
+    /// Everything here was already reachable — on the Email page, the Calendar page and About —
+    /// and that was the whole problem: you had to already know Pip could do it before you would
+    /// ever go and look. Offering beats waiting to be found, and it is the same three actions, so
+    /// nothing is implemented twice.
+    fn watching_strip(&self, c: &mut Ctx) {
+        let s = c.s;
+        let f = fonts();
+        fill_rrect(c.pm, c.x0, c.y, c.x1 - c.x0, 1.0, 0.0, color(c.pal.border, 0.7));
+        c.y += 16.0 * s;
+        text::draw(c.pm, &f.semibold, 11.0 * s, c.x0, c.y + 8.0 * s, c.pal.muted, 1.0, "WATCHING FOR YOU");
+        c.y += 20.0 * s;
+
+        let gmail = !self.settings.email.accounts.is_empty();
+        let cal = self.settings.dates.calendars.iter().any(|fd| pip_core::gcal::feed_address(&fd.url).is_some());
+        let phone = self.sync_connected();
+        let chips: [(bool, &str, &str, UiAct); 3] = [
+            (gmail, "Gmail", "+ Important email", UiAct::GmailSignIn),
+            (cal, "Calendar", "+ What\u{2019}s on today", UiAct::ConnectGoogleCalendar(None)),
+            (phone, "Your phone", "+ The same Pip on my phone", UiAct::SyncConnect),
+        ];
+        let mut cx = c.x0;
+        let h = 30.0 * s;
+        for (on, name, invite, act) in chips {
+            let label = if on { name } else { invite };
+            let lw = text::width(&f.regular, 12.5 * s, label);
+            let w = lw + if on { 38.0 * s } else { 26.0 * s };
+            if cx + w > c.x1 {
+                cx = c.x0;
+                c.y += h + 8.0 * s;
+            }
+            let r = R::new(cx, c.y, w, h);
+            if on {
+                // Connected and quiet: a filled chip with a dot, and nothing to press.
+                fill_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.surface, 1.0));
+                crate::render::fill_circle(c.pm, r.x + 15.0 * s, r.y + h / 2.0, 3.5 * s, color(OK_GREEN, 1.0));
+                text::draw(c.pm, &f.regular, 12.5 * s, r.x + 26.0 * s, ui::baseline(r.y, h, 12.5 * s), c.pal.text, 1.0, label);
+            } else {
+                let hot = c.hover == Some(r);
+                fill_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.surface, if hot { 1.0 } else { 0.55 }));
+                stroke_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.border, 1.0), 1.0 * s);
+                text::draw(c.pm, &f.regular, 12.5 * s, r.x + 13.0 * s, ui::baseline(r.y, h, 12.5 * s), if hot { c.pal.text } else { c.pal.muted }, 1.0, label);
+                c.hits.push((r, act));
+            }
+            cx += w + 8.0 * s;
+        }
+        c.y += h + 10.0 * s;
+        let all = gmail && cal && phone;
+        let note = if all {
+            "All connected. Pip only ever reads \u{2014} it cannot send, change or delete anything."
+        } else {
+            "One click each, on Google\u{2019}s own page. Pip only ever reads, and you can disconnect any time."
+        };
+        for l in text::wrap(&f.regular, 12.0 * s, note, c.x1 - c.x0) {
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y + 12.0 * s, c.pal.muted, 1.0, &l);
+            c.y += 17.0 * s;
+        }
+    }
+
     /// Three groups rather than one list of twelve (§71): who the companion is, how it behaves,
     /// and this window. Nothing moved pages and nothing was dropped — the labels are there so the
     /// eye can skip the two thirds of the page it did not come for. "Growing up" went to About,
     /// because it was never a setting: it is something earned, and it sits with the other things
     /// that are only true about this companion.
-    fn page_pet(&self, c: &mut Ctx, focus: &Option<Field>) {
+    fn page_pet(&self, c: &mut Ctx, focus: &Option<Field>, preview: Option<(AnimKind, u64)>) {
         let s = c.s;
         let p = &self.settings.pet;
+
+        // Everything about what the companion *is* happens beside the companion (§72). The rows
+        // are the same rows; they are simply drawn in a narrower column, with the creature in the
+        // space the sidebar used to take, doing whatever you just asked it to be.
+        let stage_w = 196.0 * s;
+        let top = c.y;
+        let full_x0 = c.x0;
+        c.x0 = full_x0 + stage_w + 20.0 * s;
+
         section_label(c, "WHO IT IS");
         let cy = c.row("Name", Some("What your companion is called"));
-        let r = R::new(c.x1 - 220.0 * s, cy - 16.0 * s, 220.0 * s, 32.0 * s);
+        let r = R::new(c.x1 - 200.0 * s, cy - 16.0 * s, 200.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &p.name, *focus == Some(Field::Name), &c.pal, s, "Pip");
         c.hits.push((r, UiAct::Focus(Field::Name)));
 
@@ -484,7 +692,7 @@ impl App {
         // be one: a row of greyed-out creatures with the days left on them is a countdown, and the
         // pet does not do that (§7, §28, §43).
         let here: Vec<Character> = Character::available(self.state.experience).collect();
-        let mut cy = c.row("Character", Some("Who your companion is — the rest stays the same"));
+        let mut cy = c.row("Character", Some("The rest stays the same"));
         for (i, chunk) in here.chunks(4).enumerate() {
             if i > 0 {
                 cy = c.row("", None);
@@ -494,7 +702,7 @@ impl App {
             c.segmented(cy, &labels, sel, chunk.iter().map(|x| UiAct::Who(*x)).collect());
         }
 
-        let cy = c.row("Voice", Some("Each companion has its own; tap to hear"));
+        let cy = c.row("Voice", Some("Tap one to hear it"));
         let sel = Voice::ALL.iter().position(|x| *x == p.voice).unwrap_or(0);
         let labels: Vec<&str> = Voice::ALL.iter().map(|x| x.label()).collect();
         c.segmented(cy, &labels, sel, Voice::ALL.iter().map(|x| UiAct::Say(*x)).collect());
@@ -509,6 +717,28 @@ impl App {
         let cy = c.row("Size", None);
         let sel = match p.size { PetSize::Small => 0, PetSize::Medium => 1, PetSize::Large => 2 };
         c.segmented(cy, &["Small", "Medium", "Large"], sel, vec![UiAct::Size(PetSize::Small), UiAct::Size(PetSize::Medium), UiAct::Size(PetSize::Large)]);
+
+        // The stage, drawn after the rows because only now is its height known. It cannot paint
+        // over them: they start 20 units to the right of where it ends.
+        c.x0 = full_x0;
+        let band = (c.y - top).max(190.0 * s);
+        fill_rrect(c.pm, full_x0, top + 6.0 * s, stage_w, band - 14.0 * s, 16.0 * s, color(c.pal.surface, 1.0));
+        let cs = 1.15 * s * p.size.factor().clamp(0.85, 1.15);
+        let mut pose = Pose::base(Expr::Happy);
+        pose.blush = 0.6;
+        pose.stage = self.state.stage();
+        if let Some((kind, t0)) = preview {
+            let d = kind.duration_ms().max(1) as f32;
+            let el = tick_ms().saturating_sub(t0) as f32;
+            if el < d {
+                creature::animate(kind, el / d, &mut pose);
+            }
+        }
+        let base = Transform::from_translate(full_x0 + (stage_w - 100.0 * cs) / 2.0, top + band / 2.0 - 74.0 * cs).pre_scale(cs, cs);
+        creature::draw(c.pm, &pose, c.pal.body, p.character.shown(self.state.experience), base);
+        let f = fonts();
+        text::draw_centered(c.pm, &f.semibold, 14.0 * s, full_x0 + stage_w / 2.0, top + band - 48.0 * s, c.pal.text, 1.0, &p.name);
+        text::draw_centered(c.pm, &f.regular, 11.5 * s, full_x0 + stage_w / 2.0, top + band - 30.0 * s, c.pal.muted, 1.0, "change anything \u{2014} watch");
 
         section_label(c, "HOW IT BEHAVES");
         let cy = c.row("Liveliness", Some("How often it stretches, fidgets and looks around"));
@@ -758,9 +988,13 @@ impl App {
         }
         c.y = y + 144.0 * s;
 
-        // Privacy
-        // The sidebar already carries the version, so this only has to say where the evidence is.
-        let version_line = "If something ever goes wrong, what happened is written to pip.log in that folder.";
+        // Privacy. The version used to sit in the foot of the sidebar; the sidebar is gone (§72),
+        // so it says it here, next to where the evidence is kept.
+        let version_line = concat!(
+            "Pip ",
+            env!("CARGO_PKG_VERSION"),
+            ". If something ever goes wrong, what happened is written to pip.log in that folder."
+        );
         // What leaves this PC depends on what has been connected, so the claim is built from what
         // is actually switched on. "No network access" was true in Phase 1 and has not been since
         // Phase 2, and a promise a stranger can catch out is worse than no promise at all.
@@ -906,16 +1140,14 @@ impl App {
 
     /// Everything the keyboard can reach, in reading order.
     ///
-    /// `hits` is stored in draw order, which puts the scrolling content first and the sidebar and
-    /// header last, because those are painted over the top. Reading order is the other way round,
-    /// so they are lifted to the front here rather than the drawing being rearranged to suit the
+    /// `hits` is stored in draw order, which puts the scrolling content first and the navigation
+    /// band last, because the band is painted over the top. Reading order is the other way round,
+    /// so it is lifted to the front here rather than the drawing being rearranged to suit the
     /// keyboard.
     fn tab_order(&self) -> Vec<UiAct> {
         let Some(ui) = &self.ui else { return Vec::new() };
-        let edge = SIDEBAR_W * ui.scale();
-        let (side, body): (Vec<_>, Vec<_>) = ui.hits.iter().partition(|(r, _)| r.x < edge);
-        let (header, content): (Vec<_>, Vec<_>) = body.into_iter().partition(|(r, _)| r.y + r.h <= HEADER_H * ui.scale());
-        side.into_iter().chain(header).chain(content).map(|(_, a)| a.clone()).collect()
+        let (nav, content): (Vec<_>, Vec<_>) = ui.hits.iter().partition(|(r, _)| r.y + r.h <= NAV_H * ui.scale());
+        nav.into_iter().chain(content).map(|(_, a)| a.clone()).collect()
     }
 
     /// Scrolls the focused control into view, if it is off the top or the bottom.
@@ -923,7 +1155,7 @@ impl App {
         let Some(ui) = &self.ui else { return };
         let s = ui.scale();
         let Some((r, _)) = ui.hits.iter().find(|(_, a)| a == act) else { return };
-        let (top, bottom) = (HEADER_H * s, ui.surface.h as f32);
+        let (top, bottom) = (NAV_H * s, ui.surface.h as f32);
         let pad = 12.0 * s;
         let delta = if r.y - pad < top {
             r.y - pad - top
@@ -1140,6 +1372,9 @@ impl App {
         // Read before the settings are borrowed: the voice preview needs to know which companion
         // is actually on screen, and `shown` depends on how far it has grown.
         let xp = self.state.experience;
+        // What the companion on the Pip page should do about this, set inside the match and acted
+        // on after it, because `st` holds the settings borrowed until then (§72).
+        let mut show: Option<AnimKind> = None;
         let st = &mut self.settings;
         match act {
             UiAct::Page(p) => {
@@ -1155,11 +1390,17 @@ impl App {
                 return;
             }
             UiAct::Focus(_) => return,
+            UiAct::Menu(id) => {
+                self.menu_command(id);
+                self.ui_invalidate();
+                return;
+            }
             // Each of these stamps the appearance record. Without it the stamp stays at 0 forever
             // and any device that merely has a clock beats a choice actually made here (§48).
             UiAct::Who(w) => {
                 st.pet.character = w;
                 st.appearance_updated_at = platform::now_unix();
+                show = Some(AnimKind::Wave); // a new companion introduces itself
             }
             UiAct::Say(v) => {
                 st.pet.voice = v;
@@ -1189,22 +1430,35 @@ impl App {
                 let who = st.pet.character.shown(xp);
                 let ph = crate::attention::dialect(who, SAMPLER[n % SAMPLER.len()]);
                 platform::Chime::say(v, who, ph, 1.0, seed).play();
+                show = Some(AnimKind::Nod);
             }
             UiAct::Color(c) => {
                 st.pet.color = c;
                 st.appearance_updated_at = platform::now_unix();
+                show = Some(AnimKind::Wiggle); // shaking out a new coat
             }
             UiAct::Size(z) => {
                 st.pet.size = z;
                 st.appearance_updated_at = platform::now_unix();
+                show = Some(AnimKind::Stretch);
             }
             UiAct::Live(l) => {
                 st.pet.liveliness = l;
                 st.appearance_updated_at = platform::now_unix();
+                show = Some(AnimKind::LookAround);
             }
+            // The one control whose preview is the setting itself: picking how hard it tries
+            // shows you how hard it tries. This is the whole argument for a live companion on
+            // the page, made in one row.
             UiAct::Attn(a) => {
                 st.pet.attention = a;
                 st.appearance_updated_at = platform::now_unix();
+                show = Some(match a {
+                    Attention::Still => AnimKind::Blink,
+                    Attention::Subtle => AnimKind::Nod,
+                    Attention::Playful => AnimKind::Wave,
+                    Attention::Insistent => AnimKind::Hop,
+                });
             }
             UiAct::Theme(t) => {
                 st.pet.theme = t;
@@ -1325,6 +1579,9 @@ impl App {
                 return;
             }
             _ => return, // dates/calendar actions are handled by ui_do_dates
+        }
+        if let Some(k) = show {
+            self.ui_preview(k);
         }
         if prev != self.settings {
             self.settings_changed(&prev);
@@ -2210,9 +2467,43 @@ mod character_row_fits {
 
     /// The content column, in the same units everything else here is drawn in.
     fn content(s: f32) -> (f32, f32) {
-        let x0 = (SIDEBAR_W + 36.0) * s;
-        let x1 = LOGICAL_W as f32 * s - 36.0 * s;
+        let x0 = PAD_X * s;
+        let x1 = LOGICAL_W as f32 * s - PAD_X * s;
         (x0, x1)
+    }
+
+    /// The narrower column the "Who it is" rows get, now that the companion stands beside them
+    /// (§72). Those rows have 196 units less to work with than every other row in the window,
+    /// which is exactly why they are worth a test of their own.
+    fn pet_col(s: f32) -> (f32, f32) {
+        let (x0, x1) = content(s);
+        (x0 + 196.0 * s + 20.0 * s, x1)
+    }
+
+    /// The row of page names replaced a 196-unit sidebar (§72), and unlike a sidebar it can run
+    /// out of room sideways. Worst case: every name in semibold — only one is at a time, but a
+    /// test that assumes which one is a test that breaks when a name changes — and the longer of
+    /// the two buttons a page can add to the far end of the same row.
+    #[test]
+    fn every_page_name_fits_in_the_band_beside_the_add_button() {
+        let f = fonts();
+        for s in [1.0f32, 1.25, 1.5] {
+            let (x0, x1) = content(s);
+            let names: f32 = PAGES.iter().map(|(_, l)| text::width(&f.semibold, 13.5 * s, l) + 26.0 * s).sum();
+            let button = ui::button_width("+ Add reminder", s).max(ui::button_width("+ Add date", s));
+            assert!(
+                x0 + names + button <= x1 + 26.0 * s,
+                "at {s}x the page names and the add button overlap by {:.0}px",
+                (x0 + names + button) - (x1 + 26.0 * s)
+            );
+        }
+    }
+
+    /// Today is the front door, and that is the point of §72 rather than a detail of it.
+    #[test]
+    fn today_is_the_page_pip_opens_on() {
+        assert_eq!(PAGES[0].0, Page::Today, "Today has to be first in the band");
+        assert_eq!(page_at(0), Page::Today);
     }
 
     /// Every width in this window is a constant times `s` — the window itself is created at
@@ -2222,8 +2513,8 @@ mod character_row_fits {
     fn the_characters_fit_beside_their_own_label() {
         let f = fonts();
         for s in [1.0f32, 1.25, 1.5] {
-            let (x0, x1) = content(s);
-            let hint = text::width(&f.regular, 12.0 * s, "Who your companion is — the rest stays the same");
+            let (x0, x1) = pet_col(s);
+            let hint = text::width(&f.regular, 12.0 * s, "The rest stays the same");
             for (i, chunk) in Character::ALL.chunks(4).enumerate() {
                 let labels: Vec<&str> = chunk.iter().map(|x| x.label()).collect();
                 let w = ui::segmented_width(&labels, s);
@@ -2267,18 +2558,43 @@ mod character_row_fits {
         }
     }
 
-    /// Why the wrapping exists. Six on one line is 309 wide and would start at 415, while the hint
-    /// text runs to 432 - a seventeen-pixel collision, and worse with every character added.
+    /// Why the wrapping exists. The column these share with the companion is narrower than the
+    /// rest of the window by the width of the companion, so all seven on one line is further from
+    /// fitting than it has ever been — and the day it does fit, this test fails and says so.
     #[test]
     fn one_line_of_every_character_would_run_back_over_the_hint() {
         let f = fonts();
         let labels: Vec<&str> = Character::ALL.iter().map(|x| x.label()).collect();
-        let (x0, x1) = content(1.0);
-        let hint = x0 + text::width(&f.regular, 12.0, "Who your companion is — the rest stays the same");
+        let (x0, x1) = pet_col(1.0);
+        let hint = x0 + text::width(&f.regular, 12.0, "The rest stays the same");
         assert!(
             x1 - ui::segmented_width(&labels, 1.0) < hint,
             "they all fit on one line beside the hint now, so the wrapping can go"
         );
+    }
+
+    /// Every row in the "Who it is" group has to live in that narrower column, not just the
+    /// characters. A label, its hint and its control, at every scaling.
+    #[test]
+    fn every_row_beside_the_companion_fits_beside_it() {
+        let f = fonts();
+        for s in [1.0f32, 1.25, 1.5] {
+            let (x0, x1) = pet_col(s);
+            let rows: [(&str, &str, f32); 4] = [
+                ("Name", "What your companion is called", 200.0 * s),
+                ("Voice", "Tap one to hear it", ui::segmented_width(&Voice::ALL.map(|v| v.label()), s)),
+                ("Colour", "", PetColor::ALL.len() as f32 * 32.0 * s),
+                ("Size", "", ui::segmented_width(&["Small", "Medium", "Large"], s)),
+            ];
+            for (label, hint, control) in rows {
+                let text_w = text::width(&f.semibold, 13.5 * s, label).max(text::width(&f.regular, 12.0 * s, hint));
+                assert!(
+                    x1 - control >= x0 + text_w + 12.0 * s,
+                    "at {s}x, \"{label}\" is {:.0}px too wide for the column beside the companion",
+                    (x0 + text_w + 12.0 * s) - (x1 - control)
+                );
+            }
+        }
     }
 }
 
@@ -2309,8 +2625,8 @@ mod attention_row_fits {
             ),
         ];
         for s in [1.0f32, 1.25, 1.5] {
-            let x0 = (SIDEBAR_W + 36.0) * s;
-            let x1 = LOGICAL_W as f32 * s - 36.0 * s;
+            let x0 = PAD_X * s;
+            let x1 = LOGICAL_W as f32 * s - PAD_X * s;
             for (label, hint, labels) in &rows {
                 let lw = text::width(&f.semibold, 13.0 * s, label);
                 let hw = text::width(&f.regular, 12.0 * s, hint);
