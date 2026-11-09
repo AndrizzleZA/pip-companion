@@ -6,13 +6,13 @@ use crate::platform::{self, tick_ms, Usage};
 use crate::render::creature::{self, AnimKind, Expr, Pose};
 use crate::render::text::{self, fonts};
 use crate::render::ui::{self, BtnStyle, R};
-use crate::render::{color, fill_rrect, stroke_rrect, Palette};
+use crate::render::{color, fill_rrect, mix, stroke_rrect, Palette};
 use crate::surface::Surface;
 use pip_core::schedule;
 use pip_core::dates::{DateKind, HolidayRegion, ImportantDate};
 use crate::app::SignIn;
 use pip_core::connectors::{self, Connector, ConnectorId};
-use pip_core::settings::{Attention, Character, CustomReminder, EventAlerts, Liveliness, PetColor, PetSize, Theme, Voice};
+use pip_core::settings::{Character, CustomReminder, EventAlerts, PetColor, PetSize, Presence, Theme, Voice};
 use pip_core::time::{DaySet, TimeOfDay};
 use tiny_skia::{PixmapMut, Transform};
 use windows_sys::Win32::Foundation::*;
@@ -77,7 +77,6 @@ pub enum Field {
     DateTitle(String),
     CalName(String),
     CalUrl(String),
-    Keywords,
     MailSenders,
     MailKeywords,
 }
@@ -88,8 +87,8 @@ pub enum UiAct {
     Focus(Field),
     Color(PetColor),
     Size(PetSize),
-    Live(Liveliness),
-    Attn(Attention),
+    /// One dial for how much the companion does, writing both liveliness and attention (§73).
+    Presence(Presence),
     Theme(Theme),
     Top,
     Clock,
@@ -253,6 +252,10 @@ struct Ctx<'a, 'b> {
     y: f32,
     hits: Vec<(R, UiAct)>,
     hover: Option<R>,
+    /// Where the slab the current group sits on ends, or 0 when no group is open.
+    panel_bottom: f32,
+    /// A group name waiting to be redrawn over the slab that is about to cover it.
+    pending_plate: Option<(String, f32)>,
 }
 
 impl Ctx<'_, '_> {
@@ -270,7 +273,11 @@ impl Ctx<'_, '_> {
         }
         let cy = self.y + h / 2.0;
         self.y += h;
-        fill_rrect(self.pm, self.x0, self.y - 1.0, self.x1 - self.x0, 1.0, 0.0, color(self.pal.border, 0.7));
+        // No hairline under the last row of a group: the slab's own edge already ends it, and a
+        // line drawn along that edge reads as a crack rather than as a divider (§73).
+        if self.panel_bottom <= 0.0 || self.y < self.panel_bottom - 12.0 * s {
+            fill_rrect(self.pm, self.x0, self.y - 1.0, self.x1 - self.x0, 1.0, 0.0, color(self.pal.border, 0.7));
+        }
         cy
     }
 
@@ -281,10 +288,56 @@ impl Ctx<'_, '_> {
     }
 
     fn stepper(&mut self, cy: f32, x_right: f32, w: f32, value: &str, minus: UiAct, plus: UiAct) {
+        self.gauge(cy, x_right, w, value, None, minus, plus)
+    }
+
+    /// A stepper whose value also fills a bar: `fill` is where the number sits in its range.
+    #[allow(clippy::too_many_arguments)] // as above: it is one call through to `ui::stepper`
+    fn gauge(&mut self, cy: f32, x_right: f32, w: f32, value: &str, fill: Option<f32>, minus: UiAct, plus: UiAct) {
         let s = self.s;
-        let (m, p) = ui::stepper(self.pm, x_right - w * s, cy - 15.0 * s, w * s, value, &self.pal, s);
+        let (m, p) = ui::stepper(self.pm, x_right - w * s, cy - 16.0 * s, w * s, value, fill, &self.pal, s);
         self.hits.push((m, minus));
         self.hits.push((p, plus));
+    }
+
+    /// A coloured name plate for the group that follows (§73). It sits half over the panel's top
+    /// edge, the way a title board does, so the group reads as one object with a name on it
+    /// rather than as a caption floating above some rows.
+    fn plate(&mut self, label: &str) {
+        let s = self.s;
+        self.y += 22.0 * s;
+        ui::plate(self.pm, self.x0 + 6.0 * s, self.y, label, &self.pal, s);
+        // Remembered so `panel` can put it back on top: the slab is drawn after the plate and
+        // overlaps it on purpose, which without this would eat the bottom third of the letters.
+        self.pending_plate = Some((label.to_string(), self.y));
+        self.y += 20.0 * s;
+    }
+
+    /// The raised slab the next rows sit on. `rows_h` is what those rows will take up — 60 units
+    /// for a row with a hint under its label, 52 for one without — and the slab adds its own
+    /// padding above and below.
+    ///
+    /// The height is given rather than measured because the rows are drawn on top of it and
+    /// tiny-skia paints in order, so the slab has to exist first. It is the one number here that
+    /// has to be kept in step with the rows by hand; `panel_end` catches it being wrong, and
+    /// every page in this file is captured and looked at before it ships.
+    fn panel(&mut self, rows_h: f32) {
+        let s = self.s;
+        let h = rows_h + 20.0 * s;
+        ui::panel(self.pm, self.x0 - 14.0 * s, self.y, self.x1 - self.x0 + 28.0 * s, h, &self.pal, s);
+        if let Some((label, py)) = self.pending_plate.take() {
+            ui::plate(self.pm, self.x0 + 6.0 * s, py, &label, &self.pal, s);
+        }
+        self.panel_bottom = self.y + h;
+        self.y += 10.0 * s;
+    }
+
+    /// Closes the group, and leaves the cursor below the slab however tall it turned out to be.
+    fn panel_end(&mut self) {
+        let want = self.panel_bottom - 10.0 * self.s;
+        debug_assert!((self.y - want).abs() < 1.0, "panel is {:.0} units out: rows ran to {:.0}, slab expected {want:.0}", self.y - want, self.y);
+        self.y = self.panel_bottom.max(self.y);
+        self.panel_bottom = 0.0;
     }
 
     fn segmented(&mut self, cy: f32, options: &[&str], selected: usize, acts: Vec<UiAct>) {
@@ -445,7 +498,7 @@ impl App {
 
         let x0 = PAD_X * s;
         let x1 = w - PAD_X * s;
-        let mut c = Ctx { pm: &mut pm, pal, s, x0, x1, y: NAV_H * s + 8.0 * s - scroll, hits: Vec::new(), hover };
+        let mut c = Ctx { pm: &mut pm, pal, s, x0, x1, y: NAV_H * s + 8.0 * s - scroll, hits: Vec::new(), hover, panel_bottom: 0.0, pending_plate: None };
 
         match page {
             Page::Today => self.page_today(&mut c),
@@ -529,6 +582,16 @@ impl App {
         let card = self.info_card();
         let now = platform::now_unix();
 
+        // The slab the day sits on. Its height has to be known before anything is drawn on it, so
+        // it is added up from the same pieces the drawing below walks through (§73).
+        let lines_h: f32 = card.lines.iter().map(|l| if l.muted { 12.5 * s * 1.62 } else { 13.5 * s * 1.62 }).sum();
+        let empty_h = if card.lines.len() <= 1 { 13.5 * s * 1.62 } else { 0.0 };
+        let water_h = if card.water.is_some() { 39.0 * s } else { 0.0 };
+        let hero_h = (6.0 * s + 50.0 * s + lines_h + empty_h + water_h + 46.0 * s).max(172.0 * s);
+        let hero_top = c.y;
+        ui::panel(c.pm, c.x0 - 14.0 * s, c.y, c.x1 - c.x0 + 28.0 * s, hero_h, &c.pal, s);
+        c.y += 10.0 * s;
+
         // The companion, as it actually is this minute: asleep in the small hours, awake in the day.
         let asleep = self.asleep();
         let cs = 1.0 * s;
@@ -595,9 +658,10 @@ impl App {
         let holding = self.state.dnd_until.is_some_and(|t| t > now);
         let (label, id) = if holding { ("Reminders are paused", App::ID_DND_OFF) } else { ("Hold reminders an hour", App::ID_DND_1H) };
         c.button(bx, dy, label, BtnStyle::Secondary, UiAct::Menu(id));
-        dy += 38.0 * s;
+        let _ = dy;
 
-        c.y = dy.max(c.y + 140.0 * s) + 18.0 * s;
+        c.y = hero_top + hero_h;
+        c.plate("WATCHING FOR YOU");
         self.watching_strip(c);
     }
 
@@ -610,11 +674,7 @@ impl App {
     fn watching_strip(&self, c: &mut Ctx) {
         let s = c.s;
         let f = fonts();
-        fill_rrect(c.pm, c.x0, c.y, c.x1 - c.x0, 1.0, 0.0, color(c.pal.border, 0.7));
-        c.y += 16.0 * s;
-        text::draw(c.pm, &f.semibold, 11.0 * s, c.x0, c.y + 8.0 * s, c.pal.muted, 1.0, "WATCHING FOR YOU");
-        c.y += 20.0 * s;
-
+        c.panel(42.0 * s); // one row of chips
         let gmail = !self.settings.email.accounts.is_empty();
         let cal = self.settings.dates.calendars.iter().any(|fd| pip_core::gcal::feed_address(&fd.url).is_some());
         let phone = self.sync_connected();
@@ -628,27 +688,26 @@ impl App {
         for (on, name, invite, act) in chips {
             let label = if on { name } else { invite };
             let lw = text::width(&f.regular, 12.5 * s, label);
-            let w = lw + if on { 38.0 * s } else { 26.0 * s };
+            let w = lw + if on { 36.0 * s } else { 26.0 * s };
             if cx + w > c.x1 {
                 cx = c.x0;
                 c.y += h + 8.0 * s;
             }
             let r = R::new(cx, c.y, w, h);
+            let bg = if on { c.pal.accent } else if c.hover == Some(r) { c.pal.surface2 } else { mix(c.pal.surface2, c.pal.surface, 0.5) };
+            fill_rrect(c.pm, r.x, r.y + 2.0 * s, r.w, r.h, h / 2.0, color(mix(bg, 0x000000, if c.pal.dark { 0.45 } else { 0.18 }), 1.0));
+            fill_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(bg, 1.0));
             if on {
-                // Connected and quiet: a filled chip with a dot, and nothing to press.
-                fill_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.surface, 1.0));
-                crate::render::fill_circle(c.pm, r.x + 15.0 * s, r.y + h / 2.0, 3.5 * s, color(OK_GREEN, 1.0));
-                text::draw(c.pm, &f.regular, 12.5 * s, r.x + 26.0 * s, ui::baseline(r.y, h, 12.5 * s), c.pal.text, 1.0, label);
+                // Connected and quiet: a lit chip with a tick, and nothing left to press.
+                text::draw(c.pm, &f.semibold, 12.5 * s, r.x + 14.0 * s, ui::baseline(r.y, h, 12.5 * s), c.pal.on_accent, 1.0, &format!("\u{2713} {label}"));
             } else {
-                let hot = c.hover == Some(r);
-                fill_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.surface, if hot { 1.0 } else { 0.55 }));
-                stroke_rrect(c.pm, r.x, r.y, r.w, r.h, h / 2.0, color(c.pal.border, 1.0), 1.0 * s);
-                text::draw(c.pm, &f.regular, 12.5 * s, r.x + 13.0 * s, ui::baseline(r.y, h, 12.5 * s), if hot { c.pal.text } else { c.pal.muted }, 1.0, label);
+                text::draw(c.pm, &f.semibold, 12.5 * s, r.x + 13.0 * s, ui::baseline(r.y, h, 12.5 * s), c.pal.text, 1.0, label);
                 c.hits.push((r, act));
             }
             cx += w + 8.0 * s;
         }
-        c.y += h + 10.0 * s;
+        c.y += h + 12.0 * s;
+        c.panel_end();
         let all = gmail && cal && phone;
         let note = if all {
             "All connected. Pip only ever reads \u{2014} it cannot send, change or delete anything."
@@ -656,7 +715,7 @@ impl App {
             "One click each, on Google\u{2019}s own page. Pip only ever reads, and you can disconnect any time."
         };
         for l in text::wrap(&f.regular, 12.0 * s, note, c.x1 - c.x0) {
-            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y + 12.0 * s, c.pal.muted, 1.0, &l);
+            text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y + 16.0 * s, c.pal.muted, 1.0, &l);
             c.y += 17.0 * s;
         }
     }
@@ -678,7 +737,8 @@ impl App {
         let full_x0 = c.x0;
         c.x0 = full_x0 + stage_w + 20.0 * s;
 
-        section_label(c, "WHO IT IS");
+        c.plate("WHO IT IS");
+        c.panel(284.0 * s); // 60+60+60+52+52
         let cy = c.row("Name", Some("What your companion is called"));
         let r = R::new(c.x1 - 200.0 * s, cy - 16.0 * s, 200.0 * s, 32.0 * s);
         ui::text_field(c.pm, r, &p.name, *focus == Some(Field::Name), &c.pal, s, "Pip");
@@ -717,12 +777,13 @@ impl App {
         let cy = c.row("Size", None);
         let sel = match p.size { PetSize::Small => 0, PetSize::Medium => 1, PetSize::Large => 2 };
         c.segmented(cy, &["Small", "Medium", "Large"], sel, vec![UiAct::Size(PetSize::Small), UiAct::Size(PetSize::Medium), UiAct::Size(PetSize::Large)]);
+        c.panel_end();
 
         // The stage, drawn after the rows because only now is its height known. It cannot paint
         // over them: they start 20 units to the right of where it ends.
         c.x0 = full_x0;
         let band = (c.y - top).max(190.0 * s);
-        fill_rrect(c.pm, full_x0, top + 6.0 * s, stage_w, band - 14.0 * s, 16.0 * s, color(c.pal.surface, 1.0));
+        ui::panel(c.pm, full_x0, top + 6.0 * s, stage_w, band - 14.0 * s, &c.pal, s);
         let cs = 1.15 * s * p.size.factor().clamp(0.85, 1.15);
         let mut pose = Pose::base(Expr::Happy);
         pose.blush = 0.6;
@@ -740,29 +801,32 @@ impl App {
         text::draw_centered(c.pm, &f.semibold, 14.0 * s, full_x0 + stage_w / 2.0, top + band - 48.0 * s, c.pal.text, 1.0, &p.name);
         text::draw_centered(c.pm, &f.regular, 11.5 * s, full_x0 + stage_w / 2.0, top + band - 30.0 * s, c.pal.muted, 1.0, "change anything \u{2014} watch");
 
-        section_label(c, "HOW IT BEHAVES");
-        let cy = c.row("Liveliness", Some("How often it stretches, fidgets and looks around"));
-        let sel = match p.liveliness { Liveliness::Calm => 0, Liveliness::Normal => 1, Liveliness::Lively => 2 };
-        c.segmented(cy, &["Calm", "Normal", "Lively"], sel, vec![UiAct::Live(Liveliness::Calm), UiAct::Live(Liveliness::Normal), UiAct::Live(Liveliness::Lively)]);
-        let cy = c.row("Getting your attention", Some("How hard it tries when a reminder is due"));
-        let sel = Attention::ALL.iter().position(|a| *a == p.attention).unwrap_or(2);
-        c.segmented(
-            cy,
-            &Attention::ALL.map(|a| a.label()),
-            sel,
-            Attention::ALL.iter().map(|a| UiAct::Attn(*a)).collect(),
-        );
+        // One dial where there were two (§73). Liveliness and "getting your attention" were the
+        // same question asked twice, and seven buttons saying what four say.
+        c.plate("HOW LIVELY");
+        c.panel(60.0 * s); // one row with a hint
+        let cy = c.row("How much it does", Some("Moving on its own, and trying when something is due"));
+        let sel = Presence::ALL.iter().position(|x| *x == Presence::of(p)).unwrap_or(2);
+        c.segmented(cy, &Presence::ALL.map(|x| x.label()), sel, Presence::ALL.iter().map(|x| UiAct::Presence(*x)).collect());
+        c.panel_end();
 
-        section_label(c, "ON YOUR DESKTOP");
+        // Three switches that are one subject become one row of pills, not three rows of toggle.
+        c.plate("ON YOUR DESKTOP");
+        c.panel(120.0 * s); // 60+60
         let cy = c.row("Theme", Some("Speech bubbles and this window"));
         let sel = match p.theme { Theme::System => 0, Theme::Light => 1, Theme::Dark => 2 };
         c.segmented(cy, &["System", "Light", "Dark"], sel, vec![UiAct::Theme(Theme::System), UiAct::Theme(Theme::Light), UiAct::Theme(Theme::Dark)]);
-        let cy = c.row("Always on top", Some("Stay above other windows"));
-        c.toggle(cy, p.always_on_top, UiAct::Top);
-        let cy = c.row("Show clock", Some("A tiny clock above your pet, updated once a minute"));
-        c.toggle(cy, p.show_clock, UiAct::Clock);
-        let cy = c.row("Start with Windows", Some("Wake up quietly when you sign in"));
-        c.toggle(cy, p.start_with_system, UiAct::Startup);
+        let cy = c.row("Behaviour", Some("Tap any of these to turn it on or off"));
+        const DESK: [&str; 3] = ["Always on top", "Clock", "Start with Windows"];
+        let on = [p.always_on_top, p.show_clock, p.start_with_system];
+        let w = ui::chips_width(&DESK, s);
+        for (r, act) in ui::chips(c.pm, c.x1 - w, cy - 15.0 * s, &DESK, &on, &c.pal, s)
+            .into_iter()
+            .zip([UiAct::Top, UiAct::Clock, UiAct::Startup])
+        {
+            c.hits.push((r, act));
+        }
+        c.panel_end();
     }
 
     /// Water is a reminder Pip already knows how to time, so it sits with the rest of them.
@@ -771,15 +835,16 @@ impl App {
         let cy = c.row("Water reminders", Some("Gentle nudges, counted from your last glass"));
         c.toggle(cy, w.enabled, UiAct::WaterOn);
         let x1 = c.x1;
+        let s = c.s;
         let cy = c.row("Remind me every", None);
-        c.stepper(cy, x1, 150.0, &fmt_minutes(w.interval_min), UiAct::WaterEvery(-15), UiAct::WaterEvery(15));
+        c.gauge(cy, x1, 150.0, &fmt_minutes(w.interval_min), Some((w.interval_min as f32 - 15.0) / 225.0), UiAct::WaterEvery(-15), UiAct::WaterEvery(15));
         // One row, two steppers: "Starting at" and "Until" were never two decisions, they were two
-        // halves of one, and splitting them cost a whole row to say "Until" (§71).
-        let cy = c.row("Between", Some("No water reminders outside these hours"));
-        c.stepper(cy, x1 - 158.0 * c.s, 150.0, &w.start.to_string(), UiAct::WaterStart(-30), UiAct::WaterStart(30));
+        // halves of one, and splitting them cost a whole row to say "Until" (§71). §73 brought the
+        // days up beside them for the same reason — all three answer "when".
+        let cy = c.row("When", None);
+        c.stepper(cy, x1 - 158.0 * s, 150.0, &w.start.to_string(), UiAct::WaterStart(-30), UiAct::WaterStart(30));
         c.stepper(cy, x1, 150.0, &w.end.to_string(), UiAct::WaterEnd(-30), UiAct::WaterEnd(30));
-        let cy = c.row("On these days", None);
-        let rects = ui::day_chips(c.pm, c.x1 - ui::DAY_CHIPS_W * c.s, cy - 13.0 * c.s, w.days.0, &c.pal, c.s);
+        let rects = ui::day_chips(c.pm, x1 - 316.0 * s - ui::DAY_CHIPS_W * s, cy - 13.0 * s, w.days.0, &c.pal, s);
         for (i, r) in rects.into_iter().enumerate() {
             c.hits.push((r, UiAct::WaterDay(i as u32)));
         }
@@ -787,15 +852,18 @@ impl App {
         // was never something you could set, and About already says it in full.
         let cy = c.row("Daily goal", Some(&water_today(self)));
         let goal = if w.daily_goal == 1 { "1 glass".to_string() } else { format!("{} glasses", w.daily_goal) };
-        c.stepper(cy, x1, 150.0, &goal, UiAct::WaterGoal(-1), UiAct::WaterGoal(1));
+        let drunk = local_count(self) as f32 / w.daily_goal.max(1) as f32;
+        c.gauge(cy, x1, 150.0, &goal, Some(drunk), UiAct::WaterGoal(-1), UiAct::WaterGoal(1));
+        c.panel_end();
     }
 
     fn page_reminders(&self, c: &mut Ctx, focus: &Option<Field>) {
         let s = c.s;
         let f = fonts();
-        section_label(c, "WATER");
+        c.plate("WATER");
+        c.panel(224.0 * s); // 60+52+52+60
         self.water_section(c);
-        section_label(c, "YOUR REMINDERS");
+        c.plate("YOUR REMINDERS");
         c.y += 6.0 * s;
         // The empty state ends its own section and nothing else. It used to `return`, which took
         // "When it speaks up" down with it — so on a fresh install, when nobody has added a
@@ -810,7 +878,8 @@ impl App {
                 text::draw(c.pm, &f.regular, 13.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
                 c.y += 19.0 * s;
             }
-            section_label(c, "WHEN IT SPEAKS UP");
+            c.plate("WHEN IT SPEAKS UP");
+            c.panel(172.0 * s); // 60+52+60
             self.quiet_section(c);
             return;
         }
@@ -842,7 +911,7 @@ impl App {
                     tx = c.x0;
                     ty += 34.0 * s;
                 }
-                let (m, p) = ui::stepper(c.pm, tx, ty, 118.0 * s, &t.to_string(), &c.pal, s);
+                let (m, p) = ui::stepper(c.pm, tx, ty, 118.0 * s, &t.to_string(), None, &c.pal, s);
                 c.hits.push((m, UiAct::RemTime(r.id.clone(), i, -15)));
                 c.hits.push((p, UiAct::RemTime(r.id.clone(), i, 15)));
                 tx += 122.0 * s;
@@ -905,7 +974,8 @@ impl App {
             c.hits.push((ir, UiAct::RemImportant(r.id.clone())));
             c.y += card_h;
         }
-        section_label(c, "WHEN IT SPEAKS UP");
+        c.plate("WHEN IT SPEAKS UP");
+        c.panel(172.0 * s); // 60+52+60
         self.quiet_section(c);
     }
 
@@ -930,6 +1000,7 @@ impl App {
         c.stepper(cy, x1, 150.0, &q.end.to_string(), UiAct::QuietEnd(-30), UiAct::QuietEnd(30));
         let cy = c.row("Sound", Some("Pip has a voice; this is whether you hear it"));
         c.toggle(cy, n.sound, UiAct::Sound);
+        c.panel_end();
     }
 
     fn page_about(&self, c: &mut Ctx, u: Usage, cpu_rate: Option<f32>) {
@@ -949,7 +1020,11 @@ impl App {
             d => format!("has been with you for {d} days"),
         };
         text::draw(c.pm, &f.semibold, 15.0 * s, c.x0, y + 30.0 * s, c.pal.text, 1.0, &format!("{} {with}", self.settings.pet.name));
-        text::draw(c.pm, &f.regular, 12.5 * s, c.x0, y + 54.0 * s, c.pal.muted, 1.0, &pip_core::messages::growth_label(self.state.experience));
+        // Three stars for three stages (§73). It is the same fact `growth_label` states in
+        // words, in the shape the rest of the window now speaks in, and it is the only place a
+        // number about the companion deserves to look like a reward.
+        let star_w = ui::stars(c.pm, c.x0, y + 50.0 * s, self.state.stage() as u32 + 1, 3, &c.pal, s);
+        text::draw(c.pm, &f.regular, 12.5 * s, c.x0 + star_w + 10.0 * s, y + 54.0 * s, c.pal.muted, 1.0, &pip_core::messages::growth_label(self.state.experience));
         let stats = format!(
             "Today {} of {} glasses  ·  streak {} (best {})",
             local_count(self),
@@ -963,7 +1038,7 @@ impl App {
         // Your phone, which came off the Connections page with the other two connectors (§71).
         // It belongs on the page about this PC rather than on a page of its own: it is the one
         // connector that is not about a service at all.
-        section_label(c, "YOUR PHONE");
+        c.plate("YOUR PHONE");
         self.draw_sync_connector(c);
 
         // Resource card
@@ -1121,9 +1196,18 @@ impl App {
         match act {
             UiAct::Focus(f) => {
                 let list = match f {
-                    Field::Keywords => Some(self.settings.dates.keywords.join(", ")),
                     Field::MailSenders => Some(self.settings.email.senders.join(", ")),
-                    Field::MailKeywords => Some(self.settings.email.keywords.join(", ")),
+                    // The words a file arrives with may differ between the two lists — an older
+                    // Pip, or the phone — so the field opens on everything either of them knows.
+                    Field::MailKeywords => {
+                        let mut all = self.settings.email.keywords.clone();
+                        for k in &self.settings.dates.keywords {
+                            if !all.iter().any(|a| a.eq_ignore_ascii_case(k)) {
+                                all.push(k.clone());
+                            }
+                        }
+                        Some(all.join(", "))
+                    }
                     _ => None,
                 };
                 if let Some(ui) = &mut self.ui {
@@ -1306,14 +1390,19 @@ impl App {
         };
         let now = platform::now_unix();
         match &focus {
-            Field::Keywords | Field::MailSenders | Field::MailKeywords => {
+            Field::MailSenders | Field::MailKeywords => {
                 if let Some(ui) = &mut self.ui {
                     edit(&mut ui.keywords_buf, 500);
                     let list: Vec<String> = ui.keywords_buf.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
                     match focus {
                         Field::MailSenders => self.settings.email.senders = list,
-                        Field::MailKeywords => self.settings.email.keywords = list,
-                        _ => self.settings.dates.keywords = list,
+                        // One field, both readers (§73). The engine still asks `email.keywords`
+                        // about a subject and `dates.keywords` about an event title; what is gone
+                        // is the second place to type them, and the chance of the two disagreeing.
+                        _ => {
+                            self.settings.dates.keywords = list.clone();
+                            self.settings.email.keywords = list;
+                        }
                     }
                 }
             }
@@ -1442,22 +1531,18 @@ impl App {
                 st.appearance_updated_at = platform::now_unix();
                 show = Some(AnimKind::Stretch);
             }
-            UiAct::Live(l) => {
-                st.pet.liveliness = l;
+            // The one control whose preview is the setting itself: picking how much it does
+            // shows you how much it does. This is the whole argument for a live companion on the
+            // page, made in one row — and since §73 it is the only row, because liveliness and
+            // attention were the same question asked twice.
+            UiAct::Presence(x) => {
+                x.apply(&mut st.pet);
                 st.appearance_updated_at = platform::now_unix();
-                show = Some(AnimKind::LookAround);
-            }
-            // The one control whose preview is the setting itself: picking how hard it tries
-            // shows you how hard it tries. This is the whole argument for a live companion on
-            // the page, made in one row.
-            UiAct::Attn(a) => {
-                st.pet.attention = a;
-                st.appearance_updated_at = platform::now_unix();
-                show = Some(match a {
-                    Attention::Still => AnimKind::Blink,
-                    Attention::Subtle => AnimKind::Nod,
-                    Attention::Playful => AnimKind::Wave,
-                    Attention::Insistent => AnimKind::Hop,
+                show = Some(match x {
+                    Presence::Still => AnimKind::Blink,
+                    Presence::Gentle => AnimKind::Nod,
+                    Presence::Playful => AnimKind::Wave,
+                    Presence::Lively => AnimKind::Hop,
                 });
             }
             UiAct::Theme(t) => {
@@ -1686,7 +1771,7 @@ impl App {
     fn card(&self, c: &mut Ctx, h: f32, accent: bool) -> (f32, f32) {
         let s = c.s;
         let (x, y, w) = (c.x0 - 14.0 * s, c.y + 6.0 * s, c.x1 - c.x0 + 28.0 * s);
-        fill_rrect(c.pm, x, y, w, h, 14.0 * s, color(c.pal.surface, 1.0));
+        ui::panel(c.pm, x, y, w, h, &c.pal, s);
         if accent {
             fill_rrect(c.pm, x + 5.0 * s, y + 16.0 * s, 3.5 * s, h - 32.0 * s, 2.0 * s, color(0xFFB020, 1.0));
         }
@@ -1700,13 +1785,15 @@ impl App {
         let f = fonts();
         let d = &self.settings.dates;
         let x1 = c.x1;
-        let cy = c.row("Public holidays", Some("On today's card and in the morning summary"));
-        let sel = if d.holidays == HolidayRegion::Za { 0 } else { 1 };
-        c.segmented(cy, &["South Africa", "Off"], sel, vec![UiAct::Holidays(HolidayRegion::Za), UiAct::Holidays(HolidayRegion::None)]);
-        let cy = c.row("Morning summary", Some("A quiet card with today's holidays, birthdays and events"));
+        // Two options where one is "Off" is a switch wearing a costume (§73).
+        let on = d.holidays == HolidayRegion::Za;
+        let cy = c.row("South African public holidays", Some("On today's card and in the morning summary"));
+        c.toggle(cy, on, UiAct::Holidays(if on { HolidayRegion::None } else { HolidayRegion::Za }));
+        // The summary and the hour it arrives were two rows saying one thing.
+        let cy = c.row("Morning summary", Some("Today's holidays, birthdays and events, once a day"));
+        c.stepper(cy, x1 - 56.0 * s, 150.0, &d.notify_at.to_string(), UiAct::NotifyAt(-30), UiAct::NotifyAt(30));
         c.toggle(cy, d.morning_summary, UiAct::MorningSummary);
-        let cy = c.row("Remind me at", Some("When date reminders and the summary appear"));
-        c.stepper(cy, x1, 150.0, &d.notify_at.to_string(), UiAct::NotifyAt(-30), UiAct::NotifyAt(30));
+        c.panel_end();
         c.y += 12.0 * s;
 
         if d.items.is_empty() {
@@ -1740,14 +1827,14 @@ impl App {
             }
             // Row 3: month / day / year + next occurrence
             let r3 = y + 94.0 * s;
-            let (m, p) = ui::stepper(c.pm, c.x0, r3, 104.0 * s, MONTHS[(item.month.clamp(1, 12) - 1) as usize], &c.pal, s);
+            let (m, p) = ui::stepper(c.pm, c.x0, r3, 104.0 * s, MONTHS[(item.month.clamp(1, 12) - 1) as usize], None, &c.pal, s);
             c.hits.push((m, UiAct::DateMonth(id.clone(), -1)));
             c.hits.push((p, UiAct::DateMonth(id.clone(), 1)));
-            let (m, p) = ui::stepper(c.pm, c.x0 + 112.0 * s, r3, 92.0 * s, &item.day.to_string(), &c.pal, s);
+            let (m, p) = ui::stepper(c.pm, c.x0 + 112.0 * s, r3, 92.0 * s, &item.day.to_string(), None, &c.pal, s);
             c.hits.push((m, UiAct::DateDay(id.clone(), -1)));
             c.hits.push((p, UiAct::DateDay(id.clone(), 1)));
             let year = item.year.map(|y| y.to_string()).unwrap_or_else(|| "No year".into());
-            let (m, p) = ui::stepper(c.pm, c.x0 + 212.0 * s, r3, 124.0 * s, &year, &c.pal, s);
+            let (m, p) = ui::stepper(c.pm, c.x0 + 212.0 * s, r3, 124.0 * s, &year, None, &c.pal, s);
             c.hits.push((m, UiAct::DateYear(id.clone(), -1)));
             c.hits.push((p, UiAct::DateYear(id.clone(), 1)));
             let next = match item.next_on_or_after(today) {
@@ -1784,18 +1871,19 @@ impl App {
         }
     }
 
-    fn page_calendars(&self, c: &mut Ctx, focus: &Option<Field>, kw_buf: &str) {
+    fn page_calendars(&self, c: &mut Ctx, focus: &Option<Field>, _kw_buf: &str) {
         let s = c.s;
         let f = fonts();
-        section_label(c, "IMPORTANT DATES");
+        c.plate("IMPORTANT DATES");
+        c.panel(120.0 * s);
         self.dates_section(c, focus);
         // Connecting a calendar now happens on the calendar page, where you are already standing
         // when you want one (§71).
-        section_label(c, "CALENDARS");
+        c.plate("CALENDARS");
         self.draw_calendar_connectors(c);
         let d = &self.settings.dates;
         let now = platform::now_unix();
-        let cy = c.row("Event alerts", Some("Important: has its own alert, important calendar, or a word below"));
+        let cy = c.row("Event alerts", Some("Important: its own alert, an important calendar, or one of your words"));
         let sel = match d.event_alerts {
             EventAlerts::Important => 0,
             EventAlerts::All => 1,
@@ -1807,12 +1895,6 @@ impl App {
             sel,
             vec![UiAct::Alerts(EventAlerts::Important), UiAct::Alerts(EventAlerts::All), UiAct::Alerts(EventAlerts::Off)],
         );
-        let cy = c.row("Important words", Some("Comma-separated, e.g. interview, dentist"));
-        let editing = *focus == Some(Field::Keywords);
-        let value = if editing { kw_buf.to_string() } else { d.keywords.join(", ") };
-        let r = R::new(c.x1 - 250.0 * s, cy - 16.0 * s, 250.0 * s, 32.0 * s);
-        ui::text_field(c.pm, r, &value, editing, &c.pal, s, "No keywords");
-        c.hits.push((r, UiAct::Focus(Field::Keywords)));
         // Only once there is something to sync. The row used to appear with "Add a calendar to
         // start" beside an empty space, which is a control that cannot be used telling you so.
         if !d.calendars.is_empty() {
@@ -1873,7 +1955,7 @@ impl App {
             c.y += card_h + 12.0 * s;
         }
         c.y += 6.0 * s;
-        let privacy = "Pip only ever reads your calendars — it never changes them. Connect or disconnect in Settings › Connections.";
+        let privacy = "Pip only ever reads your calendars — it never changes them, and you can disconnect any time.";
         for line in text::wrap(&f.regular, 12.0 * s, privacy, c.x1 - c.x0) {
             c.y += 18.0 * s;
             text::draw(c.pm, &f.regular, 12.0 * s, c.x0, c.y, c.pal.muted, 1.0, &line);
@@ -2347,8 +2429,14 @@ impl App {
             ui::text_field(c.pm, r, &value, editing, &c.pal, s, placeholder);
             c.hits.push((r, UiAct::Focus(field)));
         };
-        list_field(c, "Important senders", "Addresses, @domains or names, comma-separated", Field::MailSenders, &e.senders, "e.g. mom@gmail.com, @work.co.za");
-        list_field(c, "Subject words", "Mail whose subject contains any of these", Field::MailKeywords, &e.keywords, "e.g. urgent, invoice");
+        c.plate("WHAT MATTERS");
+        c.panel(120.0 * s);
+        list_field(c, "People", "Addresses, @domains or names, comma-separated", Field::MailSenders, &e.senders, "e.g. mom@gmail.com, @work.co.za");
+        // One list of words, not two (§73). It used to be "Subject words" here and "Important
+        // words" on the Calendar page, two fields nobody would ever deliberately disagree with
+        // themselves about. This writes both, so the engine's two reads are unchanged.
+        list_field(c, "Words", "In an email subject or an event title", Field::MailKeywords, &e.keywords, "e.g. urgent, dentist");
+        c.panel_end();
         c.y += 8.0 * s;
         // Three rows became two and a sentence (§71). "Check every" was never a decision anybody
         // wanted; Gmail's own Important marker warned in its own hint that it "can be a lot"; and
@@ -2454,11 +2542,6 @@ fn badge(c: &mut Ctx, cx: f32, cy: f32, label: &str, rgb: u32) {
     text::draw_centered(c.pm, &f.semibold, fs, cx, cy + fs * 0.36, 0xFFFFFF, 1.0, label);
 }
 
-fn section_label(c: &mut Ctx, label: &str) {
-    let s = c.s;
-    c.y += 20.0 * s;
-    text::draw(c.pm, &fonts().semibold, 11.0 * s, c.x0, c.y, c.pal.muted, 1.0, label);
-}
 
 
 #[cfg(test)]

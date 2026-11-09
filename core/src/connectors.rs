@@ -1,5 +1,5 @@
 //! The catalogue of services Pip can connect to, described in plain language. Shells render
-//! this list (Settings › Connections). Every connector is a browser sign-in: click, choose the
+//! this list. Every connector is a browser sign-in: click, choose the
 //! account, allow. Adding a service = one entry here + its sync code.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

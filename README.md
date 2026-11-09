@@ -95,7 +95,9 @@ three things Pip can keep an eye on (Gmail, your calendar, your phone), one clic
 **Your companion.** Settings › Pip picks who it is, with the creature live on the page: change the
 character, the colour, the size or how hard it tries, and it reacts in front of you. Four are there from the first day —
 **Sprout**, **Bunny**, **Toadstool** and **Tuft** — and they are yours forever; changing your mind
-costs nothing and nothing is ever taken away. Name it, colour it, size it, give it a voice.
+costs nothing and nothing is ever taken away. Name it, colour it, size it, give it a voice, and
+set **how much it does** — one dial, from *Still* to *Lively*, covering both how often it moves on
+its own and how hard it tries when something is due.
 
 **Growing up.** A companion grows over three stages as it earns *good days*: one per day, for
 meeting your water goal **or** for any moment together — a pat, a reminder finished, a glass

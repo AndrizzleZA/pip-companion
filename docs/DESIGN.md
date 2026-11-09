@@ -3577,3 +3577,88 @@ Startup 30 ms against a 36 ms baseline. 1.98 MB private with the window never op
 after opening and closing it, against a 2.4 MB baseline. 213 tests pass and clippy reports exactly
 the warnings it reported before. The one new recurring cost in the program is a 33 ms timer that
 only exists while the Pip page is open and only between a click and the end of one gesture.
+
+## 73. Buttons you can press, and six rows that were three questions, 2026-11-09
+
+Andre sent a picture of a casual-game UI kit — carved panels with title boards, chunky orange
+buttons, segmented upgrade bars, round icon keys, stars on a finished level — and said *this is
+what I want*, with *fewer options still, and merge some of them*.
+
+### What a picture of painted wood can and cannot ask for
+
+That kit is **bitmap art**: textured stone, painted leaves, hand-drawn bevels. Pip ships no image
+files at all and never has (§58), which is most of why it is two megabytes and why it cannot drift
+out of step with itself. Everything here is drawn procedurally at the scaling of the moment.
+
+So the question was which parts of that picture are *art* and which are *form*, because the form
+is free:
+
+| In the picture | Here |
+|---|---|
+| A title board over a panel | `ui::plate` — a coloured name plate on the panel's top edge |
+| Carved raised panels | `ui::panel` — a dark lip, a face, a lit top edge |
+| Chunky pressable buttons | every button has a lip now, and a highlight along its top |
+| Segmented upgrade bars | `ui::stepper` draws its value in a groove as a filled gauge |
+| Round icon keys | the − and + are discs sunk into the stepper |
+| Stars on a finished level | three stars for the three growth stages, on About |
+| Painted wood, leaves, vines | **not without shipping artwork** |
+
+The last row is the honest one. Everything above it is in; the texture is not, and cannot be
+until Pip is willing to carry image files. Said here so the question is answered once.
+
+The window also stepped back so the panels could come forward: dark mode's background went from
+`#1C1F26` to `#151820` and its surface from `#262A33` to `#282D38`. A raised slab needs somewhere
+to be raised *from*, and four steps of grey was not enough to see one.
+
+### The merges
+
+Twenty-seven rows became twenty-one, and not one capability went with them.
+
+**Liveliness + Getting your attention → one dial.** `Presence` (Still / Gentle / Playful /
+Lively). Liveliness said how often it moves on its own; attention said how hard it tries when
+something is due. They are the same question — *how much of this creature do you want?* — and
+nobody sits down meaning to pick a fidgety companion with restrained reminders. Both fields stay,
+because the engine, the phone and the sync block all read them separately; this is the one control
+that writes them, and it writes them together. It reads back from `attention`, so a file from an
+older Pip with a pair this dial would never produce still shows the rung the reminders are on.
+
+Seven buttons became four, and the live companion still previews the choice: Still blinks, Gentle
+nods, Playful waves, Lively hops.
+
+**Always on top + Show clock + Start with Windows → one row of pills.** Three rows of
+label-hint-toggle saying almost the same sentence. `ui::chips` lights the ones that are on.
+
+**Morning summary + Remind me at → one row.** The summary and the hour it arrives were never two
+decisions.
+
+**Public holidays → a switch.** "South Africa / Off" was a two-option segmented control where one
+option is Off, which is a switch wearing a costume.
+
+**Two keyword lists → one.** "Subject words" on Email and "Important words" on Calendar were two
+fields nobody would ever deliberately disagree with themselves about. The Email page now has
+*Words*, "in an email subject or an event title", and writes both `email.keywords` and
+`dates.keywords` — so `agenda` and `email::important` read exactly what they always read. Opening
+the field shows the union, because a file arriving from an older Pip can have the two lists
+differing and neither should be quietly dropped.
+
+**Water's hours and its days → one "When" row.** All three answer the same word.
+
+### The panel height is the one hand-kept number
+
+`tiny-skia` paints in order, so a slab has to exist before the rows that sit on it, which means
+its height is given rather than measured. `Ctx::panel(rows_h)` takes what the rows will occupy —
+60 units for a row with a hint, 52 without — and `Ctx::panel_end` asserts in debug builds that
+the rows actually ran that far. A wrong number is a panel that stops short, which is the kind of
+mistake a screenshot shows instantly, and every page in this file is captured and looked at.
+
+Two smaller things fell out of it. `row` draws no hairline under the last row of a group, because
+a line along the slab's own edge reads as a crack. And `plate` remembers itself so `panel` can
+draw it again on top: the slab deliberately overlaps the plate, and without that it ate the bottom
+third of the letters.
+
+### Measured
+
+1.9 MB private, 23 ms startup, 202 handles, against a 2.4 MB / 36 ms baseline. 215 tests pass.
+Clippy reports exactly the warnings it reported before — the two new eight-argument drawing
+functions carry an `allow` with the reason, because a struct for `(pm, x, y, w, value, fill, pal,
+s)` is a struct nobody would ever read.

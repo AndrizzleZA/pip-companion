@@ -260,6 +260,60 @@ pub enum Liveliness {
     Lively,
 }
 
+/// How much presence the companion has — one dial where there were two (§73).
+///
+/// `Liveliness` said how often it moves on its own and `Attention` said how hard it tries when
+/// something is due. Both are the same question asked twice: *how much of this creature do you
+/// want?* Nobody sits down meaning to pick a fidgety companion with restrained reminders, and
+/// the two rows cost seven buttons to say what four say.
+///
+/// Both fields stay, because the phone and the sync block carry them and the engine reads them
+/// separately — this is the one control that writes them, and it writes them together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presence {
+    /// Nothing unasked: no idle gestures, and a bubble with no performance behind it.
+    Still,
+    Gentle,
+    Playful,
+    Lively,
+}
+
+impl Presence {
+    pub const ALL: [Presence; 4] = [Presence::Still, Presence::Gentle, Presence::Playful, Presence::Lively];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Presence::Still => "Still",
+            Presence::Gentle => "Gentle",
+            Presence::Playful => "Playful",
+            Presence::Lively => "Lively",
+        }
+    }
+
+    /// Read back from `attention`, which is the more consequential half: a file written by an
+    /// older Pip, or by a phone, can hold a pair this dial would never have produced, and the
+    /// answer is to show the rung the reminders are actually on rather than to refuse to show one.
+    pub fn of(p: &PetSettings) -> Presence {
+        match p.attention {
+            Attention::Still => Presence::Still,
+            Attention::Subtle => Presence::Gentle,
+            Attention::Playful => Presence::Playful,
+            Attention::Insistent => Presence::Lively,
+        }
+    }
+
+    pub fn apply(self, p: &mut PetSettings) {
+        let (a, l) = match self {
+            Presence::Still => (Attention::Still, Liveliness::Calm),
+            Presence::Gentle => (Attention::Subtle, Liveliness::Calm),
+            Presence::Playful => (Attention::Playful, Liveliness::Normal),
+            Presence::Lively => (Attention::Insistent, Liveliness::Lively),
+        };
+        p.attention = a;
+        p.liveliness = l;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {

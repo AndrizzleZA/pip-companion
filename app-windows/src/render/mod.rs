@@ -43,11 +43,14 @@ impl Palette {
         };
         let accent = pet.accent();
         if dark {
+            // The window sits back and the panels come forward (§73): a raised slab needs
+            // somewhere to be raised from, and the old four-step gap between window and surface
+            // was not enough to see one.
             Palette {
                 dark,
-                window: 0x1C1F26,
-                surface: 0x262A33,
-                surface2: 0x323744,
+                window: 0x151820,
+                surface: 0x282D38,
+                surface2: 0x343A48,
                 text: 0xF2F4F8,
                 muted: 0x9AA3B2,
                 border: 0x3A404D,
@@ -58,7 +61,7 @@ impl Palette {
         } else {
             Palette {
                 dark,
-                window: 0xF6F7F9,
+                window: 0xE9ECF1,
                 surface: 0xFFFFFF,
                 surface2: 0xEEF0F4,
                 text: 0x1E2330,
