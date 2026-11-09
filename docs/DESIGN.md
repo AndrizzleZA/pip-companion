@@ -1677,7 +1677,7 @@ of CPU an hour, drawn per-pixel into a layered window with no framework under it
 about water and whatever else you ask, keeps birthdays and deadlines, reads the metadata of mail
 that matters and your calendar read-only, and syncs to an Android phone through one encrypted file
 in your own Google Drive. Seven characters, three of which arrive as the companion grows. Settings
-is five pages, usable without a mouse. A crash leaves a readable report behind, and the symbols for
+is six pages behind a row of names, usable without a mouse. A crash leaves a readable report behind, and the symbols for
 every build that went out are archived so it can still be read a year later.
 
 Phases 1 to 5 are in §8 through §32. Phase 6 is §34 to §46.
@@ -3453,3 +3453,127 @@ one setting standing in for the eight it could have been.
 
 Thirty-nine controls became twenty-seven, six pages became five, and nothing can do less than it
 did yesterday.
+
+## 72. Pip opens on the wrong screen, 2026-11-09
+
+The brief asked for a creative overhaul: a distinctive interface, an obvious first five minutes,
+fewer decisions, and none of it at the companion's expense. Looking at the whole program rather
+than at the settings window turned up one fact that decided the shape of everything else.
+
+**Pip already had a lovely home screen, and almost nobody would ever find it.** Click the creature
+and `info_card` appears: the time, the date, the water, what is coming, mail waiting, the streak.
+It is the warmest and most useful surface in the program. It was taught in one clause of one
+sentence, in one bubble, that goes away after sixty seconds and never comes back. Meanwhile the
+screen everybody *does* land in was a 196-pixel sidebar beside a page of eleven labelled rows,
+which is the shape of Windows Settings.
+
+So: **swap them**.
+
+### Today is the front door
+
+`Page::Today` is first in the list and is what `SettingsUi::new` opens on. It is built from the
+very same `info_card` the bubble is built from — not a second version of it — so the page and the
+bubble cannot drift apart. What the page adds is room: the companion stands beside the day, awake
+or asleep as it actually is this minute, and underneath is the one thing the card never had.
+
+**Watching for you** is a strip of three chips: Gmail, your calendar, your phone. Connected ones
+are a filled chip with a green dot and nothing to press. The rest are an invitation — *+ Important
+email* — wired to `GmailSignIn`, `ConnectGoogleCalendar(None)` and `SyncConnect`, which are the
+same three actions their own pages already use. Nothing is implemented twice. What changes is that
+Pip **offers** rather than waiting to be found, which was the real reason a new owner never
+discovered that Pip does email at all.
+
+The two things you can do about today — pour a glass, hold reminders for an hour — are buttons
+there now. They run `menu_command` with the ids the right-click menu already uses, because a
+second implementation of "hold reminders for an hour" is a second thing to keep right.
+
+### 288 units of chrome for five words
+
+The sidebar was 196 wide and the header 92 tall, on a 760x580 window, on every page, forever. The
+header's job was to repeat the name of the page you had just clicked in the sidebar.
+
+Both are gone. `NAV_H` is a 56-unit band of the page names, the selected one in semibold with a
+two-unit underline — not a filled pill, because six filled pills in a row is a toolbar. The
+content column gained 196 units of width, which is where the extra air on every page actually came
+from; no spacing value was touched. `tab_order` got simpler too: the band is everything above
+`NAV_H`, so the old three-way partition between sidebar, header and content became a two-way one.
+
+The sidebar carried three other things, and each went where it belonged rather than being deleted:
+the portrait to the Pip page (large), the name to the Pip page and to Today, and the version to
+About, beside the line about where the log is.
+
+### A companion that is alive while you dress it
+
+The Pip page now puts the creature on the page at full size, in the space the sidebar used to
+take, with the same rows drawn in a narrower column beside it. `SettingsUi::preview` holds a
+gesture and when it started; `T_PREVIEW` ticks at 33 ms and `ui_preview_tick` kills the timer the
+moment the gesture ends. Nothing runs until you change something, nothing runs unless that page is
+open, and the longest gesture used here is under two seconds.
+
+What it shows is chosen to mean something:
+
+| You change | It does |
+|---|---|
+| Who it is | waves — a new companion introduces itself |
+| Its colour | wiggles, shaking out the new coat |
+| Its size | stretches |
+| How lively | looks around |
+| **How hard it tries** | **the gesture for that setting**: Still blinks, Subtle nods, Playful waves, Insistent hops |
+
+That last row is the whole argument for a live companion made in one control: picking how hard it
+tries shows you how hard it tries. A still picture of a creature with forty-four animations was
+the waste; this costs one timer, armed on a click and killed on its own.
+
+### Three questions instead of four instructions
+
+The old first run was one bubble: *"Double-click me whenever you drink a glass, click once to see
+your day, and drag me anywhere. Right-click for everything else."* Four gestures recited at
+somebody who had owned the companion for three seconds, gone in sixty seconds, never shown again —
+and it never mentioned email, the calendar or the phone, so the three things that make Pip worth
+having were things a new owner had no way of learning.
+
+Three cards now, each one question, each answerable in a tap, each skippable:
+
+1. **"Hello! Who should I be?"** — the characters that have arrived, as buttons. Tapping one
+   changes the companion on the desktop and it waves.
+2. **"Shall I keep an eye on anything?"** — *Show me* opens Today, where the three chips are;
+   *Not now* moves on. The third card is set up behind the window either way, so closing it
+   finishes the welcome rather than dropping it half-done.
+3. **"That's everything, I'm Pip."** — and only now, the gestures, next to the thing they operate.
+
+They are the companion's own speech bubbles. No wizard, no new window: Pip is talking to you,
+which is the premise of the program. `welcome` also sets `wake_until_ms`, because a first run at
+three in the morning is still a first run and nobody meets anybody for the first time asleep.
+`messages::first_run` was deleted rather than left to rot.
+
+### The bug this found
+
+`page_reminders` had an early `return` for the empty state, which took **When it speaks up** down
+with it — so on a fresh install, before anybody had added a reminder, Do Not Disturb and Sound
+could not be reached at all. §21 fixed exactly this on the Dates page and it had grown back. Fixed
+in §71's commit, found by looking at a rendered page rather than at the code.
+
+### What was weighed and left
+
+**No card backgrounds behind the setting rows.** The mock-up had every group of rows sitting in a
+rounded surface, matching the speech bubble. The program already has a rule that is better than
+that one and is already consistent: **items are cards, settings are rows.** Reminders, dates and
+calendars are cards because each is a thing; water's interval and the quiet window are rows
+because they are properties of one thing. Putting rows in cards too would erase a distinction that
+is currently doing work.
+
+**Creature glyphs for the character picker** were in the proposal and are not here. Seven little
+drawn creatures as a picker is better than seven words, and it is also a custom control with its
+own hit-testing and keyboard order, in the column that is now the narrowest in the window. It is
+worth doing on its own, not as a rider on a change this size.
+
+**The right-click menu stays.** It is the least Pip-like surface in the program and replacing it
+is real work for little gain; what it was hiding — holding reminders — is now a button on Today
+where it can be seen.
+
+### Measured, not assumed
+
+Startup 30 ms against a 36 ms baseline. 1.98 MB private with the window never opened, 2.37 MB
+after opening and closing it, against a 2.4 MB baseline. 213 tests pass and clippy reports exactly
+the warnings it reported before. The one new recurring cost in the program is a 33 ms timer that
+only exists while the Pip page is open and only between a click and the end of one gesture.

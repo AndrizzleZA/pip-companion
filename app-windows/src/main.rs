@@ -350,7 +350,7 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             }
             Some(0)
         }
-        WM_TIMER => with_app(|a| a.ui_usage_tick()).map(|_| 0),
+        WM_TIMER => with_app(|a| a.ui_timer(wp)).map(|_| 0),
         WM_DPICHANGED => {
             let r = &*(lp as *const RECT);
             SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);

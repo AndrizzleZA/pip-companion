@@ -39,6 +39,12 @@ pub enum Action {
     /// The only button on a card that does not answer it. Everything else here means "I have
     /// dealt with this"; this one means "I have not, and do not let me forget".
     MarkImportant,
+    /// Choosing a companion on the first of the three welcome cards (§72).
+    WelcomeWho(Character),
+    /// "Not now", or anything else that moves the welcome along one card.
+    WelcomeNext,
+    /// "Show me" on the second: opens Today, where the three things Pip can watch are offered.
+    WelcomeWatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

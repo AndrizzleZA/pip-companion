@@ -116,6 +116,8 @@ pub struct App {
     rng: u64,
     anim_timer: bool,
     first_run: bool,
+    /// Which of the three welcome cards is showing, or 0 once the welcome is over (§72).
+    welcome_step: u8,
     pub dev_mode: bool,
     /// Calendar occurrences for the current two-week window (all feeds).
     pub events: Vec<Event>,
@@ -218,6 +220,7 @@ impl App {
             rng: tick_ms() ^ 0x9E37_79B9_7F4A_7C15,
             anim_timer: false,
             first_run,
+            welcome_step: 0,
             dev_mode: Storage::is_custom_dir(),
             events: Vec::new(),
             feed_meta: HashMap::new(),
@@ -319,14 +322,7 @@ impl App {
                 self.tray.balloon(&t, &b);
             }
         } else if self.first_run {
-            let (t, b) = messages::first_run(&self.settings.pet.name);
-            let mut card = Card::new(BubbleKind::Message).line(b, false);
-            card.title = Some(t);
-            card.buttons.push(("Nice to meet you".into(), Action::Close, BtnStyle::Primary));
-            card.buttons.push(("Settings".into(), Action::Settings, BtnStyle::Secondary));
-            self.pet.show_bubble(card);
-            self.set_timer(T_BUBBLE, 60_000);
-            self.anim(AnimKind::Wave);
+            self.welcome(1);
             self.settings_dirty = true;
             self.state_dirty = true;
             self.schedule_save();
@@ -375,7 +371,7 @@ impl App {
         unsafe { KillTimer(self.hwnd, id) };
     }
 
-    fn asleep(&self) -> bool {
+    pub(crate) fn asleep(&self) -> bool {
         self.locked || self.away || (self.night && tick_ms() > self.wake_until_ms)
     }
 
@@ -1160,6 +1156,23 @@ impl App {
                 self.pet.bubble = None;
                 self.effects.push(Effect::OpenSettings);
             }
+            Action::WelcomeWho(who) => {
+                if who != self.settings.pet.character {
+                    self.settings.pet.character = who;
+                    self.settings.appearance_updated_at = now_unix();
+                    self.mark_settings_dirty();
+                    self.schedule_save();
+                }
+                self.welcome(2);
+            }
+            Action::WelcomeNext => self.welcome(self.welcome_step + 1),
+            // Opens Today, where the three things Pip can watch are offered as one click each.
+            // The last card is set up behind it, so closing the window finishes the welcome
+            // rather than dropping it half-done.
+            Action::WelcomeWatch => {
+                self.welcome(3);
+                self.effects.push(Effect::OpenSettings);
+            }
             Action::Drink => self.drink(),
             // The one button that does not answer the card (§70). Everything below this means
             // "dealt with"; this means "not dealt with, and do not let me forget".
@@ -1364,7 +1377,59 @@ impl App {
         self.reschedule();
     }
 
-    fn info_card(&self) -> Card {
+    /// The welcome, one question at a time (§72).
+    ///
+    /// What was here before was a single bubble reciting four gestures — double-click, click,
+    /// drag, right-click — at somebody who had owned the companion for three seconds, and then
+    /// going away after sixty seconds, never to return. It also never mentioned email, the
+    /// calendar or the phone, so the three things that make Pip worth having were things a new
+    /// owner had no way of learning about.
+    ///
+    /// Three cards instead. Each asks one thing, each can be answered in a tap, each can be
+    /// skipped, and the gestures arrive last — next to the thing they operate, rather than first
+    /// in a list of four. They are the companion's own speech bubbles, so there is no new window
+    /// and no wizard: Pip is simply talking to you, which is the whole premise of the program.
+    fn welcome(&mut self, step: u8) {
+        self.welcome_step = step;
+        // Nobody meets anybody for the first time asleep. A first run at three in the morning is
+        // still a first run, so the companion is up for the length of the welcome and then goes
+        // back to whatever the hour says it should be doing.
+        self.wake_until_ms = tick_ms() + 180_000;
+        let mut card = Card::new(BubbleKind::Message);
+        match step {
+            1 => {
+                card.title = Some("Hello! Who should I be?".into());
+                card = card.line("You can change your mind whenever you like, and a few more of us turn up as we get to know each other.".to_string(), false);
+                for who in Character::available(self.state.experience) {
+                    let style = if who == self.settings.pet.character { BtnStyle::Primary } else { BtnStyle::Secondary };
+                    card.buttons.push((who.label().into(), Action::WelcomeWho(who), style));
+                }
+                self.anim(AnimKind::Wave);
+            }
+            2 => {
+                card.title = Some("Shall I keep an eye on anything?".into());
+                card = card.line(
+                    "I can nudge you about important email, say what’s on today, and stay in step with your phone. I only ever read — I can’t send, change or delete anything.".to_string(),
+                    false,
+                );
+                card.buttons.push(("Show me".into(), Action::WelcomeWatch, BtnStyle::Primary));
+                card.buttons.push(("Not now".into(), Action::WelcomeNext, BtnStyle::Secondary));
+                self.anim(AnimKind::Peer);
+            }
+            _ => {
+                card.title = Some(format!("That's everything, I'm {}.", self.settings.pet.name));
+                card = card.line("Click me any time to see your day. Double-click when you drink a glass, and drag me wherever you like.".to_string(), false);
+                card.buttons.push(("Nice to meet you".into(), Action::Close, BtnStyle::Primary));
+                self.anim(AnimKind::Nod);
+            }
+        }
+        self.pet.show_bubble(card);
+        // Longer than an ordinary bubble, and it is the only card in the program that waits this
+        // patiently: a question nobody answered is not the same as a reminder nobody wanted.
+        self.set_timer(T_BUBBLE, 120_000);
+    }
+
+    pub(crate) fn info_card(&self) -> Card {
         let now = now_unix();
         let l = local(&Local, now);
         let mut card = Card::new(BubbleKind::Info);
@@ -2063,6 +2128,9 @@ impl App {
                     "drink" => Action::Drink,
                     "always-from" => Action::AlwaysFrom,
                     "important" => Action::MarkImportant,
+                    "welcome-who" => Action::WelcomeWho(self.settings.pet.character),
+                    "welcome-next" => Action::WelcomeNext,
+                    "welcome-watch" => Action::WelcomeWatch,
                     _ => Action::Close,
                 };
                 self.act(a);
